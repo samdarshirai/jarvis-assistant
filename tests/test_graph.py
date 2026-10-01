@@ -299,3 +299,17 @@ async def test_blocked_calls_are_labelled_blocked_and_executed_ones_approved():
     await g.ainvoke(say(), CFG)
     await g.ainvoke(Command(resume=True), CFG)
     assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["approved"]
+
+
+def test_gmail_domain_exists_and_is_routable():
+    from jarvis.agent.domains import DOMAINS
+    assert DOMAINS["gmail"].tier == "strong"
+    assert "untrusted_email" in DOMAINS["gmail"].prompt
+    assert parse_domains("gmail, calendar") == ["gmail", "calendar"]
+    assert parse_domains("Gmail") == ["gmail"]
+    assert parse_domains("gmail chat") == ["gmail"]
+
+
+def test_router_prompt_names_gmail():
+    from jarvis.agent.graph import ROUTER_PROMPT
+    assert "gmail" in ROUTER_PROMPT

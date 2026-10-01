@@ -19,7 +19,8 @@ log = logging.getLogger(__name__)
 
 ROUTER_PROMPT = (
     "Classify the user's latest request. Reply with ONLY a comma-separated list, in the order the work "
-    "must happen, chosen from: calendar, tasks, chat. Use 'chat' alone when no calendar or task work is needed."
+    "must happen, chosen from: calendar, tasks, gmail, chat. Use 'chat' alone when no calendar, task or "
+    "email work is needed. Example: 'add that booking email to my calendar' -> gmail, calendar."
 )
 HISTORY = 40
 
