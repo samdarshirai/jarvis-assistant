@@ -1,0 +1,71 @@
+import json
+
+import pytest
+from cryptography.fernet import Fernet
+from google.auth.exceptions import RefreshError
+
+from jarvis.google import auth
+
+
+class MemStore:
+    def __init__(self):
+        self.d = {}
+
+    def get(self, p):
+        return self.d.get(p)
+
+    def put(self, p, b):
+        self.d[p] = b
+
+
+class StubCreds:
+    valid = True
+    fail = False
+
+    def __init__(self, info):
+        self.info = info
+        if info.get("expired"):
+            self.valid = False
+
+    @classmethod
+    def from_authorized_user_info(cls, info, scopes):
+        return cls(info)
+
+    def refresh(self, request):
+        if self.info.get("revoked"):
+            raise RefreshError("revoked")
+        self.valid = True
+
+    def to_json(self):
+        return json.dumps(self.info)
+
+
+@pytest.fixture
+def key():
+    return Fernet.generate_key().decode()
+
+
+def test_missing_token_requires_reauth(key):
+    with pytest.raises(auth.ReauthRequired):
+        auth.load_credentials(MemStore(), key)
+
+
+def test_token_encrypted_at_rest_and_roundtrips(key, monkeypatch):
+    monkeypatch.setattr(auth, "Credentials", StubCreds)
+    store = MemStore()
+    auth.save_credentials(store, key, StubCreds({"refresh_token": "secret-rt"}))
+    assert b"secret-rt" not in store.d["google"]
+    assert auth.load_credentials(store, key).info["refresh_token"] == "secret-rt"
+
+
+def test_revoked_refresh_requires_reauth(key, monkeypatch):
+    monkeypatch.setattr(auth, "Credentials", StubCreds)
+    store = MemStore()
+    auth.save_credentials(store, key, StubCreds({"expired": True, "revoked": True}))
+    with pytest.raises(auth.ReauthRequired):
+        auth.load_credentials(store, key)
+
+
+def test_scopes_are_calendar_and_tasks_only():
+    assert len(auth.SCOPES) == 2
+    assert all(s.endswith(("/calendar", "/tasks")) for s in auth.SCOPES)
