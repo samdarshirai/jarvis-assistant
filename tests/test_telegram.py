@@ -268,3 +268,39 @@ def test_text_handler_ignores_edited_messages():
 
     assert h.check_update(upd("message"))
     assert not h.check_update(upd("edited_message"))
+
+
+from jarvis.channels.telegram import WARN_UNTRUSTED
+
+
+class ReadArgs(BaseModel):
+    message_id: str = ""
+
+
+class SendArgs(BaseModel):
+    draft_id: str = ""
+
+
+def test_format_confirmation_warns_only_when_flagged():
+    base = {"actions": [{"tool": "send_draft", "args": {"draft_id": "d1"}}]}
+    assert format_confirmation(base).startswith("Confirm this action?")
+    flagged = format_confirmation({**base, "after_untrusted": True})
+    assert flagged.startswith(WARN_UNTRUSTED) and "Confirm this action?" in flagged
+
+
+async def test_confirmation_card_warns_after_reading_an_email():
+    sent_calls = []
+    read = Tool(name="read_email", domain="gmail", description="d", args_schema=ReadArgs,
+                fn=lambda **kw: {"body": "hi"}, needs_confirm=False, untrusted=True)
+    send = Tool(name="send_draft", domain="gmail", description="d", args_schema=SendArgs,
+                fn=lambda **kw: sent_calls.append(kw) or {"sent": True})
+    call = lambda name, args, id: AIMessage("", tool_calls=[{"name": name, "args": args, "id": id, "type": "tool_call"}])
+    ch = make_channel({"fast": [AIMessage("gmail")],
+                       "strong": [call("read_email", {"message_id": "m1"}, "1"),
+                                  call("send_draft", {"draft_id": "d1"}, "2"), AIMessage("sent")]},
+                      [], extra=[read, send])
+    c = chat()
+    await ch.on_text(text_update(c, "reply to Raj"), None)
+    (prompt, kw), = sent(c)
+    assert prompt.startswith(WARN_UNTRUSTED) and "send_draft" in prompt and "reply_markup" in kw
+    assert sent_calls == []

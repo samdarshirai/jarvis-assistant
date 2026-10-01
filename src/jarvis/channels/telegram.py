@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 THREAD = {"configurable": {"thread_id": "owner"}, "recursion_limit": 40}
 FAIL_TEXT = "Something went wrong. Please try again."
 EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you are unsure."
+WARN_UNTRUSTED = "⚠ Proposed after reading email content — check recipient and text.\n"
 
 
 def keyboard(interrupt_id: str) -> InlineKeyboardMarkup:
@@ -27,7 +28,8 @@ def format_confirmation(payload: dict) -> str:
     for a in payload["actions"]:
         raw = f"{a['tool']}: {json.dumps(a['args'], ensure_ascii=False)}"
         lines.append(f"• {a['summary']}\n  ({raw})" if a.get("summary") else f"• {raw}")
-    return "Confirm this action?\n" + "\n".join(lines)
+    head = WARN_UNTRUSTED if payload.get("after_untrusted") else ""
+    return head + "Confirm this action?\n" + "\n".join(lines)
 
 
 class TelegramChannel:
