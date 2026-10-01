@@ -4,6 +4,7 @@ import logging
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import TelegramError
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
 
 from jarvis.agent.graph import turn_replies
@@ -47,6 +48,12 @@ class TelegramChannel:
         except Exception:
             log.exception("graph run failed")
             await chat.send_message(FAIL_TEXT)
+            try:  # buttons may be gone; re-offer a still-pending confirmation so the owner is not locked out
+                state = await self.graph.aget_state(THREAD)
+                if state.interrupts:
+                    await chat.send_message(format_confirmation(state.interrupts[0].value), reply_markup=KEYBOARD)
+            except Exception:
+                log.exception("could not re-offer pending confirmation")
             return
         interrupts = result.get("__interrupt__")
         if interrupts:
@@ -66,9 +73,13 @@ class TelegramChannel:
         q = update.callback_query
         await q.answer()
         if q.message.chat_id != self.owner:
+            log.warning("dropped button tap from non-owner chat %s", q.message.chat_id)
             return
         chat = q.message.chat
-        await q.edit_message_reply_markup(reply_markup=None)
+        try:
+            await q.edit_message_reply_markup(reply_markup=None)
+        except TelegramError:
+            log.warning("could not remove confirmation buttons", exc_info=True)
         if not await self._pending():
             await chat.send_message("Already handled.")
             return

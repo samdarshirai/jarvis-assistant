@@ -3,8 +3,10 @@ from unittest.mock import AsyncMock
 
 from langchain_core.messages import AIMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.types import Command
 from pydantic import BaseModel
 from telegram import Update
+from telegram.error import TelegramError
 
 from jarvis.agent.graph import build_graph
 from jarvis.channels.telegram import FAIL_TEXT, TelegramChannel, format_confirmation
@@ -26,9 +28,9 @@ def text_update(c, text="book gym"):
     return SimpleNamespace(effective_chat=c, message=SimpleNamespace(text=text))
 
 
-def button_update(c, data):
-    q = SimpleNamespace(data=data, answer=AsyncMock(), edit_message_reply_markup=AsyncMock(),
-                        message=SimpleNamespace(chat_id=OWNER, chat=c))
+def button_update(c, data, chat_id=OWNER, edit=None):
+    q = SimpleNamespace(data=data, answer=AsyncMock(), edit_message_reply_markup=edit or AsyncMock(),
+                        message=SimpleNamespace(chat_id=chat_id, chat=c))
     return SimpleNamespace(callback_query=q)
 
 
@@ -109,3 +111,63 @@ def test_owner_filter_rejects_strangers():
 def test_format_confirmation_lists_actions():
     s = format_confirmation({"actions": [{"tool": "delete_event", "args": {"event_id": "e1", "scope": "all"}}]})
     assert "delete_event" in s and "e1" in s
+
+
+TOOL_CALL = AIMessage("", tool_calls=[{"name": "create_event", "args": {"summary": "Gym"}, "id": "1", "type": "tool_call"}])
+
+
+def pending_channel(calls):
+    return make_channel({"fast": [AIMessage("calendar")], "strong": [TOOL_CALL, AIMessage("Created.")]}, calls)
+
+
+async def test_non_owner_button_dropped_and_logged(caplog):
+    calls = []
+    ch = pending_channel(calls)
+    await ch.on_text(text_update(chat()), None)
+    real = ch.graph
+    spy = SimpleNamespace(ainvoke=AsyncMock(), aget_state=real.aget_state)
+    ch.graph = spy
+    c = chat()
+    with caplog.at_level("WARNING"):
+        await ch.on_button(button_update(c, "yes", chat_id=99), None)
+    spy.ainvoke.assert_not_called()
+    assert sent(c) == [] and calls == []
+    assert "non-owner" in caplog.text
+
+
+async def test_failed_resume_reprompts_and_retry_works():
+    calls = []
+    ch = pending_channel(calls)
+    await ch.on_text(text_update(chat()), None)
+    real = ch.graph
+    boom = {"on": True}
+
+    async def ainvoke(inp, cfg):
+        if boom["on"] and isinstance(inp, Command):
+            boom["on"] = False
+            raise RuntimeError("down")
+        return await real.ainvoke(inp, cfg)
+
+    ch.graph = SimpleNamespace(ainvoke=ainvoke, aget_state=real.aget_state)
+    c = chat()
+    await ch.on_button(button_update(c, "yes"), None)
+    out = sent(c)
+    assert out[0] == (FAIL_TEXT, {}) and "create_event" in out[1][0] and "reply_markup" in out[1][1]
+    assert calls == []
+    c2 = chat()
+    await ch.on_button(button_update(c2, "yes"), None)
+    assert calls == [{"summary": "Gym"}] and sent(c2) == [("Created.", {})]
+
+
+async def test_edit_markup_error_does_not_block_action():
+    calls = []
+    ch = pending_channel(calls)
+    await ch.on_text(text_update(chat()), None)
+    c = chat()
+    await ch.on_button(button_update(c, "yes", edit=AsyncMock(side_effect=TelegramError("x"))), None)
+    assert calls == [{"summary": "Gym"}] and sent(c) == [("Created.", {})]
+
+
+def test_build_registers_handlers_without_network():
+    app = TelegramChannel(None, OWNER).build("123:abc")
+    assert len(app.handlers[0]) == 2 and len(app.handlers[1]) == 1
