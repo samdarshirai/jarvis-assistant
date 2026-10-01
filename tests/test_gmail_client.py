@@ -257,3 +257,41 @@ def test_update_draft_comma_in_display_names():
     c.update_draft("d1", body="new")
     parsed = parse(D(svc).update.call_args.kwargs["body"]["message"]["raw"])
     assert parsed["To"] == "j@x.com, b@y.com" and parsed["Cc"] == "r@x.com"
+
+
+def _reply_subject(orig_subject, model_subject):
+    c, svc = make()
+    headers = [{"name": "Message-ID", "value": "<a@x>"}]
+    if orig_subject is not None:
+        headers.append({"name": "Subject", "value": orig_subject})
+    M(svc).get.return_value.execute.return_value = {"threadId": "t9", "payload": {"headers": headers}}
+    D(svc).create.return_value.execute.return_value = {"id": "d1", "message": {"threadId": "t9"}}
+    c.create_draft("a@x.com", model_subject, "ok", reply_to_message_id="m1")
+    asked = M(svc).get.call_args.kwargs["metadataHeaders"]
+    return parse(D(svc).create.call_args.kwargs["body"]["message"]["raw"])["Subject"], asked
+
+
+def test_reply_fetches_original_subject_header():
+    assert "Subject" in _reply_subject("Flight", "Re: Flight")[1]
+
+
+def test_reply_with_mismatching_subject_is_replaced_by_re_original():
+    assert _reply_subject("Your flight LH123", "Something else")[0] == "Re: Your flight LH123"
+    assert _reply_subject("RE: re: Flight", "Other")[0] == "Re: Flight"
+
+
+def test_reply_with_matching_subject_is_left_as_given():
+    assert _reply_subject("Flight", "Flight")[0] == "Flight"
+    assert _reply_subject("Flight", "Re: Flight")[0] == "Re: Flight"
+    assert _reply_subject("Re: Flight", "RE: flight")[0] == "RE: flight"
+
+
+def test_reply_to_original_without_subject_keeps_models_subject():
+    assert _reply_subject(None, "Mine")[0] == "Mine"
+
+
+def test_non_reply_draft_subject_unchanged():
+    c, svc = make()
+    D(svc).create.return_value.execute.return_value = {"id": "d2", "message": {}}
+    c.create_draft("a@x.com", "Whatever", "b")
+    assert parse(D(svc).create.call_args.kwargs["body"]["message"]["raw"])["Subject"] == "Whatever"

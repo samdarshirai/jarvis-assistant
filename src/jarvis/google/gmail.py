@@ -1,5 +1,6 @@
 import base64
 import binascii
+import re
 from email import message_from_bytes, policy
 from email.message import EmailMessage
 from email.utils import getaddresses, parseaddr
@@ -113,6 +114,10 @@ def check_subject(subject: str) -> None:
         raise ValueError("subject contains a line break")
 
 
+def _bare_subject(s: str) -> str:
+    return re.sub(r"^(\s*re\s*:)+", "", s.strip(), flags=re.IGNORECASE).strip()
+
+
 def build_raw(to: list[str], subject: str, body: str, in_reply_to: str | None = None,
               references: str | None = None, cc: list[str] | None = None) -> str:
     check_subject(subject)
@@ -184,11 +189,14 @@ class GmailClient:
         in_reply_to = references = thread_id = None
         if reply_to_message_id:
             orig = self._run(svc.users().messages().get(
-                userId="me", id=reply_to_message_id, format="metadata", metadataHeaders=["Message-ID", "References"]))
+                userId="me", id=reply_to_message_id, format="metadata", metadataHeaders=["Message-ID", "References", "Subject"]))
             p = orig.get("payload", {})
             in_reply_to = header(p, "Message-ID")
             references = " ".join(x for x in (header(p, "References"), in_reply_to) if x) or None
             thread_id = orig.get("threadId")
+            orig_subject = _bare_subject(header(p, "Subject") or "")
+            if orig_subject and _bare_subject(subject).casefold() != orig_subject.casefold():
+                subject = f"Re: {orig_subject}"  # a mismatched subject makes Gmail drop the thread
         message: dict = {"raw": build_raw(recipients, subject, body, in_reply_to, references)}
         if thread_id:
             message["threadId"] = thread_id
