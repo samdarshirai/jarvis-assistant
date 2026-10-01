@@ -31,6 +31,7 @@ class State(TypedDict):
     idx: int
     approved: bool
     client_actions: list[dict]
+    read_untrusted: bool
 
 
 def parse_domains(text: str) -> list[str]:
@@ -73,6 +74,12 @@ def repair_tool_gaps(messages: list) -> list:
     return out
 
 
+def wrap_untrusted(text: str) -> str:
+    """Mark third-party text as data; rewrite closing tags so the content cannot end the wrapper early."""
+    safe = re.sub(r"</\s*untrusted_email", "&lt;/untrusted_email", text, flags=re.IGNORECASE)
+    return f"<untrusted_email>{safe}</untrusted_email>"
+
+
 def turn_replies(messages: list) -> list[str]:
     out: list[str] = []
     for m in reversed(messages):
@@ -93,7 +100,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
 
     async def router(state: State) -> dict:
         resp = await provider.get("fast").ainvoke([SystemMessage(ROUTER_PROMPT), *repair_tool_gaps(window(state["messages"], 6))])
-        return {"domains": parse_domains(str(resp.content)), "idx": 0, "approved": False, "client_actions": []}
+        return {"domains": parse_domains(str(resp.content)), "idx": 0, "approved": False, "client_actions": [],
+                "read_untrusted": False}
 
     async def agent(state: State) -> dict:
         dom = DOMAINS[state["domains"][state["idx"]]]
@@ -121,7 +129,10 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
                 except Exception:
                     log.exception("describe failed for %s", c["name"])
             actions.append(action)
-        decision = interrupt({"actions": actions})
+        payload: dict = {"actions": actions}
+        if state.get("read_untrusted"):
+            payload["after_untrusted"] = True
+        decision = interrupt(payload)
         if decision is True:
             return Command(goto="tools", update={"approved": True})
         return Command(goto="reject")
@@ -138,6 +149,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
         allowed = {t.name for t in registry.for_domain(state["domains"][state["idx"]])}
         actions = list(state.get("client_actions", []))
         out = []
+        ran_untrusted = False
         for c in state["messages"][-1].tool_calls:
             tool = registry.get(c["name"])
             confirm = registry.needs_confirm(c["name"])
@@ -163,14 +175,22 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
                 except Exception:
                     log.exception("tool %s failed", c["name"])
                     result = {"error": "Unexpected error while running the tool."}
+            is_error = isinstance(result, dict) and "error" in result
+            content = json.dumps(result, default=str)
+            audit_result = result
+            if tool is not None and tool.untrusted and label != "blocked" and not is_error:
+                ran_untrusted = True
+                audit_result = {"redacted": True, "chars": len(content), "message_id": c["args"].get("message_id")}
+                content = wrap_untrusted(content)
             await record(
-                "tool", c["name"], args=c["args"], result=result,
+                "tool", c["name"], args=c["args"], result=audit_result,
                 confirmation=label,
                 latency_ms=int((time.monotonic() - t0) * 1000))
             if isinstance(result, dict) and "client_action" in result:
                 actions.append(result["client_action"])
-            out.append(ToolMessage(json.dumps(result, default=str), tool_call_id=c["id"]))
-        return {"messages": out, "client_actions": actions}
+            out.append(ToolMessage(content, tool_call_id=c["id"]))
+        return {"messages": out, "client_actions": actions,
+                "read_untrusted": bool(state.get("read_untrusted")) or ran_untrusted}
 
     async def advance(state: State) -> dict:
         return {"idx": state["idx"] + 1}
