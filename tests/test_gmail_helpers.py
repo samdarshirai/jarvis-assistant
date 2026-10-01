@@ -84,3 +84,20 @@ def test_build_raw_roundtrip_with_reply_headers_and_cc():
 def test_build_raw_rejects_line_break_in_subject():
     with pytest.raises(ValueError):
         build_raw(["a@x.com"], "s\nBcc: e@v.il", "b")
+
+
+def test_html_to_text_handles_unclosed_head_before_body():
+    assert html_to_text("<head><title>t</title><body>Hello world") == "Hello world"
+
+
+def test_html_to_text_handles_unclosed_head_with_style_before_body():
+    assert html_to_text("<head><style>.a{color:red}</style><body><p>Hi</p>") == "Hi"
+
+
+def test_html_to_text_drops_head_when_well_formed():
+    assert html_to_text("<html><head><title>T</title></head><body>B</body></html>") == "B"
+
+
+def test_extract_text_from_html_with_unclosed_head():
+    payload = {"mimeType": "text/html", "body": {"data": enc("<head><title>T</title><body>Body content")}}
+    assert extract_text(payload) == "Body content"

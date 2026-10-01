@@ -19,6 +19,9 @@ class _Text(HTMLParser):
         self._skip = 0
 
     def handle_starttag(self, tag, attrs):
+        if tag == "body":
+            self._skip = 0
+            return
         if tag in self.SKIP:
             self._skip += 1
         elif tag in self.BLOCK or tag == "br":
