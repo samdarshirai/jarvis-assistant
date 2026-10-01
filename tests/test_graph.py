@@ -18,13 +18,16 @@ def call(name, args=None, id="c1"):
     return AIMessage("", tool_calls=[{"name": name, "args": args or {}, "id": id, "type": "tool_call"}])
 
 
+def make_graph(scripts, reg):
+    audit = MemoryAudit()
+    return build_graph(FakeProvider(scripts), reg, audit, InMemorySaver(), "Europe/Berlin"), audit
+
+
 def make(scripts, tools):
     reg = Registry()
     for t in tools:
         reg.add(t)
-    audit = MemoryAudit()
-    g = build_graph(FakeProvider(scripts), reg, audit, InMemorySaver(), "Europe/Berlin")
-    return g, audit
+    return make_graph(scripts, reg)
 
 
 def tool(name, domain, calls, needs_confirm=True, fn=None):
@@ -534,3 +537,26 @@ async def test_error_result_of_untrusted_tool_is_not_wrapped():
     out = await g.ainvoke(say(), CFG)
     assert tool_messages(out)[0].content.startswith('{"error"')
     assert "redacted" not in audit.records[0]["result"]
+
+
+VOICE = {"configurable": {"thread_id": "t", "voice": True}, "recursion_limit": 40}
+
+
+async def test_voice_config_uses_fast_tier_for_calendar():
+    g, _ = make({"fast": [AIMessage("calendar"), AIMessage("fast answer")]},  # no "strong" key: using it would KeyError
+                [tool("list_events", "calendar", [], needs_confirm=False)])
+    out = await g.ainvoke(say(), VOICE)
+    assert turn_replies(out["messages"]) == ["fast answer"]
+
+
+async def test_voice_config_keeps_gmail_on_strong_tier():
+    g, _ = make({"fast": [AIMessage("gmail")], "strong": [AIMessage("strong answer")]},
+                [tool("search_emails", "gmail", [], needs_confirm=False)])
+    out = await g.ainvoke(say(), VOICE)
+    assert turn_replies(out["messages"]) == ["strong answer"]
+
+
+def test_phone_domain_is_routable_and_named_in_router_prompt():
+    from jarvis.agent.graph import ROUTER_PROMPT
+    assert parse_domains("calendar, phone") == ["calendar", "phone"]
+    assert "phone" in ROUTER_PROMPT

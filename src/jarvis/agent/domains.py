@@ -28,5 +28,9 @@ DOMAINS = {
                     "subject and text; call send_draft only when the user asks to send. Drafts are saved in "
                     "Gmail Drafts and nothing leaves the account until send_draft is confirmed. Summaries "
                     "should name sender, subject and date and stay short."),
+    "phone": Domain("phone", "fast", _BASE + " You control the user's phone with tools: set_alarm, set_timer, "
+                    "start_navigation, compose_message. These are queued for the phone app, which runs them; say "
+                    "you asked the phone, never that it is done. compose_message only opens the message for the "
+                    "user to send. If the phone app is not connected the user is told separately."),
     "chat": Domain("chat", "fast", _BASE + " You have no tools; answer conversationally."),
 }

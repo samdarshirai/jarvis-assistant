@@ -7,6 +7,7 @@ from typing import Annotated, Literal, TypedDict
 
 from googleapiclient.errors import HttpError
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
@@ -19,8 +20,9 @@ log = logging.getLogger(__name__)
 
 ROUTER_PROMPT = (
     "Classify the user's latest request. Reply with ONLY a comma-separated list, in the order the work "
-    "must happen, chosen from: calendar, tasks, gmail, chat. Use 'chat' alone when no calendar, task or "
-    "email work is needed. Example: 'add that booking email to my calendar' -> gmail, calendar."
+    "must happen, chosen from: calendar, tasks, gmail, phone, chat. Use 'chat' alone when no calendar, task, "
+    "email or phone work is needed. Examples: 'add that booking email to my calendar' -> gmail, calendar; "
+    "'set an alarm for 6 and put gym at 7 in my calendar' -> calendar, phone."
 )
 HISTORY = 40
 
@@ -109,9 +111,12 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
         return {"domains": parse_domains(str(resp.content)), "idx": 0, "approved": False, "client_actions": [],
                 "read_untrusted": False}
 
-    async def agent(state: State) -> dict:
+    async def agent(state: State, config: RunnableConfig) -> dict:
         dom = DOMAINS[state["domains"][state["idx"]]]
-        llm = provider.get(dom.tier, registry.lc_tools(dom.name) or None)
+        # voice turns trade some tool-calling strength for latency; gmail stays strong (untrusted content)
+        voice = (config.get("configurable") or {}).get("voice")
+        tier = "fast" if voice and dom.name != "gmail" else dom.tier
+        llm = provider.get(tier, registry.lc_tools(dom.name) or None)
         system = SystemMessage(f"{dom.prompt}\nCurrent local time: {now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
         reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
         return {"messages": [reply], "approved": False}

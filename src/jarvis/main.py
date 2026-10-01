@@ -16,6 +16,7 @@ from jarvis.google.tasks import TasksClient
 from jarvis.llm import LLMProvider
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
+from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.task_tools import register_task_tools
 
@@ -27,6 +28,7 @@ def build_registry(svc, tz: str) -> Registry:
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz)
     register_task_tools(registry, TasksClient(svc("tasks", "v1")))
     register_gmail_tools(registry, GmailClient(svc("gmail", "v1")))
+    register_phone_tools(registry)
     return registry
 
 
