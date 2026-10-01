@@ -53,6 +53,25 @@ def window(messages: list, n: int = HISTORY) -> list:
     return tail
 
 
+def repair_tool_gaps(messages: list) -> list:
+    """Return a copy where every AI tool call has a ToolMessage answer; state is never modified."""
+    out: list = []
+    i = 0
+    while i < len(messages):
+        m = messages[i]
+        out.append(m)
+        i += 1
+        if isinstance(m, AIMessage) and m.tool_calls:
+            answered = set()
+            while i < len(messages) and isinstance(messages[i], ToolMessage):
+                answered.add(messages[i].tool_call_id)
+                out.append(messages[i])
+                i += 1
+            out.extend(ToolMessage("Not executed (superseded or interrupted).", tool_call_id=c["id"])
+                       for c in m.tool_calls if c["id"] not in answered)
+    return out
+
+
 def turn_replies(messages: list) -> list[str]:
     out: list[str] = []
     for m in reversed(messages):
@@ -72,14 +91,14 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
             log.exception("audit record failed")
 
     async def router(state: State) -> dict:
-        resp = await provider.get("fast").ainvoke([SystemMessage(ROUTER_PROMPT), *window(state["messages"], 6)])
+        resp = await provider.get("fast").ainvoke([SystemMessage(ROUTER_PROMPT), *repair_tool_gaps(window(state["messages"], 6))])
         return {"domains": parse_domains(str(resp.content)), "idx": 0, "approved": False, "client_actions": []}
 
     async def agent(state: State) -> dict:
         dom = DOMAINS[state["domains"][state["idx"]]]
         llm = provider.get(dom.tier, registry.lc_tools(dom.name) or None)
         system = SystemMessage(f"{dom.prompt}\nCurrent local time: {now_local(tz).isoformat()} ({tz}).")
-        reply = await llm.ainvoke([system, *window(state["messages"])])
+        reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
         return {"messages": [reply], "approved": False}
 
     def after_agent(state: State) -> str:

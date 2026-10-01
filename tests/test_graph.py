@@ -3,9 +3,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel
 
-from jarvis.agent.graph import build_graph, parse_domains, turn_replies, window
+from jarvis.agent.graph import build_graph, parse_domains, repair_tool_gaps, turn_replies, window
 from jarvis.tools.registry import Registry, Tool
-from tests.fakes import FakeProvider, MemoryAudit
+from tests.fakes import FakeChat, FakeProvider, MemoryAudit
 
 CFG = {"configurable": {"thread_id": "t"}, "recursion_limit": 40}
 
@@ -187,3 +187,51 @@ async def test_audit_failure_does_not_break_turn_or_hide_result():
     tm = [m for m in out["messages"] if isinstance(m, ToolMessage)][0]
     assert "ok" in tm.content
     assert turn_replies(out["messages"]) == ["You have gym."]
+
+
+# --- repair_tool_gaps ---
+def test_repair_inserts_one_synthetic_after_ai():
+    ai = call("x")
+    out = repair_tool_gaps([HumanMessage("a"), ai, HumanMessage("b")])
+    assert [type(m) for m in out] == [HumanMessage, AIMessage, ToolMessage, HumanMessage]
+    assert out[2].tool_call_id == "c1" and "Not executed" in out[2].content
+
+
+def test_repair_leaves_complete_history_unchanged():
+    msgs = [HumanMessage("a"), call("x"), ToolMessage("r", tool_call_id="c1"), AIMessage("ok")]
+    assert repair_tool_gaps(msgs) == msgs
+
+
+def test_repair_inserts_only_missing_id():
+    ai = AIMessage("", tool_calls=[{"name": "x", "args": {}, "id": "a", "type": "tool_call"},
+                                   {"name": "x", "args": {}, "id": "b", "type": "tool_call"}])
+    done = ToolMessage("r", tool_call_id="a")
+    out = repair_tool_gaps([HumanMessage("h"), ai, done, HumanMessage("n")])
+    assert out[2] is done and out[3].tool_call_id == "b" and len(out) == 5
+
+
+SEEN: list = []
+
+
+class RecChat(FakeChat):
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        SEEN.append(list(messages))
+        return super()._generate(messages, stop, run_manager, **kwargs)
+
+
+async def test_abandoned_interrupt_history_is_repaired_for_model():
+    calls = []
+    reg = Registry()
+    reg.add(tool("create_event", "calendar", calls))
+    prov = FakeProvider({"fast": [AIMessage("calendar"), AIMessage("calendar")], "strong": []})
+    SEEN.clear()
+    prov._models["strong"] = RecChat(script=[call("create_event", id="old"), AIMessage("fine")])
+    g = build_graph(prov, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
+    out = await g.ainvoke(say("make event"), CFG)
+    assert "__interrupt__" in out
+    await g.ainvoke(say("never mind, hello"), CFG)
+    assert calls == []
+    last = SEEN[-1]
+    ids = {m.tool_call_id for m in last if isinstance(m, ToolMessage)}
+    assert "old" in ids
+    assert all(tc["id"] in ids for m in last if isinstance(m, AIMessage) for tc in m.tool_calls)
