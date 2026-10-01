@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     fernet_key: str
     google_client_secrets: str = "client_secret.json"
     timezone: str = "Europe/Berlin"
+    deepgram_api_key: str = ""
+    cartesia_api_key: str = ""
+    cartesia_voice_id: str = ""
+    fcm_credentials_path: str = ""  # Firebase service-account JSON, kept outside the repo
 
     def models(self, tier: str) -> list[str]:
         raw = {"fast": self.models_fast, "strong": self.models_strong}[tier]
