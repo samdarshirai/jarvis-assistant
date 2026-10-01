@@ -1,8 +1,14 @@
 import base64
 import binascii
+from email import message_from_bytes, policy
 from email.message import EmailMessage
 from email.utils import parseaddr
 from html.parser import HTMLParser
+from typing import Any, Callable
+
+from googleapiclient.errors import HttpError
+
+from jarvis.google.auth import ReauthRequired
 
 MAX_BODY = 4000
 MAX_RECIPIENTS = 10
@@ -121,3 +127,96 @@ def build_raw(to: list[str], subject: str, body: str, in_reply_to: str | None = 
         msg["References"] = references
     msg.set_content(body)
     return base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+
+def _draft_fields(msg) -> dict:
+    body = msg.get_body(("plain",))
+    return {
+        "to": str(msg["To"] or ""),
+        "cc": str(msg["Cc"] or ""),
+        "subject": str(msg["Subject"] or ""),
+        "body": body.get_content().strip() if body else "",
+    }
+
+
+class GmailClient:
+    def __init__(self, service_factory: Callable[[], Any]):
+        self._svc = service_factory
+
+    @staticmethod
+    def _run(request):
+        try:
+            return request.execute()
+        except HttpError as e:
+            if e.resp.status == 403 and "insufficient" in str(e).lower():
+                raise ReauthRequired("Gmail access has not been granted yet.") from e
+            raise
+
+    def search_emails(self, query: str, limit: int = 10) -> list[dict]:
+        svc = self._svc()
+        resp = self._run(svc.users().messages().list(userId="me", q=query, maxResults=min(limit, 20)))
+        out = []
+        for m in resp.get("messages", []):
+            full = self._run(svc.users().messages().get(
+                userId="me", id=m["id"], format="metadata", metadataHeaders=["From", "Subject", "Date"]))
+            p = full.get("payload", {})
+            out.append({"id": full["id"], "thread_id": full.get("threadId"), "from": header(p, "From"),
+                        "subject": header(p, "Subject"), "date": header(p, "Date"), "snippet": full.get("snippet")})
+        return out
+
+    def read_email(self, message_id: str) -> dict:
+        full = self._run(self._svc().users().messages().get(userId="me", id=message_id, format="full"))
+        p = full.get("payload", {})
+        text = extract_text(p)
+        return {"id": full["id"], "thread_id": full.get("threadId"), "from": header(p, "From"),
+                "to": header(p, "To"), "subject": header(p, "Subject"), "date": header(p, "Date"),
+                "body": text[:MAX_BODY], "truncated": len(text) > MAX_BODY}
+
+    def create_draft(self, to: str, subject: str, body: str, reply_to_message_id: str | None = None) -> dict:
+        recipients = clean_recipients(to)
+        check_subject(subject)
+        svc = self._svc()
+        in_reply_to = references = thread_id = None
+        if reply_to_message_id:
+            orig = self._run(svc.users().messages().get(
+                userId="me", id=reply_to_message_id, format="metadata", metadataHeaders=["Message-ID", "References"]))
+            p = orig.get("payload", {})
+            in_reply_to = header(p, "Message-ID")
+            references = " ".join(x for x in (header(p, "References"), in_reply_to) if x) or None
+            thread_id = orig.get("threadId")
+        message: dict = {"raw": build_raw(recipients, subject, body, in_reply_to, references)}
+        if thread_id:
+            message["threadId"] = thread_id
+        d = self._run(svc.users().drafts().create(userId="me", body={"message": message}))
+        return {"draft_id": d["id"], "thread_id": d.get("message", {}).get("threadId")}
+
+    def _read_draft(self, draft_id: str):
+        d = self._run(self._svc().users().drafts().get(userId="me", id=draft_id, format="raw"))
+        msg = message_from_bytes(b64decode(d["message"]["raw"]), policy=policy.default)
+        return msg, d["message"].get("threadId")
+
+    def get_draft(self, draft_id: str) -> dict:
+        msg, thread_id = self._read_draft(draft_id)
+        return {"draft_id": draft_id, "thread_id": thread_id, **_draft_fields(msg)}
+
+    def update_draft(self, draft_id: str, to: str | None = None, subject: str | None = None,
+                     body: str | None = None) -> dict:
+        msg, thread_id = self._read_draft(draft_id)
+        f = _draft_fields(msg)
+        recipients = clean_recipients(to if to is not None else f["to"])
+        cc = clean_recipients(f["cc"], required=False)
+        new_subject = subject if subject is not None else f["subject"]
+        check_subject(new_subject)
+        in_reply_to = str(msg["In-Reply-To"]) if msg["In-Reply-To"] else None
+        references = str(msg["References"]) if msg["References"] else None
+        message: dict = {"raw": build_raw(recipients, new_subject, body if body is not None else f["body"],
+                                          in_reply_to, references, cc)}
+        if thread_id:
+            message["threadId"] = thread_id
+        d = self._run(self._svc().users().drafts().update(userId="me", id=draft_id,
+                                                          body={"id": draft_id, "message": message}))
+        return {"draft_id": d["id"]}
+
+    def send_draft(self, draft_id: str) -> dict:
+        m = self._run(self._svc().users().drafts().send(userId="me", body={"id": draft_id}))
+        return {"sent": True, "message_id": m.get("id"), "thread_id": m.get("threadId")}
