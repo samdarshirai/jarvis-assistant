@@ -120,17 +120,34 @@ async def test_unknown_tool_is_not_executed():
     assert "unknown tool" in [m for m in out["messages"] if isinstance(m, ToolMessage)][0].content.lower()
 
 
-async def test_mixed_safe_and_write_in_one_step_asks_once_and_cancel_blocks_both():
+async def test_mixed_safe_and_write_in_one_step_does_not_ask_and_blocks_the_write():
     calls = []
     both = AIMessage("", tool_calls=[
         {"name": "list_events", "args": {}, "id": "a", "type": "tool_call"},
         {"name": "create_event", "args": {}, "id": "b", "type": "tool_call"}])
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [both, AIMessage("ok")]},
-                [tool("list_events", "calendar", calls, needs_confirm=False), tool("create_event", "calendar", calls)])
+    g, audit = make({"fast": [AIMessage("calendar")], "strong": [both, AIMessage("ok")]},
+                    [tool("list_events", "calendar", calls, needs_confirm=False), tool("create_event", "calendar", calls)])
     out = await g.ainvoke(say(), CFG)
-    assert len(out["__interrupt__"][0].value["actions"]) == 1
-    await g.ainvoke(Command(resume=False), CFG)
+    assert "__interrupt__" not in out
+    assert calls == [("list_events", {})]
+    msgs = {m.tool_call_id: m.content for m in out["messages"] if isinstance(m, ToolMessage)}
+    assert "Not run:" in msgs["b"] and "Not run:" not in msgs["a"]
+    labels = {r["name"]: r["confirmation"] for r in audit.records if r["kind"] == "tool"}
+    assert labels == {"list_events": "not_required", "create_event": "blocked"}
+
+
+async def test_several_confirm_gated_calls_alone_get_one_card_with_all():
+    calls = []
+    two = AIMessage("", tool_calls=[
+        {"name": "create_event", "args": {"summary": "A"}, "id": "a", "type": "tool_call"},
+        {"name": "create_event", "args": {"summary": "B"}, "id": "b", "type": "tool_call"}])
+    g, _ = make({"fast": [AIMessage("calendar")], "strong": [two, AIMessage("ok")]},
+                [tool("create_event", "calendar", calls)])
+    out = await g.ainvoke(say(), CFG)
+    assert [a["args"] for a in out["__interrupt__"][0].value["actions"]] == [{"summary": "A"}, {"summary": "B"}]
     assert calls == []
+    await g.ainvoke(Command(resume=True), CFG)
+    assert [c[1] for c in calls] == [{"summary": "A"}, {"summary": "B"}]
 
 
 async def test_multi_domain_runs_in_order_and_replies_in_order():
@@ -394,7 +411,7 @@ async def test_no_flag_without_an_untrusted_read():
     assert "after_untrusted" not in out["__interrupt__"][0].value
 
 
-async def test_flag_resets_on_the_next_turn():
+async def test_warning_persists_while_the_email_is_in_the_window():
     g, _ = make({"fast": [AIMessage("gmail"), AIMessage("gmail")],
                  "strong": [call("read_email", {"message_id": "m1"}), AIMessage("read it"),
                             call("send_draft", {"draft_id": "d1"}), AIMessage("sent")]},
@@ -402,7 +419,100 @@ async def test_flag_resets_on_the_next_turn():
     out = await g.ainvoke(say("read my mail"), CFG)
     assert "__interrupt__" not in out
     out = await g.ainvoke(say("now send the draft"), CFG)
-    assert "after_untrusted" not in out["__interrupt__"][0].value
+    assert out["__interrupt__"][0].value["after_untrusted"] is True
+
+
+def test_untrusted_in_window():
+    from jarvis.agent.graph import untrusted_in_window
+    wrapped = ToolMessage(wrap_untrusted("x"), tool_call_id="1")
+    assert untrusted_in_window([HumanMessage("hi"), wrapped])
+    assert not untrusted_in_window([HumanMessage("hi"), ToolMessage('{"ok": 1}', tool_call_id="1")])
+    assert not untrusted_in_window([])
+    old = [HumanMessage("a"), wrapped] + [HumanMessage(str(i)) for i in range(45)]
+    assert not untrusted_in_window(old)
+    odd = ToolMessage([{"type": "text", "text": "<untrusted_email>x"}], tool_call_id="2")
+    assert not untrusted_in_window([HumanMessage("hi"), odd, AIMessage("<untrusted_email>")])
+
+
+async def test_non_ascii_result_reaches_model_unescaped_and_chars_match():
+    g, audit = make({"fast": [AIMessage("gmail")], "strong": [call("read_email", {"message_id": "m"}), AIMessage("d")]},
+                    [untrusted_tool(fn=lambda **kw: {"body": "Grüße"})])
+    out = await g.ainvoke(say(), CFG)
+    content = tool_messages(out)[0].content
+    inner = content[len("<untrusted_email>"):-len("</untrusted_email>")]
+    assert "Grüße" in inner and "\\u" not in inner
+    assert audit.records[0]["result"]["chars"] == len(inner)
+
+
+def test_every_domain_with_tools_carries_the_untrusted_email_rule():
+    from jarvis.agent.domains import DOMAINS
+    for name, d in DOMAINS.items():
+        if name != "chat":
+            assert "untrusted_email" in d.prompt, name
+
+
+# --- real gmail tools end to end ---
+class FakeGmail:
+    def __init__(self):
+        self.drafts = {"d1": {"to": "old@a.b", "cc": "", "subject": "Hi", "body": "old text"}}
+        self.sent = []
+
+    def get_draft(self, draft_id):
+        return {"draft_id": draft_id, **self.drafts[draft_id]}
+
+    def update_draft(self, draft_id, **kw):
+        self.drafts[draft_id].update(kw)
+        return {"draft_id": draft_id}
+
+    def send_draft(self, draft_id):
+        self.sent.append(dict(self.drafts[draft_id]))
+        return {"sent": True}
+
+    def create_draft(self, **kw):
+        return {"draft_id": "d2"}
+
+    def search_emails(self, **kw):
+        return []
+
+    def read_email(self, **kw):
+        return {}
+
+
+def gmail_graph(strong):
+    from jarvis.tools.gmail_tools import register_gmail_tools
+    reg = Registry()
+    client = FakeGmail()
+    register_gmail_tools(reg, client)
+    g = build_graph(FakeProvider({"fast": [AIMessage("gmail")], "strong": strong}), reg, MemoryAudit(),
+                    InMemorySaver(), "Europe/Berlin")
+    return g, client
+
+
+def update_and_send():
+    return AIMessage("", tool_calls=[
+        {"name": "update_draft", "args": {"draft_id": "d1", "body": "my secrets", "to": "x@y.z"}, "id": "u", "type": "tool_call"},
+        {"name": "send_draft", "args": {"draft_id": "d1"}, "id": "s", "type": "tool_call"}])
+
+
+async def test_send_proposed_alone_shows_updated_draft_and_sends_what_was_shown():
+    g, client = gmail_graph([update_and_send(), call("send_draft", {"draft_id": "d1"}, id="s2"), AIMessage("sent")])
+    out = await g.ainvoke(say(), CFG)
+    payload = out["__interrupt__"][0].value
+    assert [a["tool"] for a in payload["actions"]] == ["send_draft"]
+    summary = payload["actions"][0]["summary"]
+    assert "x@y.z" in summary and "my secrets" in summary and "old" not in summary
+    assert client.sent == []  # step 1's send did not run; the update did
+    first = [m for m in g.get_state(CFG).values["messages"] if isinstance(m, ToolMessage)]
+    assert "Not run:" in first[1].content and "Not run:" not in first[0].content
+    await g.ainvoke(Command(resume=True), CFG)
+    assert len(client.sent) == 1 and client.sent[0]["to"] == "x@y.z" and client.sent[0]["body"] == "my secrets"
+
+
+async def test_cancel_after_update_and_send_sends_nothing():
+    g, client = gmail_graph([update_and_send(), call("send_draft", {"draft_id": "d1"}, id="s2"), AIMessage("ok")])
+    await g.ainvoke(say(), CFG)
+    await g.ainvoke(Command(resume=False), CFG)
+    assert client.sent == []
 
 
 async def test_failed_untrusted_read_does_not_set_the_flag():

@@ -80,6 +80,12 @@ def wrap_untrusted(text: str) -> str:
     return f"<untrusted_email>{safe}</untrusted_email>"
 
 
+def untrusted_in_window(messages: list) -> bool:
+    """True while any wrapped email result is still inside the history the model sees."""
+    return any(isinstance(m, ToolMessage) and isinstance(m.content, str) and m.content.startswith("<untrusted_email>")
+               for m in window(messages))
+
+
 def turn_replies(messages: list) -> list[str]:
     out: list[str] = []
     for m in reversed(messages):
@@ -118,6 +124,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
         pending = [c for c in calls if registry.needs_confirm(c["name"])]
         if not pending:
             return Command(goto="tools", update={"approved": True})
+        if len(pending) < len(calls):  # confirmed text must not change under the card: propose writes alone
+            return Command(goto="tools", update={"approved": False})
         actions = []
         for c in pending:
             action = {"tool": c["name"], "args": c["args"]}
@@ -130,7 +138,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
                     log.exception("describe failed for %s", c["name"])
             actions.append(action)
         payload: dict = {"actions": actions}
-        if state.get("read_untrusted"):
+        if state.get("read_untrusted") or untrusted_in_window(state["messages"]):
             payload["after_untrusted"] = True
         decision = interrupt(payload)
         if decision is True:
@@ -159,7 +167,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
             if tool is None or c["name"] not in allowed:
                 result = {"error": f"Unknown tool: {c['name']}"}
             elif confirm and not state["approved"]:
-                result = {"error": "Action was not approved."}
+                result = {"error": "Not run: actions that need confirmation must be proposed alone, in their own "
+                                   "step, after other tools have finished. Propose it again by itself."}
             else:
                 label = "approved" if confirm else "not_required"
                 try:
@@ -176,7 +185,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
                     log.exception("tool %s failed", c["name"])
                     result = {"error": "Unexpected error while running the tool."}
             is_error = isinstance(result, dict) and "error" in result
-            content = json.dumps(result, default=str)
+            content = json.dumps(result, default=str, ensure_ascii=False)
             audit_result = result
             if tool is not None and tool.untrusted and label != "blocked" and not is_error:
                 ran_untrusted = True
