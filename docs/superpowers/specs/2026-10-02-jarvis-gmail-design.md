@@ -9,7 +9,7 @@ Jarvis can search and summarise Gmail (FR-9) and draft replies and new messages,
 Done when:
 - A user can say "anything from Lufthansa this week?" and get a summary, then "reply that I'll be 10 minutes late", see the draft, and send it with a Confirm tap.
 - A message is never sent without a Confirm tap on a card that shows recipients, subject and body.
-- Email content never reaches the audit log; a write proposed after reading email carries a visible warning.
+- Email content returned by tools never reaches the audit log (tool results are redacted); arguments the model wrote, such as draft text, are logged as written, and a write proposed after reading email carries a visible warning on its confirmation card, including in a later turn while the email is still in the recent history.
 - "Add that booking email to my calendar" produces a confirm-gated calendar event (router `gmail, calendar`).
 
 Decisions made with the user:
@@ -47,8 +47,8 @@ Search snippets and subjects can carry attacker text, so both `search_emails` an
 ### Untrusted content
 
 - `Tool.untrusted: bool = False` (registry). Tools marked `untrusted` have their output wrapped in `<untrusted_email>…</untrusted_email>` by the tools node before it reaches the model.
-- Graph `State` gains `read_untrusted: bool`, reset by the router every turn and set by the tools node when an `untrusted` tool runs.
-- The gate adds `"after_untrusted": true` to the interrupt payload when the flag is set. `format_confirmation` shows "⚠ Proposed after reading email content — check recipient and text." above the card.
+- Graph `State` gains `read_untrusted: bool`, set by the tools node when an `untrusted` tool runs. The flag covers the current turn (the router resets it each turn), and the gate also warns while any wrapped email result is still inside the history window (`untrusted_in_window`).
+- The gate adds `"after_untrusted": true` to the interrupt payload when the flag is set or a wrapped email result is in the window. `format_confirmation` shows "⚠ Proposed after reading email content — check recipient and text." above the card.
 - The gate remains the hard guard: every send still requires a Confirm tap, and a prompt injection can only propose.
 
 ### Auth
@@ -58,7 +58,7 @@ Search snippets and subjects can carry attacker text, so both `search_emails` an
 ### Privacy
 
 - Email text goes to the LLM provider through OpenRouter with `data_collection: "deny"`; truncation to 4,000 characters bounds the exposure per message.
-- Audit log: for `untrusted` tools the recorded result is `{"redacted": true, "chars": <n>, "message_id": <id>}` instead of the text; tool arguments are still logged. Prompt and conversation text are not in the audit log.
+- Audit log: for `untrusted` tools the recorded result is `{"redacted": true, "chars": <n>, "message_id": <id>}` instead of the text; tool arguments are still logged. Redaction covers tool results only. Prompt and conversation text are not in the audit log.
 - Known gap carried from sub-project 1: the Postgres checkpointer stores the conversation, email bodies included, with no 30-day retention. This makes that gap more significant; it needs its own design.
 
 ### Errors
@@ -71,7 +71,7 @@ Search snippets and subjects can carry attacker text, so both `search_emails` an
 
 - **Client** (MagicMock services, recorded-style fixtures): search; read (multipart, HTML-only, base64url, truncation, no text part); reply headers and thread id; header-injection rejection (CR/LF in `to` and `subject`); recipient cap; invalid address; update; send; 403 mapping.
 - **Registry/tools:** only `send_draft` confirms; `search_emails` and `read_email` are `untrusted`; describe output contains recipient, subject and body preview and falls back to raw args when the fetch fails.
-- **Graph:** `read_email` sets `read_untrusted`; a write proposed after it carries `after_untrusted`; the router resets the flag next turn; a fake LLM that is "injected" after `read_email` and proposes `send_draft` still interrupts and does not send; tool output reaching the model is wrapped; `parse_domains` accepts `gmail`.
+- **Graph:** `read_email` sets `read_untrusted`; a write proposed after it carries `after_untrusted`; the flag covers the current turn and the gate also warns while a wrapped email result is in the history window; a fake LLM that is "injected" after `read_email` and proposes `send_draft` still interrupts and does not send; tool output reaching the model is wrapped; `parse_domains` accepts `gmail`.
 - **Audit:** `untrusted` tool results are redacted; non-untrusted results unchanged.
 - **Telegram:** the card shows the ⚠ line when `after_untrusted` is true and not otherwise.
 - **Wiring/auth:** `main.py` registers the Gmail tools in the shared registry; the existing scopes test is updated from 2 to 4 scopes.
