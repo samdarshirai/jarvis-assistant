@@ -38,6 +38,22 @@ def register_task_tools(registry: Registry, client) -> None:
     def reschedule_task(task_id, due):
         return client.reschedule_task(task_id, date.fromisoformat(due))
 
+    def day(iso: str) -> str:
+        return date.fromisoformat(iso).strftime("%a %Y-%m-%d")
+
+    def describe_create(a):
+        return f"Create task '{a['title']}'" + (f" due {day(a['due'])}" if a.get("due") else "")
+
+    def describe_complete(a):
+        t = client.get_task(a["task_id"])
+        return f"Complete task '{t['title']}' (" + (f"due {day(t['due'])}" if t["due"] else "no due date") + ")"
+
+    def describe_reschedule(a):
+        return f"Move task '{client.get_task(a['task_id'])['title']}' to {day(a['due'])}"
+
+    describers = {"create_task": describe_create, "complete_task": describe_complete,
+                  "reschedule_task": describe_reschedule}
+
     for name, desc, schema, fn, confirm in [
         ("list_tasks", "List open tasks with due dates (overdue = due before today).", ListTasksArgs, list_tasks, False),
         ("create_task", "Create a task, optionally with a due date.", CreateTaskArgs, create_task, True),
@@ -45,4 +61,4 @@ def register_task_tools(registry: Registry, client) -> None:
         ("reschedule_task", "Change a task's due date.", RescheduleArgs, reschedule_task, True),
     ]:
         registry.add(Tool(name=name, domain="tasks", description=desc, args_schema=schema,
-                          fn=fn, needs_confirm=confirm))
+                          fn=fn, needs_confirm=confirm, describe=describers.get(name)))

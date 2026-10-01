@@ -270,7 +270,7 @@ git commit -m "chore: scaffold project, config, time helpers"
 **Interfaces:**
 - Produces: `make_pool(url: str) -> ConnectionPool`, `init_schema(pool) -> None`, `Audit(pool)` with `record(kind: str, name: str, *, args=None, result=None, confirmation=None, latency_ms=None, model=None, tokens_in=None, tokens_out=None, cost_usd=None) -> None` and `purge(days: int = 90) -> int`.
 
-Tests need Postgres: `docker compose up -d db`, then `export TEST_DATABASE_URL=postgresql://jarvis:jarvis@localhost:5432/jarvis`. Without it these tests skip.
+Tests need Postgres: `docker compose up -d db`, then `export TEST_DATABASE_URL=postgresql://jarvis:jarvis@localhost:5432/jarvis_test`. Without it these tests skip.
 
 - [ ] **Step 1: Write failing tests**
 
@@ -325,7 +325,7 @@ def test_purge_removes_only_old_rows(pool):
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `TEST_DATABASE_URL=postgresql://jarvis:jarvis@localhost:5432/jarvis pytest tests/test_audit.py -v`
+Run: `TEST_DATABASE_URL=postgresql://jarvis:jarvis@localhost:5432/jarvis_test pytest tests/test_audit.py -v`
 Expected: FAIL with `ModuleNotFoundError: jarvis.db`
 
 - [ ] **Step 3: Implement**
@@ -2225,7 +2225,7 @@ Do not run the checks below until the PRD owner has clarified scenario 7 (its tw
 
 - [ ] **Step 4: Run the full suite, commit**
 
-Run: `TEST_DATABASE_URL=postgresql://jarvis:jarvis@localhost:5432/jarvis pytest -v`
+Run: `TEST_DATABASE_URL=postgresql://jarvis:jarvis@localhost:5432/jarvis_test pytest -v`
 Expected: all PASS, no skips.
 
 ```bash

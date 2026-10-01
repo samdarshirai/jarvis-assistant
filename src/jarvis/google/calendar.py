@@ -28,6 +28,9 @@ class CalendarClient:
         ev = self._svc().events().get(calendarId="primary", eventId=event_id).execute()
         return ev.get("recurringEventId", event_id)
 
+    def get_event(self, event_id: str) -> dict:
+        return _slim(self._svc().events().get(calendarId="primary", eventId=event_id).execute())
+
     def list_events(self, start: datetime, end: datetime, query: str | None = None, limit: int = 50) -> list[dict]:
         resp = self._svc().events().list(
             calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(), q=query,

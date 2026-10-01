@@ -235,3 +235,67 @@ async def test_abandoned_interrupt_history_is_repaired_for_model():
     ids = {m.tool_call_id for m in last if isinstance(m, ToolMessage)}
     assert "old" in ids
     assert all(tc["id"] in ids for m in last if isinstance(m, AIMessage) for tc in m.tool_calls)
+
+
+# --- describe / summary in the interrupt payload ---
+def described(name, domain, calls, describe):
+    return Tool(name=name, domain=domain, description="d", args_schema=Args,
+                fn=lambda **kw: calls.append(kw) or {"ok": True}, describe=describe)
+
+
+async def test_interrupt_payload_includes_summary_from_describe():
+    seen = []
+    t = described("create_event", "calendar", [], lambda a: seen.append(a) or "Create 'Gym'")
+    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("create_event", {"summary": "Gym"}), AIMessage("x")]}, [t])
+    out = await g.ainvoke(say(), CFG)
+    act = out["__interrupt__"][0].value["actions"][0]
+    assert act == {"tool": "create_event", "args": {"summary": "Gym"}, "summary": "Create 'Gym'"}
+    assert seen == [{"summary": "Gym"}]
+
+
+async def test_describe_failure_still_interrupts_without_summary():
+    def boom(a):
+        raise RuntimeError("google down")
+
+    calls = []
+    t = described("create_event", "calendar", calls, boom)
+    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("create_event", {"summary": "Gym"}), AIMessage("x")]}, [t])
+    out = await g.ainvoke(say(), CFG)
+    assert out["__interrupt__"][0].value["actions"] == [{"tool": "create_event", "args": {"summary": "Gym"}}]
+    assert calls == []
+
+
+async def test_prompt_has_weekday_and_date(monkeypatch):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    monkeypatch.setattr("jarvis.agent.graph.now_local",
+                        lambda tz: datetime(2026, 10, 2, 14, 0, tzinfo=ZoneInfo(tz)))
+    reg = Registry()
+    prov = FakeProvider({"fast": [AIMessage("chat")], "strong": []})
+    SEEN.clear()
+    prov._models["fast"] = RecChat(script=[AIMessage("chat"), AIMessage("hi")])
+    g = build_graph(prov, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
+    await g.ainvoke(say(), CFG)
+    system = [m for m in SEEN[-1] if m.type == "system"][0].content
+    assert "Friday 2026-10-02 14:00" in system and "CEST" in system and "+0200" in system
+
+
+# --- audit labels ---
+async def test_blocked_calls_are_labelled_blocked_and_executed_ones_approved():
+    calls = []
+    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("list_tasks"), AIMessage("sorry")]},
+                    [tool("list_tasks", "tasks", calls, needs_confirm=False)])
+    await g.ainvoke(say(), CFG)  # other-domain tool: blocked even though it needs no confirmation
+    assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["blocked"]
+
+    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("rm_rf"), AIMessage("sorry")]}, [])
+    await g.ainvoke(say(), CFG)
+    await g.ainvoke(Command(resume=True), CFG)
+    assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["blocked"]
+
+    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("create_event"), AIMessage("ok")]},
+                    [tool("create_event", "calendar", calls)])
+    await g.ainvoke(say(), CFG)
+    await g.ainvoke(Command(resume=True), CFG)
+    assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["approved"]

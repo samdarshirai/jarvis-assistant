@@ -21,6 +21,9 @@ class TasksClient:
         resp = self._svc().tasks().list(tasklist=LIST, showCompleted=include_completed, maxResults=100).execute()
         return [_slim(t) for t in resp.get("items", [])]
 
+    def get_task(self, task_id: str) -> dict:
+        return _slim(self._svc().tasks().get(tasklist=LIST, task=task_id).execute())
+
     def create_task(self, title: str, due: date | None = None) -> dict:
         body = {"title": title}
         if due:

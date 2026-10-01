@@ -113,3 +113,46 @@ def test_update_tool_scope_this_with_start_works():
     svc.events.return_value.patch.return_value.execute.return_value = {"id": "i1"}
     r.get("update_event").fn(event_id="i1", scope="this", start="2026-10-06T10:00")
     assert svc.events.return_value.patch.call_args.kwargs["eventId"] == "i1"
+
+
+def test_get_event_slims():
+    c, svc = client()
+    svc.events.return_value.get.return_value.execute.return_value = {
+        "id": "e1", "summary": "Gym", "start": {"dateTime": "2026-10-06T07:00:00+02:00"},
+        "end": {"dateTime": "2026-10-06T08:00:00+02:00"}, "etag": "junk"}
+    assert c.get_event("e1")["summary"] == "Gym"
+    assert svc.events.return_value.get.call_args.kwargs == {"calendarId": "primary", "eventId": "e1"}
+
+
+def described_registry():
+    c, svc = client()
+    svc.events.return_value.get.return_value.execute.return_value = {
+        "id": "e1", "summary": "Gym", "start": {"dateTime": "2026-10-06T07:00:00+02:00"},
+        "end": {"dateTime": "2026-10-06T08:00:00+02:00"}}
+    r = Registry()
+    register_calendar_tools(r, c, TZ)
+    return r, svc
+
+
+def test_delete_describe_names_event_and_series():
+    r, svc = described_registry()
+    s = r.get("delete_event").describe({"event_id": "e1", "scope": "all"})
+    assert "Delete 'Gym' (Tue 2026-10-06 07:00-08:00)" in s and "whole recurring series" in s
+    assert "series" not in r.get("delete_event").describe({"event_id": "e1", "scope": "this"})
+    assert svc.events.return_value.get.call_count == 2
+
+
+def test_update_describe_lists_changed_fields():
+    r, svc = described_registry()
+    s = r.get("update_event").describe({"event_id": "e1", "scope": "this", "summary": "Run",
+                                        "start": "2026-10-07T07:00:00", "end": "2026-10-07T08:00:00"})
+    assert "Change 'Gym' (Tue 2026-10-06 07:00-08:00)" in s
+    assert "title" in s and "'Run'" in s and "Wed 2026-10-07 07:00" in s
+    assert svc.events.return_value.get.call_count == 1
+
+
+def test_create_event_describe_is_offline():
+    r, svc = described_registry()
+    s = r.get("create_event").describe({"summary": "Gym", "start": "2026-10-06T07:00:00", "end": "2026-10-06T08:00:00"})
+    assert s == "Create 'Gym' Tue 2026-10-06 07:00-08:00"
+    svc.events.assert_not_called()

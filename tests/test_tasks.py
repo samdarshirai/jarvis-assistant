@@ -54,3 +54,25 @@ def test_confirm_tags():
     assert r.needs_confirm("list_tasks") is False
     for n in ("create_task", "complete_task", "reschedule_task"):
         assert r.needs_confirm(n)
+
+
+def test_get_task_slims():
+    r, svc = setup()
+    svc.tasks.return_value.get.return_value.execute.return_value = {
+        "id": "t1", "title": "Call mum", "due": "2026-10-02T00:00:00.000Z", "status": "needsAction", "etag": "x"}
+    out = TasksClient(lambda: svc).get_task("t1")
+    assert out["title"] == "Call mum"
+    assert svc.tasks.return_value.get.call_args.kwargs == {"tasklist": "@default", "task": "t1"}
+
+
+def test_task_describes():
+    r, svc = setup()
+    svc.tasks.return_value.get.return_value.execute.return_value = {
+        "id": "t1", "title": "Call mum", "due": "2026-10-02T00:00:00.000Z", "status": "needsAction"}
+    assert r.get("complete_task").describe({"task_id": "t1"}) == "Complete task 'Call mum' (due Fri 2026-10-02)"
+    assert r.get("reschedule_task").describe({"task_id": "t1", "due": "2026-10-09"}) == \
+        "Move task 'Call mum' to Fri 2026-10-09"
+    assert svc.tasks.return_value.get.call_count == 2
+    svc.reset_mock()
+    assert r.get("create_task").describe({"title": "X", "due": "2026-10-09"}) == "Create task 'X' due Fri 2026-10-09"
+    svc.tasks.assert_not_called()

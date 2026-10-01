@@ -13,6 +13,7 @@ class Tool:
     args_schema: type[BaseModel]
     fn: Callable[..., Any]
     needs_confirm: bool = True  # safe default: a new tool confirms unless marked read-only
+    describe: Callable[[dict], str] | None = None  # read-only, human summary of a call for the confirm prompt
 
 
 class Registry:

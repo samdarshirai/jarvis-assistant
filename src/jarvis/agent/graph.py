@@ -97,7 +97,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
     async def agent(state: State) -> dict:
         dom = DOMAINS[state["domains"][state["idx"]]]
         llm = provider.get(dom.tier, registry.lc_tools(dom.name) or None)
-        system = SystemMessage(f"{dom.prompt}\nCurrent local time: {now_local(tz).isoformat()} ({tz}).")
+        system = SystemMessage(f"{dom.prompt}\nCurrent local time: {now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
         reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
         return {"messages": [reply], "approved": False}
 
@@ -109,7 +109,18 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
         pending = [c for c in calls if registry.needs_confirm(c["name"])]
         if not pending:
             return Command(goto="tools", update={"approved": True})
-        decision = interrupt({"actions": [{"tool": c["name"], "args": c["args"]} for c in pending]})
+        actions = []
+        for c in pending:
+            action = {"tool": c["name"], "args": c["args"]}
+            tool = registry.get(c["name"])
+            if tool and tool.describe:
+                try:  # read-only lookup; the prompt still shows tool/args if it fails
+                    kwargs = tool.args_schema(**c["args"]).model_dump(exclude_unset=True)
+                    action["summary"] = await asyncio.to_thread(tool.describe, kwargs)
+                except Exception:
+                    log.exception("describe failed for %s", c["name"])
+            actions.append(action)
+        decision = interrupt({"actions": actions})
         if decision is True:
             return Command(goto="tools", update={"approved": True})
         return Command(goto="reject")
@@ -131,11 +142,13 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
             confirm = registry.needs_confirm(c["name"])
             result: object
             t0 = time.monotonic()
+            label = "blocked"
             if tool is None or c["name"] not in allowed:
                 result = {"error": f"Unknown tool: {c['name']}"}
             elif confirm and not state["approved"]:
                 result = {"error": "Action was not approved."}
             else:
+                label = "approved" if confirm else "not_required"
                 try:
                     kwargs = tool.args_schema(**c["args"]).model_dump(exclude_unset=True)
                     result = await asyncio.to_thread(tool.fn, **kwargs)
@@ -151,7 +164,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
                     result = {"error": "Unexpected error while running the tool."}
             await record(
                 "tool", c["name"], args=c["args"], result=result,
-                confirmation="approved" if confirm else "not_required",
+                confirmation=label,
                 latency_ms=int((time.monotonic() - t0) * 1000))
             if isinstance(result, dict) and "client_action" in result:
                 actions.append(result["client_action"])

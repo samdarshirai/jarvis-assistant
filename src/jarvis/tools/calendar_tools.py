@@ -1,4 +1,4 @@
-from datetime import time, timedelta
+from datetime import datetime, time, timedelta
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -51,6 +51,15 @@ class FreeSlotsArgs(BaseModel):
                                      description="Slot must fit inside every window (local time in its zone)")
 
 
+def _when(v: str) -> str:
+    return datetime.fromisoformat(v).strftime("%a %Y-%m-%d %H:%M") if "T" in v else datetime.fromisoformat(v).strftime("%a %Y-%m-%d")
+
+
+def _range(start: str, end: str) -> str:
+    s, e = _when(start), _when(end)
+    return f"{s}-{e[-5:]}" if "T" in start and s[:14] == e[:14] else f"{s} to {e}"
+
+
 def register_calendar_tools(registry: Registry, client, tz: str) -> None:
     def span(start: str, end: str):
         s, e = parse_dt(start, tz), parse_dt(end, tz)
@@ -85,6 +94,29 @@ def register_calendar_tools(registry: Registry, client, tz: str) -> None:
         return [{"start": a.astimezone(s.tzinfo).isoformat(), "end": b.astimezone(s.tzinfo).isoformat()}
                 for a, b in slots]
 
+    def describe_create(a):
+        s, e = span(a["start"], a["end"])
+        return f"Create '{a['summary']}' {_range(s.isoformat(), e.isoformat())}"
+
+    def current(event_id):
+        ev = client.get_event(event_id)
+        return f"'{ev['summary']}' ({_range(ev['start'], ev['end'])})"
+
+    def describe_update(a):
+        changes = []
+        if "summary" in a:
+            changes.append(f"title -> '{a['summary']}'")
+        for k in ("start", "end"):
+            if k in a:
+                changes.append(f"{k} -> {_when(parse_dt(a[k], tz).isoformat())}")
+        series = ", whole recurring series" if a["scope"] == "all" else ""
+        return f"Change {current(a['event_id'])}{series}: " + "; ".join(changes)
+
+    def describe_delete(a):
+        return f"Delete {current(a['event_id'])}" + (" - the whole recurring series" if a["scope"] == "all" else "")
+
+    describers = {"create_event": describe_create, "update_event": describe_update, "delete_event": describe_delete}
+
     for name, desc, schema, fn, confirm in [
         ("list_events", "List or search calendar events in a date range.", ListEventsArgs, list_events, False),
         ("find_free_slots", "Find free meeting slots, optionally constrained by time windows in several zones.",
@@ -95,4 +127,4 @@ def register_calendar_tools(registry: Registry, client, tz: str) -> None:
         ("delete_event", "Delete an event or a whole recurring series.", DeleteEventArgs, delete_event, True),
     ]:
         registry.add(Tool(name=name, domain="calendar", description=desc, args_schema=schema,
-                          fn=fn, needs_confirm=confirm))
+                          fn=fn, needs_confirm=confirm, describe=describers.get(name)))

@@ -13,12 +13,20 @@ log = logging.getLogger(__name__)
 
 THREAD = {"configurable": {"thread_id": "owner"}, "recursion_limit": 40}
 FAIL_TEXT = "Something went wrong. Please try again."
-KEYBOARD = InlineKeyboardMarkup([[InlineKeyboardButton("Confirm", callback_data="yes"),
-                                  InlineKeyboardButton("Cancel", callback_data="no")]])
+EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you are unsure."
+
+
+def keyboard(interrupt_id: str) -> InlineKeyboardMarkup:
+    # buttons are bound to the interrupt they were shown for, so a stale or double tap cannot approve a later one
+    return InlineKeyboardMarkup([[InlineKeyboardButton("Confirm", callback_data=f"yes:{interrupt_id}"),
+                                  InlineKeyboardButton("Cancel", callback_data=f"no:{interrupt_id}")]])
 
 
 def format_confirmation(payload: dict) -> str:
-    lines = [f"• {a['tool']}: {json.dumps(a['args'], ensure_ascii=False)}" for a in payload["actions"]]
+    lines = []
+    for a in payload["actions"]:
+        raw = f"{a['tool']}: {json.dumps(a['args'], ensure_ascii=False)}"
+        lines.append(f"• {a['summary']}\n  ({raw})" if a.get("summary") else f"• {raw}")
     return "Confirm this action?\n" + "\n".join(lines)
 
 
@@ -30,7 +38,7 @@ class TelegramChannel:
 
     def build(self, token: str) -> Application:
         app = Application.builder().token(token).build()
-        app.add_handler(MessageHandler(self.owner_filter & filters.TEXT & ~filters.COMMAND, self.on_text))
+        app.add_handler(MessageHandler(self.owner_filter & filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND, self.on_text))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(~self.owner_filter, self.on_stranger), group=1)
         return app
@@ -51,15 +59,16 @@ class TelegramChannel:
             try:  # buttons may be gone; re-offer a still-pending confirmation so the owner is not locked out
                 state = await self.graph.aget_state(THREAD)
                 if state.interrupts:
-                    await chat.send_message(format_confirmation(state.interrupts[0].value), reply_markup=KEYBOARD)
+                    await chat.send_message(format_confirmation(state.interrupts[0].value),
+                                            reply_markup=keyboard(state.interrupts[0].id))
             except Exception:
                 log.exception("could not re-offer pending confirmation")
             return
         interrupts = result.get("__interrupt__")
         if interrupts:
-            await chat.send_message(format_confirmation(interrupts[0].value), reply_markup=KEYBOARD)
+            await chat.send_message(format_confirmation(interrupts[0].value), reply_markup=keyboard(interrupts[0].id))
             return
-        for text in turn_replies(result["messages"]):
+        for text in turn_replies(result["messages"]) or [EMPTY_TEXT]:
             await chat.send_message(text)
 
     async def on_text(self, update, context):
@@ -80,7 +89,9 @@ class TelegramChannel:
             await q.edit_message_reply_markup(reply_markup=None)
         except TelegramError:
             log.warning("could not remove confirmation buttons", exc_info=True)
-        if not await self._pending():
+        action, _, iid = (q.data or "").partition(":")
+        interrupts = (await self.graph.aget_state(THREAD)).interrupts
+        if action not in ("yes", "no") or not interrupts or interrupts[0].id != iid:
             await chat.send_message("Already handled.")
             return
-        await self._run(chat, Command(resume=q.data == "yes"))
+        await self._run(chat, Command(resume=action == "yes"))

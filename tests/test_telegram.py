@@ -34,12 +34,20 @@ def button_update(c, data, chat_id=OWNER, edit=None):
     return SimpleNamespace(callback_query=q)
 
 
-def make_channel(scripts, calls):
+def make_channel(scripts, calls, extra=()):
     reg = Registry()
     reg.add(Tool(name="create_event", domain="calendar", description="d", args_schema=Args,
                  fn=lambda **kw: calls.append(kw) or {"ok": True}))
+    for t in extra:
+        reg.add(t)
     g = build_graph(FakeProvider(scripts), reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
     return TelegramChannel(g, OWNER)
+
+
+def ids(c, n=-1):
+    """(yes_data, no_data) from the keyboard of the n-th message sent to chat c."""
+    kb = c.send_message.call_args_list[n].kwargs["reply_markup"].inline_keyboard[0]
+    return kb[0].callback_data, kb[1].callback_data
 
 
 def sent(c):
@@ -67,14 +75,15 @@ async def test_confirmation_flow_runs_action_once():
     await ch.on_text(text_update(c2, "something else"), None)
     assert sent(c2) == [("Confirm or cancel the pending action first.", {})]
 
+    yes, _ = ids(c)
     c3 = chat()
-    await ch.on_button(button_update(c3, "yes"), None)
+    await ch.on_button(button_update(c3, yes), None)
     assert calls == [{"summary": "Gym"}]
     assert sent(c3) == [("Created.", {})]
 
     # Review focus 2: second tap does nothing
     c4 = chat()
-    await ch.on_button(button_update(c4, "yes"), None)
+    await ch.on_button(button_update(c4, yes), None)
     assert calls == [{"summary": "Gym"}]
     assert sent(c4) == [("Already handled.", {})]
 
@@ -83,9 +92,10 @@ async def test_cancel_button_runs_nothing():
     calls = []
     tool_call = AIMessage("", tool_calls=[{"name": "create_event", "args": {}, "id": "1", "type": "tool_call"}])
     ch = make_channel({"fast": [AIMessage("calendar")], "strong": [tool_call, AIMessage("Cancelled.")]}, calls)
-    await ch.on_text(text_update(chat()), None)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
     c = chat()
-    await ch.on_button(button_update(c, "no"), None)
+    await ch.on_button(button_update(c, ids(c0)[1]), None)
     assert calls == [] and sent(c) == [("Cancelled.", {})]
 
 
@@ -123,13 +133,14 @@ def pending_channel(calls):
 async def test_non_owner_button_dropped_and_logged(caplog):
     calls = []
     ch = pending_channel(calls)
-    await ch.on_text(text_update(chat()), None)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
     real = ch.graph
     spy = SimpleNamespace(ainvoke=AsyncMock(), aget_state=real.aget_state)
     ch.graph = spy
     c = chat()
     with caplog.at_level("WARNING"):
-        await ch.on_button(button_update(c, "yes", chat_id=99), None)
+        await ch.on_button(button_update(c, ids(c0)[0], chat_id=99), None)
     spy.ainvoke.assert_not_called()
     assert sent(c) == [] and calls == []
     assert "non-owner" in caplog.text
@@ -138,7 +149,8 @@ async def test_non_owner_button_dropped_and_logged(caplog):
 async def test_failed_resume_reprompts_and_retry_works():
     calls = []
     ch = pending_channel(calls)
-    await ch.on_text(text_update(chat()), None)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
     real = ch.graph
     boom = {"on": True}
 
@@ -150,24 +162,109 @@ async def test_failed_resume_reprompts_and_retry_works():
 
     ch.graph = SimpleNamespace(ainvoke=ainvoke, aget_state=real.aget_state)
     c = chat()
-    await ch.on_button(button_update(c, "yes"), None)
+    yes, _ = ids(c0)
+    await ch.on_button(button_update(c, yes), None)
     out = sent(c)
     assert out[0] == (FAIL_TEXT, {}) and "create_event" in out[1][0] and "reply_markup" in out[1][1]
     assert calls == []
+    assert ids(c) == ids(c0)  # same interrupt, same id on the re-offered keyboard
     c2 = chat()
-    await ch.on_button(button_update(c2, "yes"), None)
+    await ch.on_button(button_update(c2, ids(c)[0]), None)
     assert calls == [{"summary": "Gym"}] and sent(c2) == [("Created.", {})]
 
 
 async def test_edit_markup_error_does_not_block_action():
     calls = []
     ch = pending_channel(calls)
-    await ch.on_text(text_update(chat()), None)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
     c = chat()
-    await ch.on_button(button_update(c, "yes", edit=AsyncMock(side_effect=TelegramError("x"))), None)
+    await ch.on_button(button_update(c, ids(c0)[0], edit=AsyncMock(side_effect=TelegramError("x"))), None)
     assert calls == [{"summary": "Gym"}] and sent(c) == [("Created.", {})]
 
 
 def test_build_registers_handlers_without_network():
     app = TelegramChannel(None, OWNER).build("123:abc")
     assert len(app.handlers[0]) == 2 and len(app.handlers[1]) == 1
+
+
+def test_format_confirmation_with_summary_keeps_raw_call():
+    s = format_confirmation({"actions": [{"tool": "delete_event", "args": {"event_id": "e1", "scope": "all"},
+                                          "summary": "Delete 'Gym' (Tue 2026-10-06 07:00-08:00)"}]})
+    assert "Delete 'Gym' (Tue" in s and "delete_event" in s and "e1" in s
+
+
+TASK_CALL = AIMessage("", tool_calls=[{"name": "create_task", "args": {"summary": "Mum"}, "id": "2", "type": "tool_call"}])
+
+
+def two_write_channel(calls):
+    t = Tool(name="create_task", domain="tasks", description="d", args_schema=Args,
+             fn=lambda **kw: calls.append(("task", kw)) or {"ok": True})
+    return make_channel({"fast": [AIMessage("calendar, tasks")],
+                         "strong": [TOOL_CALL, AIMessage("cal done"), TASK_CALL, AIMessage("all done")]},
+                        calls, extra=[t])
+
+
+async def test_double_tap_does_not_approve_the_second_write():
+    calls = []
+    ch = two_write_channel(calls)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
+    yes1, _ = ids(c0)
+    c1 = chat()
+    await ch.on_button(button_update(c1, yes1), None)
+    assert calls == [{"summary": "Gym"}]
+    assert "create_task" in sent(c1)[-1][0]
+    yes2, _ = ids(c1)
+    assert yes2 != yes1
+    c2 = chat()  # the double tap on the old button
+    await ch.on_button(button_update(c2, yes1), None)
+    assert sent(c2) == [("Already handled.", {})] and calls == [{"summary": "Gym"}]
+    c3 = chat()
+    await ch.on_button(button_update(c3, yes2), None)
+    assert calls == [{"summary": "Gym"}, ("task", {"summary": "Mum"})]
+
+
+async def test_stale_no_after_resolution_is_already_handled():
+    calls = []
+    ch = pending_channel(calls)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
+    yes, no = ids(c0)
+    await ch.on_button(button_update(chat(), yes), None)
+    c = chat()
+    await ch.on_button(button_update(c, no), None)
+    assert sent(c) == [("Already handled.", {})] and calls == [{"summary": "Gym"}]
+
+
+async def test_legacy_bare_callback_data_is_already_handled():
+    calls = []
+    ch = pending_channel(calls)
+    await ch.on_text(text_update(chat()), None)
+    for data in ("yes", "no", "yes:wrong", None):
+        c = chat()
+        await ch.on_button(button_update(c, data), None)
+        assert sent(c) == [("Already handled.", {})]
+    assert calls == []
+    assert await ch._pending()  # still waiting for a real answer
+
+
+async def test_empty_reply_sends_fallback():
+    ch = make_channel({"fast": [AIMessage("chat"), AIMessage("calendar")], "strong": []}, [])
+    ch.graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(interrupts=())),
+                               ainvoke=AsyncMock(return_value={"messages": []}))
+    c = chat()
+    await ch.on_text(text_update(c), None)
+    assert sent(c) == [("Finished, but I have no summary to show. Ask me to check if you are unsure.", {})]
+
+
+def test_text_handler_ignores_edited_messages():
+    app = TelegramChannel(None, OWNER).build("123:abc")
+    h = app.handlers[0][0]
+
+    def upd(key):
+        return Update.de_json({"update_id": 1, key: {"message_id": 1, "date": 0, "edit_date": 1,
+                              "chat": {"id": OWNER, "type": "private"}, "text": "hi"}}, None)
+
+    assert h.check_update(upd("message"))
+    assert not h.check_update(upd("edited_message"))
