@@ -20,7 +20,6 @@ class MemStore:
 
 class StubCreds:
     valid = True
-    fail = False
 
     def __init__(self, info):
         self.info = info
@@ -34,6 +33,7 @@ class StubCreds:
     def refresh(self, request):
         if self.info.get("revoked"):
             raise RefreshError("revoked")
+        self.info["refreshed"] = True
         self.valid = True
 
     def to_json(self):
@@ -69,3 +69,31 @@ def test_revoked_refresh_requires_reauth(key, monkeypatch):
 def test_scopes_are_calendar_and_tasks_only():
     assert len(auth.SCOPES) == 2
     assert all(s.endswith(("/calendar", "/tasks")) for s in auth.SCOPES)
+
+
+def test_rotated_key_requires_reauth(key, monkeypatch):
+    monkeypatch.setattr(auth, "Credentials", StubCreds)
+    store = MemStore()
+    auth.save_credentials(store, key, StubCreds({"refresh_token": "secret-rt"}))
+    wrong_key = Fernet.generate_key().decode()
+    with pytest.raises(auth.ReauthRequired):
+        auth.load_credentials(store, wrong_key)
+
+
+def test_corrupt_blob_requires_reauth(key, monkeypatch):
+    monkeypatch.setattr(auth, "Credentials", StubCreds)
+    store = MemStore()
+    store.put("google", b"not-valid-fernet-data")
+    with pytest.raises(auth.ReauthRequired):
+        auth.load_credentials(store, key)
+
+
+def test_refresh_success_resaves_token(key, monkeypatch):
+    monkeypatch.setattr(auth, "Credentials", StubCreds)
+    store = MemStore()
+    auth.save_credentials(store, key, StubCreds({"expired": True, "refresh_token": "rt"}))
+    creds = auth.load_credentials(store, key)
+    assert creds.valid
+    assert creds.info.get("refreshed") is True
+    decrypted = json.loads(auth.Fernet(key).decrypt(store.d["google"]))
+    assert decrypted.get("refreshed") is True

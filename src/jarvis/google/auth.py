@@ -1,7 +1,7 @@
 import json
 from typing import Protocol
 
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -49,7 +49,10 @@ def load_credentials(store: TokenStore, key: str):
     blob = store.get(PROVIDER)
     if blob is None:
         raise ReauthRequired("No Google authorization stored.")
-    info = json.loads(Fernet(key).decrypt(blob))
+    try:
+        info = json.loads(Fernet(key).decrypt(blob))
+    except (InvalidToken, ValueError) as e:
+        raise ReauthRequired("Stored Google token unreadable (key changed or corrupt); re-run python -m jarvis.google.auth") from e
     creds = Credentials.from_authorized_user_info(info, SCOPES)
     if not creds.valid:
         try:
