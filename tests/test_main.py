@@ -46,6 +46,7 @@ def mock_lifespan_deps(monkeypatch):
     monkeypatch.setattr("jarvis.main.LLMProvider", lambda s, audit: MagicMock())
     monkeypatch.setattr("jarvis.main.register_calendar_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
+    monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
 
     # Mock AsyncPostgresSaver
@@ -99,6 +100,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
     monkeypatch.setattr("jarvis.main.LLMProvider", lambda s, audit: MagicMock())
     monkeypatch.setattr("jarvis.main.register_calendar_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
+    monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
 
     # Make build_graph raise

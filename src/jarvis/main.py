@@ -11,13 +11,23 @@ from jarvis.config import get_settings
 from jarvis.db import init_schema, make_pool
 from jarvis.google.auth import PgTokenStore, build_service
 from jarvis.google.calendar import CalendarClient
+from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
 from jarvis.llm import LLMProvider
 from jarvis.tools.calendar_tools import register_calendar_tools
+from jarvis.tools.gmail_tools import register_gmail_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.task_tools import register_task_tools
 
 log = logging.getLogger(__name__)
+
+
+def build_registry(svc, tz: str) -> Registry:
+    registry = Registry()
+    register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz)
+    register_task_tools(registry, TasksClient(svc("tasks", "v1")))
+    register_gmail_tools(registry, GmailClient(svc("gmail", "v1")))
+    return registry
 
 
 @asynccontextmanager
@@ -33,9 +43,7 @@ async def lifespan(app: FastAPI):
         def svc(name: str, version: str):
             return lambda: build_service(name, version, store, s.fernet_key)
 
-        registry = Registry()
-        register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), s.timezone), s.timezone)
-        register_task_tools(registry, TasksClient(svc("tasks", "v1")))
+        registry = build_registry(svc, s.timezone)
 
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
