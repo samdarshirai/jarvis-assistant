@@ -91,3 +91,25 @@ def test_find_free_slots_no_intersection_returns_empty_list():
         windows=[{"tz": "Asia/Kolkata", "start": "18:00", "end": "21:00"},
                  {"tz": "Europe/Berlin", "start": "00:00", "end": "09:00"}])
     assert out == []
+
+
+def test_update_tool_scope_all_rejects_start_end():
+    r, svc = make_tools()
+    with pytest.raises(ValueError):
+        r.get("update_event").fn(event_id="i1", scope="all", start="2026-10-06T10:00")
+    svc.events.return_value.patch.assert_not_called()
+
+
+def test_update_tool_scope_all_summary_only_patches_series():
+    r, svc = make_tools()
+    svc.events.return_value.get.return_value.execute.return_value = {"id": "i1", "recurringEventId": "r1"}
+    svc.events.return_value.patch.return_value.execute.return_value = {"id": "r1"}
+    r.get("update_event").fn(event_id="i1", scope="all", summary="A")
+    assert svc.events.return_value.patch.call_args.kwargs["eventId"] == "r1"
+
+
+def test_update_tool_scope_this_with_start_works():
+    r, svc = make_tools()
+    svc.events.return_value.patch.return_value.execute.return_value = {"id": "i1"}
+    r.get("update_event").fn(event_id="i1", scope="this", start="2026-10-06T10:00")
+    assert svc.events.return_value.patch.call_args.kwargs["eventId"] == "i1"

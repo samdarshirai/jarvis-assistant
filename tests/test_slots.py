@@ -1,4 +1,4 @@
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from jarvis.google.slots import Window, free_slots
@@ -39,3 +39,6 @@ def test_dst_change_day_is_handled():
     out = free_slots([], datetime(2026, 10, 25, 1, tzinfo=B), datetime(2026, 10, 25, 6, tzinfo=B),
                      timedelta(hours=1))
     assert out and all(s.minute in (0, 30) for s, _ in out)
+    utc = timezone.utc
+    assert all(e.astimezone(utc) - s.astimezone(utc) == timedelta(hours=1) for s, e in out)
+    assert all(a[1].astimezone(utc) <= b[0].astimezone(utc) for a, b in zip(out, out[1:]))

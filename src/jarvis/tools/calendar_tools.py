@@ -26,10 +26,10 @@ class CreateEventArgs(BaseModel):
 
 class UpdateEventArgs(BaseModel):
     event_id: str
-    scope: Scope = Field(description="'this' = one occurrence, 'all' = whole series")
+    scope: Scope = Field(description="'this' = one occurrence, 'all' = whole series (summary only; start/end cannot change for a series)")
     summary: str | None = None
-    start: str | None = Field(default=None, description=DT)
-    end: str | None = Field(default=None, description=DT)
+    start: str | None = Field(default=None, description=DT + " Only with scope='this'; not allowed for 'all'.")
+    end: str | None = Field(default=None, description=DT + " Only with scope='this'; not allowed for 'all'.")
 
 
 class DeleteEventArgs(BaseModel):
@@ -65,6 +65,9 @@ def register_calendar_tools(registry: Registry, client, tz: str) -> None:
         return client.create_event(summary, *span(start, end), recurrence=recurrence)
 
     def update_event(event_id, scope, summary=None, start=None, end=None):
+        if scope == "all" and (start or end):
+            raise ValueError("start/end cannot be changed for a whole recurring series; change one occurrence "
+                             "with scope='this', or delete and recreate the series")
         s = parse_dt(start, tz) if start else None
         e = parse_dt(end, tz) if end else None
         if s and e and e <= s:
