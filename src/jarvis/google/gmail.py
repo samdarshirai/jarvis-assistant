@@ -2,7 +2,7 @@ import base64
 import binascii
 from email import message_from_bytes, policy
 from email.message import EmailMessage
-from email.utils import parseaddr
+from email.utils import getaddresses, parseaddr
 from html.parser import HTMLParser
 from typing import Any, Callable
 
@@ -130,12 +130,17 @@ def build_raw(to: list[str], subject: str, body: str, in_reply_to: str | None = 
 
 
 def _draft_fields(msg) -> dict:
-    body = msg.get_body(("plain",))
+    part = msg.get_body(("plain", "html"))
+    text = ""
+    if part:
+        text = part.get_content().strip()
+        if part.get_content_type() == "text/html":
+            text = html_to_text(text)
     return {
         "to": str(msg["To"] or ""),
         "cc": str(msg["Cc"] or ""),
         "subject": str(msg["Subject"] or ""),
-        "body": body.get_content().strip() if body else "",
+        "body": text,
     }
 
 
@@ -202,9 +207,17 @@ class GmailClient:
     def update_draft(self, draft_id: str, to: str | None = None, subject: str | None = None,
                      body: str | None = None) -> dict:
         msg, thread_id = self._read_draft(draft_id)
+        if any(True for _ in msg.iter_attachments()):
+            raise ValueError("draft has attachments; Jarvis cannot edit it safely — edit it in Gmail")
+        if body is None and (msg.is_multipart() or msg.get_content_type() != "text/plain"):
+            raise ValueError("draft has rich content; pass body to replace it, or edit it in Gmail")
         f = _draft_fields(msg)
-        recipients = clean_recipients(to if to is not None else f["to"])
-        cc = clean_recipients(f["cc"], required=False)
+
+        def bare(v: str) -> str:
+            return ", ".join(a for _, a in getaddresses([v]) if a)
+
+        recipients = clean_recipients(to if to is not None else bare(f["to"]))
+        cc = clean_recipients(bare(f["cc"]), required=False)
         new_subject = subject if subject is not None else f["subject"]
         check_subject(new_subject)
         in_reply_to = str(msg["In-Reply-To"]) if msg["In-Reply-To"] else None

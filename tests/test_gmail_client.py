@@ -181,3 +181,79 @@ def test_other_http_errors_pass_through():
     D(svc).send.return_value.execute.side_effect = http_error(404, "Requested entity was not found.")
     with pytest.raises(HttpError):
         c.send_draft("gone")
+
+
+def _raw(msg) -> str:
+    return base64.urlsafe_b64encode(msg.as_bytes()).decode()
+
+
+def _msg(to="a@x.com", cc=None, subject="Subj"):
+    from email.message import EmailMessage
+    m = EmailMessage()
+    m["To"] = to
+    if cc:
+        m["Cc"] = cc
+    m["Subject"] = subject
+    return m
+
+
+def _html_only():
+    m = _msg()
+    m.set_content("<p>Hello <b>there</b></p>", subtype="html")
+    return m
+
+
+def _alt():
+    m = _msg()
+    m.set_content("plain version")
+    m.add_alternative("<p>html version</p>", subtype="html")
+    return m
+
+
+def _with_attachment():
+    m = _msg()
+    m.set_content("text")
+    m.add_attachment(b"data", maintype="application", subtype="pdf", filename="a.pdf")
+    return m
+
+
+def _client_with(msg):
+    c, svc = make()
+    D(svc).get.return_value.execute.return_value = draft_with(_raw(msg))
+    D(svc).update.return_value.execute.return_value = {"id": "d1"}
+    return c, svc
+
+
+def test_get_draft_html_only_shows_text():
+    c, _ = _client_with(_html_only())
+    assert c.get_draft("d1")["body"] == "Hello there"
+
+
+@pytest.mark.parametrize("make_msg", [_html_only, _alt])
+def test_update_draft_rich_without_body_refuses(make_msg):
+    c, svc = _client_with(make_msg())
+    with pytest.raises(ValueError):
+        c.update_draft("d1", subject="New")
+    D(svc).update.assert_not_called()
+
+
+@pytest.mark.parametrize("make_msg", [_html_only, _alt])
+def test_update_draft_rich_with_explicit_body_replaces(make_msg):
+    c, svc = _client_with(make_msg())
+    c.update_draft("d1", body="replacement")
+    parsed = parse(D(svc).update.call_args.kwargs["body"]["message"]["raw"])
+    assert parsed.get_body(("plain",)).get_content().strip() == "replacement"
+
+
+def test_update_draft_with_attachment_refuses_even_with_body():
+    c, svc = _client_with(_with_attachment())
+    with pytest.raises(ValueError):
+        c.update_draft("d1", body="x")
+    D(svc).update.assert_not_called()
+
+
+def test_update_draft_comma_in_display_names():
+    c, svc = _client_with(_msg(to='"Doe, Jane" <j@x.com>, b@y.com', cc='"Roe, Rick" <r@x.com>'))
+    c.update_draft("d1", body="new")
+    parsed = parse(D(svc).update.call_args.kwargs["body"]["message"]["raw"])
+    assert parsed["To"] == "j@x.com, b@y.com" and parsed["Cc"] == "r@x.com"
