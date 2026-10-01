@@ -44,41 +44,36 @@ async def lifespan(app: FastAPI):
             # ponytail: PTB updates run sequentially; the pending-confirmation check in TelegramChannel assumes that, do not enable concurrent_updates
             try:
                 await tg.initialize()
-                try:
-                    await tg.start()
-                    await tg.updater.start_polling()
-                    try:
-                        yield
-                    finally:
-                        # Normal shutdown after serving
-                        try:
-                            if tg.updater.running:
-                                await tg.updater.stop()
-                        except Exception:
-                            log.exception("failed to stop updater")
-                        try:
-                            if tg.running:
-                                await tg.stop()
-                        except Exception:
-                            log.exception("failed to stop telegram app")
-                        try:
-                            await tg.shutdown()
-                        except Exception:
-                            log.exception("failed to shutdown telegram app")
-                except Exception:
-                    # If start or start_polling failed, still try to shut down
-                    try:
-                        await tg.shutdown()
-                    except Exception:
-                        log.exception("failed to shutdown telegram app after startup failure")
-                    raise
             except Exception:
-                # If initialize or subsequent startup failed, still try to shut down
+                # If initialize failed, still try to shut down
                 try:
                     await tg.shutdown()
                 except Exception:
                     log.exception("failed to shutdown telegram app after init failure")
                 raise
+            try:
+                await tg.start()
+                await tg.updater.start_polling()
+                try:
+                    yield
+                finally:
+                    pass  # Teardown happens in outer finally
+            finally:
+                # Ordered teardown for all paths through start/start_polling/yield
+                try:
+                    if tg.updater.running:
+                        await tg.updater.stop()
+                except Exception:
+                    log.exception("failed to stop updater")
+                try:
+                    if tg.running:
+                        await tg.stop()
+                except Exception:
+                    log.exception("failed to stop telegram app")
+                try:
+                    await tg.shutdown()
+                except Exception:
+                    log.exception("failed to shutdown telegram app")
     finally:
         pool.close()
 
