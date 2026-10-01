@@ -66,9 +66,10 @@ def test_revoked_refresh_requires_reauth(key, monkeypatch):
         auth.load_credentials(store, key)
 
 
-def test_scopes_are_calendar_and_tasks_only():
-    assert len(auth.SCOPES) == 2
-    assert all(s.endswith(("/calendar", "/tasks")) for s in auth.SCOPES)
+def test_scopes_are_calendar_tasks_and_gmail_only():
+    assert sorted(s.rsplit("/", 1)[1] for s in auth.SCOPES) == [
+        "calendar", "gmail.compose", "gmail.readonly", "tasks"]
+    assert all(s.startswith("https://www.googleapis.com/auth/") for s in auth.SCOPES)
 
 
 def test_rotated_key_requires_reauth(key, monkeypatch):

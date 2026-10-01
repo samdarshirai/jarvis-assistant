@@ -41,3 +41,8 @@ def test_for_domain_and_lc_tools():
     r.add(tool("t1", "tasks"))
     assert [t.name for t in r.for_domain("tasks")] == ["t1"]
     assert [t.name for t in r.lc_tools("calendar")] == ["c1"]
+
+
+def test_untrusted_defaults_false_and_can_be_set():
+    assert tool("a").untrusted is False
+    assert tool("b", untrusted=True).untrusted is True
