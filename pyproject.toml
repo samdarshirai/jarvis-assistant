@@ -1,0 +1,23 @@
+[project]
+name = "jarvis"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115", "uvicorn>=0.30",
+  "langgraph>=0.6", "langgraph-checkpoint-postgres>=2.0",
+  "langchain-core>=0.3", "langchain-openai>=0.3",
+  "python-telegram-bot>=21",
+  "psycopg[binary,pool]>=3.2",
+  "google-api-python-client>=2.140", "google-auth-oauthlib>=1.2",
+  "cryptography>=43", "pydantic>=2.8", "pydantic-settings>=2.4", "tzdata",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

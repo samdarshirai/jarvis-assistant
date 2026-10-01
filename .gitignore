@@ -1,2 +1,7 @@
 .idea/
 .superpowers/
+.venv/
+__pycache__/
+.env
+client_secret.json
+*.egg-info/
