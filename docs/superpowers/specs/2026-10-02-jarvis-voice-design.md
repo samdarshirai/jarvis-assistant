@@ -37,11 +37,12 @@ A new `voice` channel next to `telegram`, driving the same LangGraph graph and t
   - up: `hello`, `cancel` (barge-in), `confirm` (`yes`|`no` plus interrupt id, from a tap), `speak` (text to voice aloud, for push), `bye`;
   - down: `state` (`listening`|`thinking`|`speaking`), `transcript`, `confirm_card` (summary, interrupt id, `tap_only`, `after_untrusted`), `client_actions`, `error`.
 - **Turn:** Deepgram streaming STT with endpointing, then a text turn through `graph.ainvoke` exactly as Telegram does, then `turn_replies` split into sentences and fed to Cartesia streaming TTS. Audio starts on the first sentence. The voice turn uses the fast model tier for the router and each domain agent where a domain is not already pinned to the strong tier (Gmail stays strong); the voice-latency model choice is an open item.
-- **Barge-in:** a `cancel` frame, or speech detected during playback, stops TTS and cancels the in-flight graph task. A tool call that already ran is not rolled back; the audit log stays truthful.
+- **Barge-in:** a `cancel` frame, or speech detected during playback, stops TTS and abandons waiting for the turn. A graph step that is already running is never cancelled (not by barge-in, a new utterance, `cancel`, a dropped socket or a replacing session): it runs to completion, its tool calls are audited and its results are checkpointed; only its reply is not spoken. A tool call that already ran is not rolled back; the audit log stays truthful.
+- **Shared thread:** one lock, shared by the voice and Telegram channels, serialises graph steps on the thread: "read the pending confirmation, decide, `graph.ainvoke`" is one step in either channel, so two channels cannot resume the same confirmation or fork the checkpoint. Speech and messages are sent after the lock is released.
 - **Confirmations:** when the graph interrupts, the server speaks the `describe` summary (and the untrusted-email warning when `after_untrusted`) and sends a `confirm_card`.
   - `voice/confirm.py` accepts only an utterance that is, as a whole, one of yes, yeah, confirm, do it, no, cancel, stop (after trimming and lowercasing). Anything else is treated as a new request and refused with "Confirm or cancel the pending action first", as the Telegram channel does. The matcher is plain code, not the LLM.
   - If any pending action is `send_draft`, the card is `tap_only`: a spoken yes is ignored and Jarvis says to tap Confirm.
-  - Resume is `Command(resume=bool)` bound to the interrupt id; a stale or repeated id gets "Already handled".
+  - Resume is `Command(resume=bool)` bound to the interrupt id; a stale or repeated id gets "Already handled". A spoken yes or no only answers the card this session itself last presented; a pending card from Telegram or an earlier session is read aloud and shown first, and is never resumed by that utterance.
   - A failed resume re-offers the pending confirmation, as in sub-project 1.
 - **Phone tools** (domain `phone`, none confirm-gated, none untrusted): `set_alarm(hour, minute, label?)`, `set_timer(seconds, label?)`, `start_navigation(destination)`, `compose_message(app, contact, text)`. They do not call any service; they append a typed entry to `client_actions` (the state field already exists) and the tool result says it was queued for the phone. `compose_message` opens the message for the user to send; Jarvis never sends it. The server forwards `client_actions` as a frame after the turn. If no voice client is connected (a Telegram turn), the reply tells the user the phone action was not run. `parse_domains` and the router prompt gain `phone`; `test_wiring.py` pins the new tool names and tags.
 - **Push:** `voice/devices.py` stores the device's FCM token (sent in `hello`) and exposes `send_push(text)` using Firebase Admin. Tapping the notification opens a session that sends `speak`, and the server voices the text through Cartesia. The brief content and its scheduler are sub-project 5.
@@ -80,7 +81,7 @@ A new `voice` channel next to `telegram`, driving the same LangGraph graph and t
 - **Server (pytest):** fakes `FakeSTT` (scripted transcripts) and `FakeTTS` (tagged chunks); no network.
   - Auth: bad or missing token closes before audio is read; a second connection replaces the first.
   - Turn flow: audio, transcript, graph, ordered TTS chunks; first audio is sent before the full reply is finished; a scripted-provider test asserts no blocking step sits between the final transcript and the first TTS chunk.
-  - Barge-in: `cancel` stops TTS and cancels the graph task; an executed write stays audited.
+  - Barge-in: `cancel` stops TTS; a graph step cut off mid-tool (new utterance, `cancel`, socket drop, replacement) still completes, is audited once and checkpoints its real tool result.
   - Confirmations on the real graph and Postgres checkpointer: a bare "yes" resumes; "yes, and also delete everything" does not; a spoken yes on a `send_draft` card does nothing and says to tap; a stale interrupt id gets "Already handled"; an `after_untrusted` card is spoken with the warning; text during a pending confirmation is refused.
   - Phone tools: each produces a `client_actions` entry that is forwarded; with no voice client the reply says it was not run. `test_wiring.py` pins the new tools, their confirm tags and the `phone` domain.
   - Token CLI stores only the hash; revoke works. STT or TTS failure sends `error` and does not hang.
@@ -91,6 +92,7 @@ A new `voice` channel next to `telegram`, driving the same LangGraph graph and t
 ## Open items
 
 - Fast-tier model for voice, to be chosen by measuring scenarios 1, 2, 6 and 9.
+- The voice fast tier applies to every domain except Gmail (calendar and tasks included), pinned by tests; to be revisited after measuring scenarios 1, 2, 6 and 9.
 - Morning brief auto-play versus tap-to-play is decided in sub-project 5; this sub-project builds tap-to-play only.
 - Echo-cancellation quality on the Pixel speaker and mic can only be tuned on the device.
 - The 8 s silence timeout and the 60 s utterance cap are initial values.
