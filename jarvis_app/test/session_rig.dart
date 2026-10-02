@@ -1,13 +1,18 @@
+import 'dart:async';
+
 import 'package:jarvis_app/session.dart';
 
 import 'fakes.dart';
 
 class Rig {
-  final socket = FakeSocket(), mic = FakeMic(), player = FakePlayer(), phone = FakePhone(), speaker = FakeSpeaker();
+  FakeSocket socket = FakeSocket();
+  final mic = FakeMic(), player = FakePlayer(), phone = FakePhone(), speaker = FakeSpeaker();
   int ended = 0;
   bool failConnect = false;
+  Completer<void>? connectGate; // when set, connect() waits for it
   late final SessionController c = SessionController(
     connect: () async {
+      await connectGate?.future;
       if (failConnect) throw Exception('down');
       return socket;
     },

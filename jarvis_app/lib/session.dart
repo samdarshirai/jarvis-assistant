@@ -67,6 +67,8 @@ class SessionController extends ChangeNotifier {
   StreamSubscription<Uint8List>? _micSub;
   Timer? _timer;
   bool _ending = false;
+  int _gen = 0; // bumped by every teardown so an in-flight start() can tell it was cancelled
+  Future<void> _actionsChain = Future.value();
 
   void _set(Phase p) {
     phase = p;
@@ -75,29 +77,50 @@ class SessionController extends ChangeNotifier {
 
   Future<void> start({String? speakText}) async {
     if (phase != Phase.idle && phase != Phase.offline) return;
+    final gen = ++_gen;
     _ending = false;
     error = null;
     card = null;
     userText = jarvisText = '';
     _set(Phase.connecting);
+    VoiceSocket socket;
     try {
-      _socket = await connect();
+      socket = await connect();
     } catch (_) {
+      if (gen != _gen) return; // stopped while connecting
       _set(Phase.offline);
       await speaker.say('Jarvis is offline.');
       onEnded?.call();
       return;
     }
-    _events = _socket!.events.listen(_onEvent, onDone: _onClosed, onError: (_) => _onClosed());
-    String? token;
+    if (gen != _gen) {
+      await _quiet(socket.close); // stopped while connecting: never go live
+      return;
+    }
+    _socket = socket;
     try {
-      token = await fcmToken?.call();
-    } catch (_) {} // push is optional; never block a session on it
-    _socket!.sendJson('hello', {'fcm_token': ?token});
-    if (speakText != null) _socket!.sendJson('speak', {'text': speakText});
-    _micSub = (await mic.start()).listen(_onMic);
-    _set(Phase.listening);
-    _arm();
+      _events = socket.events.listen(_onEvent, onDone: _onClosed, onError: (_) => _onClosed());
+      String? token;
+      try {
+        token = await fcmToken?.call();
+      } catch (_) {} // push is optional; never block a session on it
+      if (gen != _gen) return; // teardown already closed the socket
+      socket.sendJson('hello', {'fcm_token': ?token});
+      if (speakText != null) socket.sendJson('speak', {'text': speakText});
+      final stream = await mic.start();
+      if (gen != _gen) {
+        await _quiet(mic.stop);
+        return;
+      }
+      _micSub = stream.listen(_onMic);
+      _set(Phase.listening);
+      _arm();
+    } catch (e) {
+      if (gen != _gen) return;
+      error = 'Could not start Jarvis: $e';
+      _ending = true;
+      await _teardown();
+    }
   }
 
   void _onMic(Uint8List pcm) {
@@ -133,7 +156,7 @@ class SessionController extends ChangeNotifier {
         card = c;
         notifyListeners();
       case ClientActionsEvent(:final actions):
-        _runActions(actions);
+        _actionsChain = _actionsChain.then((_) => _runActions(actions));
       case ErrorEvent(:final message):
         error = message;
         notifyListeners();
@@ -145,7 +168,12 @@ class SessionController extends ChangeNotifier {
 
   Future<void> _runActions(List<Map<String, dynamic>> actions) async {
     for (final a in actions) {
-      final err = await phone.run(a);
+      String? err;
+      try {
+        err = await phone.run(a);
+      } catch (e) {
+        err = 'Could not run ${a['type']}: $e';
+      }
       if (err != null) {
         error = err;
         notifyListeners();
@@ -172,10 +200,12 @@ class SessionController extends ChangeNotifier {
   void stop() => _end();
 
   Future<void> _end() async {
-    if (_ending || phase == Phase.idle) return;
+    if (_ending || phase == Phase.idle || phase == Phase.offline) return;
     _ending = true;
     _timer?.cancel();
-    _socket?.sendJson('bye');
+    try {
+      _socket?.sendJson('bye');
+    } catch (_) {} // a dead socket must not block teardown
     await _teardown();
   }
 
@@ -186,16 +216,29 @@ class SessionController extends ChangeNotifier {
     _teardown(closeSocket: false);
   }
 
+  Future<void> _quiet(FutureOr<void> Function() f) async {
+    try {
+      await f();
+    } catch (_) {} // cleanup is best effort; teardown must always reach idle
+  }
+
   Future<void> _teardown({bool closeSocket = true}) async {
+    _gen++;
     _timer?.cancel();
-    await _micSub?.cancel();
-    await mic.stop();
-    await player.flush();
-    await _events?.cancel();
-    if (closeSocket) await _socket?.close();
+    final socket = _socket;
     _socket = null;
-    card = null;
-    _set(Phase.idle);
-    onEnded?.call();
+    try {
+      await _quiet(() => _micSub?.cancel());
+      await _quiet(mic.stop);
+      await _quiet(player.flush);
+      await _quiet(() => _events?.cancel());
+      if (closeSocket && socket != null) {
+        await _quiet(() => socket.close().timeout(const Duration(seconds: 2)));
+      }
+    } finally {
+      card = null;
+      _set(Phase.idle);
+      onEnded?.call();
+    }
   }
 }

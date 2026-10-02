@@ -12,6 +12,7 @@ class FakeSocket implements VoiceSocket {
   final audio = <Uint8List>[];
   final sent = <(String, Map<String, dynamic>)>[];
   bool closed = false;
+  bool hangClose = false; // close() never completes (dead network)
   @override
   Stream<ServerEvent> get events => ctrl.stream;
   @override
@@ -21,6 +22,7 @@ class FakeSocket implements VoiceSocket {
   @override
   Future<void> close() async {
     closed = true;
+    if (hangClose) return Completer<void>().future;
     unawaited(ctrl.close()); // awaiting it would hang in fakeAsync (root-zone done future)
   }
 
@@ -30,10 +32,20 @@ class FakeSocket implements VoiceSocket {
 class FakeMic implements Mic {
   final ctrl = StreamController<Uint8List>(sync: true, onCancel: _zoned);
   bool stopped = false;
+  int started = 0;
+  Object? startError, stopError;
   @override
-  Future<Stream<Uint8List>> start() async => ctrl.stream;
+  Future<Stream<Uint8List>> start() async {
+    if (startError != null) throw startError!;
+    started++;
+    return ctrl.stream;
+  }
+
   @override
-  Future<void> stop() async => stopped = true;
+  Future<void> stop() async {
+    stopped = true;
+    if (stopError != null) throw stopError!;
+  }
 }
 
 class FakePlayer implements Player {
@@ -48,9 +60,11 @@ class FakePlayer implements Player {
 class FakePhone implements PhoneActions {
   final ran = <Map<String, dynamic>>[];
   final errors = <String, String>{}; // action type -> error to return
+  final throwOn = <String>{}; // action types whose run() throws
   @override
   Future<String?> run(Map<String, dynamic> action) async {
     ran.add(action);
+    if (throwOn.contains(action['type'])) throw StateError('boom');
     return errors[action['type']];
   }
 }

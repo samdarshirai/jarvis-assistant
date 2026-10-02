@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:fake_async/fake_async.dart';
@@ -202,6 +203,99 @@ void main() {
       a.flushMicrotasks();
       expect(r.speaker.said, ['Jarvis connection lost.']);
       expect((r.c.phase, r.ended), (Phase.idle, 1));
+    });
+  });
+
+  test('mic.start failing tears down to idle with an error, and start works again', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.mic.startError = Exception('permission denied');
+      r.c.start();
+      a.flushMicrotasks();
+      expect(r.c.phase, Phase.idle);
+      expect(r.c.error, isNotNull);
+      expect(r.socket.closed && r.mic.stopped, isTrue);
+      expect(r.ended, 1);
+      r.mic.startError = null;
+      r.socket = FakeSocket();
+      r.c.start();
+      a.flushMicrotasks();
+      expect(r.c.phase, Phase.listening);
+    });
+  });
+
+  test('stop while connecting is honoured once connect completes', () {
+    fakeAsync((a) {
+      final r = Rig()..connectGate = Completer<void>();
+      r.c.start();
+      a.flushMicrotasks();
+      expect(r.c.phase, Phase.connecting);
+      r.c.stop();
+      a.flushMicrotasks();
+      expect(r.c.phase, Phase.idle);
+      r.connectGate!.complete();
+      a.flushMicrotasks();
+      expect(r.c.phase, Phase.idle);
+      expect(r.socket.closed, isTrue);
+      expect(r.mic.started, 0);
+      expect(r.ended, 1);
+    });
+  });
+
+  test('a throwing action is shown and the next one still runs', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.phone.throwOn.add('set_alarm');
+      r.c.start();
+      a.flushMicrotasks();
+      r.socket.ctrl.add(const ClientActionsEvent([
+        {'type': 'set_alarm'},
+        {'type': 'open_app'},
+      ]));
+      r.socket.ctrl.add(const ClientActionsEvent([
+        {'type': 'open_app'},
+      ]));
+      a.flushMicrotasks();
+      expect(r.phone.ran.map((m) => m['type']), ['set_alarm', 'open_app', 'open_app']);
+      expect(r.c.error, contains('set_alarm'));
+    });
+  });
+
+  test('a socket close that never completes still ends idle within the timeout', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.c.start();
+      a.flushMicrotasks();
+      r.socket.hangClose = true;
+      r.c.stop();
+      a.flushMicrotasks();
+      a.elapse(const Duration(seconds: 3));
+      a.flushMicrotasks();
+      expect((r.c.phase, r.ended), (Phase.idle, 1));
+    });
+  });
+
+  test('mic.stop throwing still ends idle and calls onEnded', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.c.start();
+      a.flushMicrotasks();
+      r.mic.stopError = StateError('mic');
+      r.c.stop();
+      a.flushMicrotasks();
+      expect((r.c.phase, r.ended), (Phase.idle, 1));
+      expect(r.socket.closed, isTrue);
+    });
+  });
+
+  test('stop from offline does not call onEnded again', () {
+    fakeAsync((a) {
+      final r = Rig()..failConnect = true;
+      r.c.start();
+      a.flushMicrotasks();
+      r.c.stop();
+      a.flushMicrotasks();
+      expect(r.ended, 1);
     });
   });
 }
