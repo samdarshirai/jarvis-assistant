@@ -3,10 +3,15 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'config.dart';
 
 class ConfigStore {
+  const ConfigStore();
   static const _s = FlutterSecureStorage();
   Future<Config?> load() async {
-    final u = await _s.read(key: 'url'), t = await _s.read(key: 'token');
-    return (u == null || t == null) ? null : Config(u, t);
+    try {
+      final u = await _s.read(key: 'url'), t = await _s.read(key: 'token');
+      return (u == null || t == null) ? null : Config(u, t);
+    } catch (_) {
+      return null; // unreadable keystore (backup restore etc.): treat as not paired
+    }
   }
 
   Future<void> save(Config c) async {

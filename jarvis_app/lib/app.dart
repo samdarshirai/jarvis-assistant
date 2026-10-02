@@ -15,15 +15,16 @@ class AppHost {
 }
 
 class JarvisApp extends StatefulWidget {
-  const JarvisApp({super.key, this.onSessionEnded, this.fcmToken});
+  const JarvisApp({super.key, this.onSessionEnded, this.fcmToken, this.store = const ConfigStore()});
   final VoidCallback? onSessionEnded;
   final Future<String?> Function()? fcmToken;
+  final ConfigStore store;
   @override
   State<JarvisApp> createState() => _JarvisAppState();
 }
 
 class _JarvisAppState extends State<JarvisApp> {
-  final _store = ConfigStore();
+  ConfigStore get _store => widget.store;
   Config? _config;
   bool _loaded = false;
   SessionController? _controller;
@@ -31,10 +32,20 @@ class _JarvisAppState extends State<JarvisApp> {
   @override
   void initState() {
     super.initState();
-    _store.load().then((c) => setState(() {
-          _loaded = true;
-          _bind(c);
-        }));
+    _store.load().catchError((Object _) => null).then((c) {
+      if (!mounted) return;
+      setState(() {
+        _loaded = true;
+        _bind(c);
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    if (AppHost.controller == _controller) AppHost.controller = null;
+    super.dispose();
   }
 
   void _bind(Config? c) {
@@ -62,7 +73,10 @@ class _JarvisAppState extends State<JarvisApp> {
             ? const Scaffold(body: Center(child: CircularProgressIndicator()))
             : _config == null
                 ? PairingScreen(onSaved: (c) async {
-                    await _store.save(c);
+                    try {
+                      await _store.save(c);
+                    } catch (_) {} // not persisted: works this run, re-pair next launch
+                    if (!mounted) return;
                     setState(() => _bind(c));
                   })
                 : SessionScreen(controller: _controller!),
