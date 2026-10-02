@@ -1,6 +1,7 @@
 import ipaddress
 import re
 import socket
+import time
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit
 
@@ -87,7 +88,10 @@ def html_text(html: str) -> str:
     return re.sub(r"\s*\n\s*", "\n", text).strip()
 
 
-def _check_url(url: str, resolve) -> None:
+def _check_url(url: str, resolve) -> tuple:
+    """Validate url; return (parts, ip) where ip is a checked global address to pin the connection to."""
+    if any(ord(c) <= 32 or ord(c) == 127 for c in url):
+        raise FetchError("That link isn't valid.")
     try:
         parts = urlsplit(url)
         host, port = parts.hostname, parts.port
@@ -99,31 +103,60 @@ def _check_url(url: str, resolve) -> None:
         raise FetchError("That link has no host.")
     try:
         infos = resolve(host, port or (443 if parts.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        ips = []
+        for info in infos:
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
+                ip = ip.ipv4_mapped
+            ips.append(ip)
     except (socket.gaierror, UnicodeError):
         raise FetchError("Could not find that site.") from None
-    for info in infos:
-        ip = ipaddress.ip_address(info[4][0].split("%")[0])
-        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-            ip = ip.ipv4_mapped
+    except ValueError:
+        raise FetchError("That link isn't valid.") from None
+    if not ips:
+        raise FetchError("Could not find that site.")
+    for ip in ips:
         if not ip.is_global or ip.is_multicast:
             raise FetchError("That address is private, so it won't be fetched.")
-    # ponytail: DNS is resolved here and again at connect time, so a rebinding host could slip through; pin the
-    # resolved IP in a custom httpx transport if the owner ever lets Jarvis fetch pages unattended.
+    return parts, ips[0]
 
 
-def fetch_page(url: str, *, client: httpx.Client | None = None, resolve=socket.getaddrinfo) -> dict:
+def _pin(parts, ip) -> tuple:
+    """Rewrite the URL to connect to the checked IP; keep the real host in Host header and SNI."""
+    ip_s = f"[{ip}]" if ip.version == 6 else str(ip)
+    hostport = parts.netloc.rpartition("@")[2]  # drops any userinfo
+    port = parts.port
+    netloc = ip_s + (f":{port}" if port else "")
+    pinned = parts._replace(netloc=netloc).geturl()
+    ext = {}
+    if parts.scheme == "https":
+        try:
+            ipaddress.ip_address(parts.hostname)
+        except ValueError:
+            ext["sni_hostname"] = parts.hostname
+    return pinned, hostport, ext
+
+
+def fetch_page(url: str, *, client: httpx.Client | None = None, resolve=socket.getaddrinfo,
+               clock=time.monotonic) -> dict:
     own = client is None
     client = client or httpx.Client(timeout=TIMEOUT, follow_redirects=False)
+    deadline = clock() + TIMEOUT
+    slow = FetchError("That page took too long.")
     try:
         for _ in range(MAX_REDIRECTS + 1):
-            _check_url(url, resolve)
+            if clock() > deadline:
+                raise slow
+            parts, ip = _check_url(url, resolve)
+            pinned, hostport, ext = _pin(parts, ip)
             try:
-                with client.stream("GET", url, headers={"User-Agent": "Jarvis/1.0"}) as r:
+                with client.stream("GET", pinned, headers={"User-Agent": "Jarvis/1.0", "Host": hostport},
+                                   extensions=ext, follow_redirects=False) as r:
                     if r.is_redirect:
                         target = r.headers.get("location")
                         if not target:
                             raise FetchError("The page redirected nowhere.")
-                        url = urljoin(str(r.url), target)
+                        url = urljoin(url, target)
                         continue
                     if r.status_code != 200:
                         raise FetchError(f"The page returned HTTP {r.status_code}.")
@@ -135,11 +168,13 @@ def fetch_page(url: str, *, client: httpx.Client | None = None, resolve=socket.g
                         raw += chunk
                         if len(raw) >= MAX_BYTES:
                             break
+                        if clock() > deadline:
+                            raise slow
                     try:
                         body = bytes(raw[:MAX_BYTES]).decode(r.charset_encoding or "utf-8", errors="replace")
                     except LookupError:
                         body = bytes(raw[:MAX_BYTES]).decode("utf-8", errors="replace")
-            except httpx.HTTPError:
+            except (httpx.HTTPError, httpx.InvalidURL, ValueError):
                 raise FetchError("Couldn't load that page.") from None
             text = html_text(body) if ctype != "text/plain" else body.strip()
             return {"url": url, "text": text[:MAX_CHARS], "truncated": len(text) > MAX_CHARS}

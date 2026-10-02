@@ -1,3 +1,4 @@
+import ipaddress
 import socket
 
 import httpx
@@ -120,7 +121,7 @@ def test_fetch_refuses_redirect_to_private_host_without_requesting_it():
 
     with pytest.raises(FetchError, match="private"):
         fetch_page("http://public.test/", client=client(handler), resolve=resolve)
-    assert hits == ["http://public.test/"]
+    assert hits == ["http://93.184.216.34/"]  # pinned to the checked IP
 
 
 def test_fetch_follows_a_safe_redirect_and_relative_location():
@@ -176,3 +177,100 @@ def test_fetch_network_errors_are_short_messages():
 
     with pytest.raises(FetchError, match="load"):
         fetch_page("http://public.test/", client=client(handler), resolve=resolve)
+
+
+# --- pinning, deadline, malformed input, redirect policy ---
+def test_fetch_pins_connection_to_the_checked_ip_and_keeps_host_header():
+    seen, calls = [], []
+
+    def flaky(host, port, type=0):  # rebinding: public on first lookup, loopback afterwards
+        calls.append(host)
+        ip = "93.184.216.34" if len(calls) == 1 else "127.0.0.1"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ip, port))]
+
+    def handler(request):
+        seen.append((request.url.host, request.headers["host"]))
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"ok")
+
+    fetch_page("http://rebind.test:8080/x", client=client(handler), resolve=flaky)
+    assert seen == [("93.184.216.34", "rebind.test:8080")] and len(calls) == 1
+
+
+def test_fetch_https_sends_original_hostname_as_sni():
+    seen = []
+
+    def handler(request):
+        seen.append(request.extensions.get("sni_hostname"))
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"ok")
+
+    fetch_page("https://public.test/", client=client(handler), resolve=resolve)
+    assert seen == ["public.test"]
+
+
+def test_fetch_repins_on_each_redirect_hop():
+    ips = {"public.test": "93.184.216.34", "other.test": "8.8.8.8"}
+    seen = []
+
+    def res(host, port, type=0):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (ips[host], port))]
+
+    def handler(request):
+        seen.append((request.url.host, request.headers["host"]))
+        if request.headers["host"] == "public.test":
+            return httpx.Response(302, headers={"location": "http://other.test/z"})
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"ok")
+
+    fetch_page("http://public.test/", client=client(handler), resolve=res)
+    assert seen == [("93.184.216.34", "public.test"), ("8.8.8.8", "other.test")]
+
+
+def test_fetch_has_an_overall_deadline():
+    now = [0.0]
+
+    def clock():
+        return now[0]
+
+    def stream():
+        for _ in range(100):
+            now[0] += 3  # slow trickle
+            yield b"a"
+
+    def handler(request):
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=stream())
+
+    with pytest.raises(FetchError, match="too long"):
+        fetch_page("http://public.test/", client=client(handler), resolve=resolve, clock=clock)
+
+
+@pytest.mark.parametrize("url", ["http://public.test/a\tb", " http://public.test/",
+                                 "http://public.test/a b"])
+def test_fetch_malformed_urls_raise_fetch_error(url):
+    with pytest.raises(FetchError):
+        fetch_page(url, client=client(page()), resolve=resolve)
+
+
+def test_fetch_ignores_callers_follow_redirects_setting():
+    hits = []
+
+    def handler(request):
+        hits.append(request.headers["host"])
+        return httpx.Response(302, headers={"location": "http://internal.test/admin"})
+
+    c = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    with pytest.raises(FetchError, match="private"):
+        fetch_page("http://public.test/", client=c, resolve=resolve)
+    assert hits == ["public.test"]
+
+
+def test_fetch_octal_style_ip_never_reaches_a_private_address():
+    hosts = []
+
+    def handler(request):
+        hosts.append(request.url.host)
+        return httpx.Response(200, headers={"content-type": "text/plain"}, content=b"ok")
+
+    try:
+        fetch_page("http://0177.0.0.1/", client=client(handler), resolve=resolve)
+    except FetchError:
+        pass  # refused (private or unresolvable) is fine; no other exception type may escape
+    assert all(not ipaddress.ip_address(h).is_private for h in hosts)
