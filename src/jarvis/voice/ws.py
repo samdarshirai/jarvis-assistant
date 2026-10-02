@@ -38,6 +38,7 @@ class VoiceSession:
         self.state = "listening"
         self.turn: asyncio.Task | None = None
         self.utterance_bytes = 0
+        self.stt_failed = False  # the failure path can be reached from the input loop and the events task; run it once
         self.offered: str | None = None  # id of the last card this session presented; only it may be answered aloud
 
     # --- output ---
@@ -217,6 +218,9 @@ class VoiceSession:
             await self._stt_failed()
 
     async def _stt_failed(self) -> None:
+        if self.stt_failed:
+            return
+        self.stt_failed = True
         await self.send("error", message="Speech recognition is unavailable.")
         with contextlib.suppress(Exception):
             await self._say([STT_DOWN_TEXT])
@@ -233,7 +237,12 @@ class VoiceSession:
                 await self.send("error", message="Utterance too long.")
                 await self.close(P.CLOSE_TOO_LONG)
                 return False
-        await self.stt.send(data)
+        try:
+            await self.stt.send(data)
+        except Exception:  # the upstream STT socket died: same path as a failed event stream
+            log.exception("stt send failed")
+            await self._stt_failed()
+            return False
         return True
 
     async def _control(self, text: str) -> bool:

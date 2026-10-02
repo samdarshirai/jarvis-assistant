@@ -295,3 +295,32 @@ def test_voice_route_is_closed_until_the_lifespan_has_built_the_service():
         with TestClient(app).websocket_connect("/voice"):
             pass
     assert e.value.code == 1013
+
+
+@pytest.mark.asyncio
+async def test_lifespan_refuses_voice_during_teardown_and_drains_abandoned_steps(mock_lifespan_deps):
+    import asyncio
+
+    monkeypatch = mock_lifespan_deps["monkeypatch"]
+    fake_tg_app = AsyncMock()
+    fake_tg_app.updater = AsyncMock()
+    fake_tg_app.updater.running = True
+    fake_tg_app.running = True
+    monkeypatch.setattr("jarvis.main.build_graph", lambda *a, **k: MagicMock())
+    channel = MagicMock()
+    channel.build = MagicMock(return_value=fake_tg_app)
+    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *a, **kw: channel)
+
+    app = FastAPI()
+    done = []
+
+    async def abandoned_step():  # a graph step a cancelled voice turn left running (tool in flight)
+        await asyncio.sleep(0.2)
+        done.append("audited")
+
+    async with lifespan(app):
+        assert app.state.voice is not None
+        t = asyncio.create_task(abandoned_step())
+        app.state.voice.steps.add(t)
+    assert app.state.voice is None  # new connections get 1013 while the app shuts down
+    assert done == ["audited"]  # teardown waited for the step before the saver and pool closed

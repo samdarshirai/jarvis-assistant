@@ -39,3 +39,8 @@ def test_no_variants(text):
                                   "no wait", "not now", "maybe", "okay", "send it", "yes, send it to bob"])
 def test_anything_else_is_not_a_decision(text):
     assert match_confirmation(text) is None
+
+
+def test_oversized_and_deeply_nested_text_frames_are_not_frames():
+    assert P.parse('{"type": "speak", "text": "' + "x" * P.MAX_TEXT_FRAME + '"}') is None
+    assert P.parse("[" * 60000 + '{"type": "x"}') is None  # RecursionError must not escape

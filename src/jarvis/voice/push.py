@@ -6,6 +6,7 @@ import httpx
 from jarvis.config import get_settings
 from jarvis.db import init_schema, make_pool
 from jarvis.voice.devices import Devices
+from jarvis.voice.protocol import MAX_SPEAK_CHARS
 
 log = logging.getLogger(__name__)
 FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
@@ -39,6 +40,8 @@ def main() -> None:
     p = argparse.ArgumentParser(prog="python -m jarvis.voice.push", description="Send a tap-to-play push to the paired phone.")
     p.add_argument("text")
     text = p.parse_args().text
+    if len(text) > MAX_SPEAK_CHARS:  # the app asks the server to speak it on tap, and `speak` refuses longer text
+        raise SystemExit(f"Text is {len(text)} characters; the limit is {MAX_SPEAK_CHARS}.")
     s = get_settings()
     if not s.fcm_credentials_path:
         raise SystemExit("Set JARVIS_FCM_CREDENTIALS_PATH first.")

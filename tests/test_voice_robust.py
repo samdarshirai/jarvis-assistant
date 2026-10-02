@@ -173,3 +173,38 @@ def test_tts_failure_keeps_the_transcript_reports_error_and_stays_open():
         assert any(x["type"] == "error" for x in t) and audio(seen) == []
         ws.send_json({"type": "speak", "text": "Again."})  # session still usable
         until(ws, "error")
+
+
+def test_stt_send_failure_reports_once_speaks_fallback_and_closes():
+    class DeadSend(FakeSTT):
+        async def open(self):
+            s = await super().open()
+
+            async def boom(pcm):
+                raise RuntimeError("stt socket died")
+
+            s.send = boom
+            return s
+
+    h = build(chat_scripts("Hi."), stt=DeadSend())
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+        ping(ws)
+        seen = []
+        with pytest.raises(WebSocketDisconnect) as e:
+            for _ in range(20):
+                seen.append(read(ws))
+        assert e.value.code == 1011
+        errors = [t for t in texts(seen) if t["type"] == "error"]
+        assert len(errors) == 1 and h.tts.spoken == ["I can't hear you right now."]  # failure path ran once
+
+
+def test_oversized_text_frame_is_a_bad_frame_and_the_session_survives():
+    h = build(chat_scripts("Hi."))
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+        ws.send_text('{"type": "speak", "text": "' + "x" * P.MAX_TEXT_FRAME + '"}')
+        assert until(ws, "error")
+        ws.send_json({"type": "speak", "text": "Still alive."})
+        until_state(ws, "listening")
+        assert h.tts.spoken == ["Still alive."]

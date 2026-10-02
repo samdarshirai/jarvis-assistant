@@ -25,3 +25,14 @@ def test_posts_one_message_per_token_with_text_in_data_and_counts_successes():
 def test_no_tokens_sends_nothing():
     client = httpx.Client(transport=httpx.MockTransport(lambda r: (_ for _ in ()).throw(AssertionError("no call"))))
     assert send_push("p", "AT", [], "x", client) == 0
+
+
+def test_cli_refuses_text_the_speak_frame_would_reject(monkeypatch):
+    import pytest
+
+    from jarvis.voice import push
+    from jarvis.voice.protocol import MAX_SPEAK_CHARS
+
+    monkeypatch.setattr("sys.argv", ["push", "x" * (MAX_SPEAK_CHARS + 1)])
+    with pytest.raises(SystemExit, match="limit is 2000"):
+        push.main()

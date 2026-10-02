@@ -84,6 +84,7 @@ async def lifespan(app: FastAPI):
                     pass  # Teardown happens in outer finally
             finally:
                 # Ordered teardown for all paths through start/start_polling/yield
+                app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
                 try:
                     if tg.updater.running:
                         await tg.updater.stop()
@@ -98,6 +99,14 @@ async def lifespan(app: FastAPI):
                     await tg.shutdown()
                 except Exception:
                     log.exception("failed to shutdown telegram app")
+                # A graph step an abandoned voice turn left running must finish (audit row + checkpoint) before the
+                # saver and pool close. asyncio.wait does not cancel on timeout, unlike wait_for(gather(...)).
+                try:
+                    pending = set(voice.steps)
+                    if pending:
+                        await asyncio.wait(pending, timeout=30)
+                except Exception:
+                    log.exception("voice steps did not drain")
     finally:
         pool.close()
 
