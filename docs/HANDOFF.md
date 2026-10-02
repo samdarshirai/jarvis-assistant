@@ -38,7 +38,7 @@ Python 3.11+ (host 3.14), FastAPI, LangGraph (+ Postgres checkpointer), langchai
 - Config in `.env` (see `.env.example`: OpenRouter key and model lists, Telegram token/owner chat id, Fernet key, Deepgram/Cartesia/FCM settings). Google OAuth: `client_secret.json` + `python -m jarvis.google.auth` (scopes: calendar, tasks, gmail.readonly, gmail.compose; re-consent once after the Gmail sub-project).
 - Voice tools: `python -m jarvis.voice.token` (create/`--revoke` a device token), `python -m jarvis.voice.client URL TOKEN file.wav` (server test client), `python -m jarvis.voice.push "text"` (tap-to-play push).
 - Gitignored user artefacts the app needs: `jarvis_app/android/app/google-services.json` (Firebase; the google-services plugin is applied only if it exists).
-- Wake word: Porcupine was replaced by sherpa-onnx keyword spotting (branch `feat/sherpa-wake-word`, not yet merged to `main`). Model and "Hey Jarvis" keyword are bundled in `jarvis_app/assets/kws/`, no key. `keywordsThreshold` in `wake.dart` is untuned on a real device; speech right after the wake word may be clipped (no ring buffer).
+- Wake word: Porcupine was replaced by sherpa-onnx keyword spotting (merged to `main`). Model and "Hey Jarvis" keyword are bundled in `jarvis_app/assets/kws/`, no key. `keywordsThreshold` in `wake.dart` is untuned on a real device; speech right after the wake word may be clipped (no ring buffer).
 - No git remote; everything is on local `main`. Commits end with `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>` and a `Claude-Session:` trailer. Some early commits carry a "Claude Haiku 4.5" trailer (cosmetic).
 
 ## How the work has been run (workflow to repeat)
