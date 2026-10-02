@@ -29,6 +29,6 @@ def pool():
     p = make_pool(url)
     init_schema(p)
     with p.connection() as c:
-        c.execute("TRUNCATE audit_log, oauth_tokens, devices, memories")
+        c.execute("TRUNCATE audit_log, oauth_tokens, devices, memories, notes")
     yield p
     p.close()
