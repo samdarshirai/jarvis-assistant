@@ -568,6 +568,7 @@ def test_keyword_domain_only_when_exactly_one_domain_matches():
     assert keyword_domain("set an alarm for 6") == ["phone"]
     assert keyword_domain("add that booking email to my calendar") is None  # two domains: router decides
     assert keyword_domain("yes, do it") is None
+    assert keyword_domain("What does my day look like?") == ["calendar"]
 
 
 async def test_clean_confirmed_write_with_done_skips_the_wrap_up_llm_call():

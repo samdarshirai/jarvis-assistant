@@ -21,7 +21,10 @@ log = logging.getLogger(__name__)
 ROUTER_PROMPT = (
     "Classify the user's latest request. Reply with ONLY a comma-separated list, in the order the work "
     "must happen, chosen from: calendar, tasks, gmail, phone, chat. Use 'chat' alone when no calendar, task, "
-    "email or phone work is needed. Examples: 'add that booking email to my calendar' -> gmail, calendar; "
+    "email or phone work is needed. calendar = anything about the user's schedule, day, agenda, plans, "
+    "availability or what is on or coming up; tasks = to-dos and deadlines; gmail = mail; phone = alarms, "
+    "timers, navigation, texting. Examples: 'what does my day look like' -> calendar; 'am I free Friday' -> "
+    "calendar; 'what do I have to do' -> tasks; 'add that booking email to my calendar' -> gmail, calendar; "
     "'set an alarm for 6 and put gym at 7 in my calendar' -> calendar, phone."
 )
 HISTORY = 40
@@ -37,7 +40,7 @@ class State(TypedDict):
 
 
 KEYWORDS = {
-    "calendar": r"calendar|event|meeting|appointment|free slot",
+    "calendar": r"calendar|event|meeting|appointment|free slot|schedule|agenda|my day|am i free",
     "tasks": r"\btasks?\b|to-?do",
     "gmail": r"e-?mail|inbox|gmail|draft",
     "phone": r"alarm|timer|navigat|directions",
