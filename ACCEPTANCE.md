@@ -63,4 +63,4 @@ Server-only check without the phone: `python -m jarvis.voice.client wss://<host>
 | 32 | A day of normal use with the service running | Fewer than 1 false wake per day; battery cost under 5% (check Settings > Battery) |
 | 33 | Time ten simple commands from end of speech to first audio | p50 under 1.5 s and p95 under 2.5 s. If p50 misses, the next step is streaming the final agent tokens into TTS (today the reply is sent to TTS after the graph turn finishes) |
 | 34 | `SELECT name, confirmation FROM audit_log ORDER BY id DESC LIMIT 10;` after row 21 and 24 | Writes show `approved` or `cancelled`; no transcript text is stored in the audit log |
-| 35 | Open the app on a second phone/paired token, then on the first | The first session is closed (replaced); only one session is live at a time |
+| 35 | Open a second session (second client with the same device token, or a second paired device) while the first is connected | The first session is closed (replaced); only one session is live at a time |
