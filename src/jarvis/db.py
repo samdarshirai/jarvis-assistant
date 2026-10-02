@@ -1,3 +1,5 @@
+import re
+
 from psycopg_pool import ConnectionPool
 
 SCHEMA = """
@@ -26,6 +28,11 @@ CREATE TABLE IF NOT EXISTS devices (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS memories (
+  id SERIAL PRIMARY KEY,
+  text TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -36,3 +43,8 @@ def make_pool(url: str) -> ConnectionPool:
 def init_schema(pool: ConnectionPool) -> None:
     with pool.connection() as conn:
         conn.execute(SCHEMA)
+
+
+def like_pattern(q: str) -> str:
+    """Contains-match pattern for ILIKE with %, _ and backslash taken literally."""
+    return "%" + re.sub(r"([\\%_])", r"\\\1", q) + "%"
