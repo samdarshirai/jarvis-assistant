@@ -10,3 +10,5 @@ jarvis_app/build/
 jarvis_app/.dart_tool/
 jarvis_app/android/app/google-services.json
 jarvis_app/android/local.properties
+
+jarvis_app/assets/*.ppn
