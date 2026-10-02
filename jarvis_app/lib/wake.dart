@@ -1,13 +1,17 @@
 import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:porcupine_flutter/porcupine_manager.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:record/record.dart';
+import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import 'app.dart';
 
-const picovoiceKey = String.fromEnvironment('PICOVOICE_ACCESS_KEY');
-const keywordAsset = 'assets/hey_jarvis_android.ppn'; // trained in the Picovoice console, see ACCEPTANCE.md
+const _kwsFiles = ['encoder.onnx', 'decoder.onnx', 'joiner.onnx', 'tokens.txt', 'keywords.txt'];
 const _wakeKey = 'wake';
 
 bool wakeIsFresh(int? savedMillis, DateTime now) {
@@ -19,18 +23,60 @@ bool wakeIsFresh(int? savedMillis, DateTime now) {
 @pragma('vm:entry-point')
 void startCallback() => FlutterForegroundTask.setTaskHandler(WakeTaskHandler());
 
-/// Runs Porcupine in the foreground service so the wake word works with the screen off (FR-14).
+/// Runs sherpa-onnx keyword spotting in the foreground service so the wake word works with the screen off (FR-14).
 class WakeTaskHandler extends TaskHandler {
-  PorcupineManager? _pm;
+  final _rec = AudioRecorder();
+  sherpa.KeywordSpotter? _kws;
+  sherpa.OnlineStream? _stream;
+  StreamSubscription<Uint8List>? _sub;
   bool _listening = false;
 
-  /// Never throws: a missing keyword file or AccessKey must not leave an unhandled error and a notification that lies.
+  /// The native library reads model files from disk, so copy the bundled assets out once.
+  Future<sherpa.KeywordSpotter> _spotter() async {
+    final dir = Directory('${(await getApplicationSupportDirectory()).path}/kws')..createSync(recursive: true);
+    for (final f in _kwsFiles) {
+      final out = File('${dir.path}/$f');
+      if (!out.existsSync()) await out.writeAsBytes((await rootBundle.load('assets/kws/$f')).buffer.asUint8List());
+    }
+    sherpa.initBindings();
+    return sherpa.KeywordSpotter(sherpa.KeywordSpotterConfig(
+      model: sherpa.OnlineModelConfig(
+        transducer: sherpa.OnlineTransducerModelConfig(
+            encoder: '${dir.path}/encoder.onnx', decoder: '${dir.path}/decoder.onnx', joiner: '${dir.path}/joiner.onnx'),
+        tokens: '${dir.path}/tokens.txt',
+        debug: false,
+      ),
+      keywordsFile: '${dir.path}/keywords.txt',
+      keywordsThreshold: 0.25, // lower = fewer false accepts, higher = fewer misses; tune on the phone
+      keywordsScore: 1.0,
+    ));
+  }
+
+  /// Never throws: a missing model file or mic permission must not leave an unhandled error and a notification that lies.
   Future<void> _listen() async {
-    if (_listening) return; // resume can arrive while Porcupine already runs (e.g. after a manual Talk session)
+    if (_listening) return; // resume can arrive while the spotter already runs (e.g. after a manual Talk session)
     try {
-      _pm ??= await PorcupineManager.fromKeywordPaths(picovoiceKey, [keywordAsset], _onWake, sensitivities: [0.6]);
-      await _pm!.start();
+      final kws = _kws ??= await _spotter();
+      final stream = _stream = kws.createStream();
+      final pcm = await _rec.startStream(const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1));
       _listening = true;
+      _sub = pcm.listen((bytes) {
+        if (!_listening) return;
+        final s16 = bytes.buffer.asInt16List(bytes.offsetInBytes, bytes.lengthInBytes ~/ 2);
+        final f32 = Float32List(s16.length);
+        for (var i = 0; i < s16.length; i++) {
+          f32[i] = s16[i] / 32768.0;
+        }
+        stream.acceptWaveform(samples: f32, sampleRate: 16000);
+        while (kws.isReady(stream)) {
+          kws.decode(stream);
+          if (kws.getResult(stream).keyword.isNotEmpty) {
+            kws.reset(stream);
+            _onWake();
+            return;
+          }
+        }
+      });
     } catch (e) {
       await FlutterForegroundTask.updateService(
           notificationText: 'Wake word unavailable - use the Talk button in the app ($e)');
@@ -41,11 +87,14 @@ class WakeTaskHandler extends TaskHandler {
     if (!_listening) return;
     _listening = false;
     try {
-      await _pm?.stop(); // any session (wake, Talk, assistant, push) takes the microphone
+      await _sub?.cancel();
+      await _rec.stop(); // any session (wake, Talk, assistant, push) takes the microphone
     } catch (_) {}
+    _stream?.free();
+    _stream = null;
   }
 
-  Future<void> _onWake(int index) async {
+  Future<void> _onWake() async {
     await _pause();
     await FlutterForegroundTask.saveData(key: _wakeKey, value: DateTime.now().millisecondsSinceEpoch);
     FlutterForegroundTask.sendDataToMain('wake');
@@ -70,7 +119,11 @@ class WakeTaskHandler extends TaskHandler {
   @override
   void onRepeatEvent(DateTime timestamp) {}
   @override
-  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async => _pm?.delete();
+  Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
+    await _pause();
+    _kws?.free();
+    await _rec.dispose();
+  }
   @override
   void onReceiveData(Object data) {
     if (data == 'resume') _listen();

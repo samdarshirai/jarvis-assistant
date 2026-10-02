@@ -16,7 +16,7 @@ Future<void> main() async {
     debugPrint('push unavailable: $e');
   }
   runApp(JarvisApp(onSessionEnded: WakeService.resume, onSessionStarted: WakeService.pause, fcmToken: PushBridge.token));
-  // The manual Talk button must work even without a wake word (missing keyword file / AccessKey), so never crash startup.
+  // The manual Talk button must work even without a wake word (missing model file or mic permission), so never crash startup.
   try {
     await WakeService.ensureRunning(); // also covers "service not running" after a reboot once the user opens the app
   } catch (e) {

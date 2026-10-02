@@ -3595,6 +3595,8 @@ and on the `MainActivity` element add `android:showWhenLocked="true" android:tur
 
 ### Task 15: Wake word foreground service, screen wake, boot reminder
 
+> **Superseded:** the Porcupine code, `PICOVOICE_ACCESS_KEY` and `.ppn` asset below were replaced by sherpa-onnx keyword spotting (`assets/kws/`, no key). See `jarvis_app/lib/wake.dart` and the voice design spec. The steps are kept as history.
+
 **Files:**
 - Create: `jarvis_app/lib/wake.dart`, `jarvis_app/android/app/src/main/kotlin/com/jarvis/jarvis_app/BootReceiver.kt`, `jarvis_app/assets/README.md`
 - Modify: `jarvis_app/lib/main.dart`, `jarvis_app/lib/app.dart`, `jarvis_app/pubspec.yaml` (assets), `jarvis_app/android/app/src/main/AndroidManifest.xml`

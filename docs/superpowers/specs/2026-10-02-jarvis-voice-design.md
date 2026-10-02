@@ -50,9 +50,9 @@ A new `voice` channel next to `telegram`, driving the same LangGraph graph and t
 
 ### App (`jarvis_app/`, Flutter, Android only)
 
-- **Packages:** `porcupine_flutter` (wake word), `web_socket_channel`, `record` (PCM capture), a PCM player, `firebase_messaging`, `flutter_secure_storage`.
+- **Packages:** `sherpa_onnx` (wake word), `web_socket_channel`, `record` (PCM capture), a PCM player, `firebase_messaging`, `flutter_secure_storage`.
 - **Pairing:** first launch takes the backend URL and a device token, pasted or scanned. The token is created by `python -m jarvis.voice.token`, which prints it once and stores only its hash (`--revoke` deletes a device). The token and the Picovoice AccessKey are the only secrets in the app; no API keys.
-- **Wake word (FR-14):** Porcupine runs in an Android foreground service (type `microphone`, persistent notification). It needs a Picovoice AccessKey and a custom "Hey Jarvis" keyword file trained in the Picovoice console; both are created by the user and the keyword file ships as an app asset.
+- **Wake word (FR-14):** sherpa-onnx keyword spotting (Apache 2.0, on device, no account or key) runs in an Android foreground service (type `microphone`, persistent notification), fed 16 kHz PCM by `record`. A small int8 zipformer keyword model and the "Hey Jarvis" keyword (BPE tokens in `keywords.txt`) ship as app assets in `assets/kws/` and are copied to app storage on first start. Picovoice Porcupine was replaced because it is no longer available to individual users. The detection threshold (`keywordsThreshold`) is tuned on the phone.
 - **On wake (FR-15):** the service releases the mic to a session, turns the screen on through a full-screen-intent activity showing the listening overlay (falling back to a heads-up notification if that permission is missing), opens `/voice` and streams mic audio. Porcupine resumes when the session ends.
 - **Session UI:** state, live transcript, and a Confirm/Cancel card when a `confirm_card` arrives; a tap sends `confirm`. Spoken yes/no is matched on the server only.
 - **Barge-in (FR-16):** capture continues during playback with Android's acoustic echo canceller on the stream; detected speech sends `cancel` and the player flushes at once.
