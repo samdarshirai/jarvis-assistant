@@ -11,6 +11,8 @@ import 'session_rig.dart';
 
 const card = ConfirmCardEvent(interruptId: 'i1', summary: 'Create Gym', tapOnly: false, afterUntrusted: false);
 
+const ack = 'What can I do for you?';
+
 void main() {
   test('start sends hello with the fcm token, streams mic audio, and listens', () {
     fakeAsync((a) {
@@ -35,13 +37,27 @@ void main() {
     });
   });
 
+  test('start says the ack before the mic opens; a pushed brief gets none', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.c.start();
+      a.flushMicrotasks();
+      expect(r.speaker.said, [ack]);
+      expect(r.c.phase, Phase.listening);
+      final p = Rig();
+      p.c.start(speakText: 'brief');
+      a.flushMicrotasks();
+      expect(p.speaker.said, isEmpty);
+    });
+  });
+
   test('connect failure is offline: says so, ends, never listens', () {
     fakeAsync((a) {
       final r = Rig()..failConnect = true;
       r.c.start();
       a.flushMicrotasks();
       expect(r.c.phase, Phase.offline);
-      expect(r.speaker.said, ['Jarvis is offline.']);
+      expect(r.speaker.said, [ack, 'Jarvis is offline.']);
       expect(r.ended, 1);
       expect(r.mic.ctrl.hasListener, isFalse);
     });
@@ -130,7 +146,7 @@ void main() {
       expect(r.socket.types, contains('bye'));
       expect(r.socket.closed && r.mic.stopped, isTrue);
       expect((r.c.phase, r.ended), (Phase.idle, 1));
-      expect(r.speaker.said, isEmpty); // our own close is not "connection lost"
+      expect(r.speaker.said, [ack]); // our own close is not "connection lost"
     });
   });
 
@@ -201,7 +217,7 @@ void main() {
       a.flushMicrotasks();
       r.socket.ctrl.close();
       a.flushMicrotasks();
-      expect(r.speaker.said, ['Jarvis connection lost.']);
+      expect(r.speaker.said, [ack, 'Jarvis connection lost.']);
       expect((r.c.phase, r.ended), (Phase.idle, 1));
     });
   });

@@ -103,6 +103,8 @@ class SessionController extends ChangeNotifier {
     try {
       onStarted?.call();
     } catch (_) {} // a hook failure must not stop the session
+    // audible "I'm listening" cue (phone may be locked); runs during connect, finished before the mic opens
+    final ack = speakText == null ? speaker.say('What can I do for you?') : null;
     VoiceSocket socket;
     try {
       socket = await connect();
@@ -131,6 +133,10 @@ class SessionController extends ChangeNotifier {
         socket.sendJson('speak', {'text': t});
       }
       _queuedSpeak.clear();
+      try {
+        await ack; // so the mic never hears the ack
+      } catch (_) {} // TTS failure must not block the session
+      if (gen != _gen) return;
       final stream = await mic.start();
       if (gen != _gen) {
         await _quiet(mic.stop);

@@ -66,6 +66,11 @@ class PcmPlayer implements Player {
 
 class TtsSpeaker implements Speaker {
   final _tts = FlutterTts();
+  Future<void>? _init;
   @override
-  Future<void> say(String text) => _tts.speak(text); // Android's own TTS: works with the backend down
+  Future<void> say(String text) async {
+    _init ??= _tts.awaitSpeakCompletion(true); // say() resolves when speech ends
+    await _init;
+    await _tts.speak(text); // Android's own TTS: works with the backend down
+  }
 }
