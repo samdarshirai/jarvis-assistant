@@ -26,6 +26,7 @@ def mock_lifespan_deps(monkeypatch):
         fernet_key="test",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
+        deepgram_api_key="", cartesia_api_key="", cartesia_voice_id="", fcm_credentials_path="",
     )
 
     # Patch all dependencies to minimal no-ops
@@ -80,6 +81,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
         fernet_key="test",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
+        deepgram_api_key="", cartesia_api_key="", cartesia_voice_id="", fcm_credentials_path="",
     )
 
     # Patch all dependencies to minimal no-ops
@@ -151,7 +153,7 @@ async def test_lifespan_initialize_failure_calls_shutdown_and_closes_pool(
     # Mock TelegramChannel to return fake_tg_app
     mock_tg_channel = MagicMock()
     mock_tg_channel.build = MagicMock(return_value=fake_tg_app)
-    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *args: mock_tg_channel)
+    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *args, **kw: mock_tg_channel)
 
     app = FastAPI()
 
@@ -212,7 +214,7 @@ async def test_lifespan_start_polling_failure_calls_teardown_in_order(
     # Mock TelegramChannel to return fake_tg_app
     mock_tg_channel = MagicMock()
     mock_tg_channel.build = MagicMock(return_value=fake_tg_app)
-    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *args: mock_tg_channel)
+    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *args, **kw: mock_tg_channel)
 
     app = FastAPI()
 
@@ -268,7 +270,7 @@ async def test_lifespan_normal_path_calls_teardown_in_order(mock_lifespan_deps):
     # Mock TelegramChannel to return fake_tg_app
     mock_tg_channel = MagicMock()
     mock_tg_channel.build = MagicMock(return_value=fake_tg_app)
-    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *args: mock_tg_channel)
+    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *args, **kw: mock_tg_channel)
 
     app = FastAPI()
 
@@ -284,3 +286,12 @@ async def test_lifespan_normal_path_calls_teardown_in_order(mock_lifespan_deps):
 
     # Verify shutdown was called exactly once
     fake_tg_app.shutdown.assert_called_once()
+
+
+def test_voice_route_is_closed_until_the_lifespan_has_built_the_service():
+    from starlette.websockets import WebSocketDisconnect
+    app = create_app(with_lifespan=False)
+    with pytest.raises(WebSocketDisconnect) as e:
+        with TestClient(app).websocket_connect("/voice"):
+            pass
+    assert e.value.code == 1013

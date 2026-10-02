@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from jarvis.agent.graph import build_graph
@@ -19,6 +19,10 @@ from jarvis.tools.gmail_tools import register_gmail_tools
 from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.task_tools import register_task_tools
+from jarvis.voice.devices import Devices
+from jarvis.voice.stt import DeepgramSTT
+from jarvis.voice.tts import CartesiaTTS
+from jarvis.voice.ws import VoiceService
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +54,12 @@ async def lifespan(app: FastAPI):
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
             graph = build_graph(LLMProvider(s, audit), registry, audit, saver, s.timezone)
-            tg = TelegramChannel(graph, s.telegram_owner_chat_id).build(s.telegram_bot_token)
+            voice = VoiceService(
+                graph, Devices(pool),
+                DeepgramSTT(s.deepgram_api_key) if s.deepgram_api_key else None,
+                CartesiaTTS(s.cartesia_api_key, s.cartesia_voice_id) if s.cartesia_api_key and s.cartesia_voice_id else None)
+            app.state.voice = voice
+            tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver).build(s.telegram_bot_token)
             # ponytail: PTB updates run sequentially; the pending-confirmation check in TelegramChannel assumes that, do not enable concurrent_updates
             try:
                 await tg.initialize()
@@ -94,6 +103,14 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     @app.get("/health")
     def health():
         return {"ok": True}
+
+    @app.websocket("/voice")
+    async def voice(ws: WebSocket):
+        svc = getattr(app.state, "voice", None)
+        if svc is None:  # lifespan has not built it (or voice is disabled)
+            await ws.close(code=1013)
+            return
+        await svc.handle(ws)
 
     return app
 
