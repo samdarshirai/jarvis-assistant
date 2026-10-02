@@ -20,3 +20,10 @@ def test_defaults():
     s = make()
     assert s.timezone == "Europe/Berlin"
     assert s.google_client_secrets == "client_secret.json"
+
+
+def test_tavily_key_is_optional_and_read_from_env(monkeypatch):
+    monkeypatch.delenv("JARVIS_TAVILY_API_KEY", raising=False)
+    assert make().tavily_api_key == ""
+    monkeypatch.setenv("JARVIS_TAVILY_API_KEY", "tvly-abc")
+    assert make().tavily_api_key == "tvly-abc"

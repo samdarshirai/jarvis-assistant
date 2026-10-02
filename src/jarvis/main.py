@@ -76,11 +76,12 @@ async def lifespan(app: FastAPI):
         def svc(name: str, version: str):
             return cached_service(lambda: build_service(name, version, store, s.fernet_key))
 
-        registry = build_registry(svc, s.timezone)
+        registry = build_registry(svc, s.timezone, pool, s.tavily_api_key)
 
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
-            graph = build_graph(LLMProvider(s, audit), registry, audit, saver, s.timezone)
+            graph = build_graph(LLMProvider(s, audit), registry, audit, saver, s.timezone,
+                                memories=MemoryStore(pool).all)
             # One lock for both channels on the shared thread "owner": "read pending -> decide -> ainvoke" is one step.
             # ponytail: one global lock, fine for a single owner; per-thread locks if more threads ever appear.
             lock = asyncio.Lock()

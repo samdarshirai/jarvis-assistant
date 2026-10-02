@@ -121,3 +121,31 @@ async def test_notes_and_memory_use_the_fast_tier_in_voice():
     g, _ = graph({"fast": [AIMessage("ok")], "strong": []})
     out = await g.ainvoke(hello("remember that I like tea"), VOICE)
     assert out["messages"][-1].content == "ok"
+
+
+async def test_remember_goes_through_the_gate_then_shows_up_in_the_next_prompt(pool):
+    from langgraph.types import Command
+
+    from jarvis.memory import MemoryStore
+    from jarvis.tools.memory_tools import register_memory_tools
+
+    store = MemoryStore(pool)
+    reg = Registry()
+    register_memory_tools(reg, store)
+    call = AIMessage("", tool_calls=[{"name": "remember", "args": {"text": "I like window seats"}, "id": "c1",
+                                      "type": "tool_call"}])
+    # "remember ..." is routed by keyword (no router call); "how are you" needs one router call, then the agent
+    provider = FakeProvider({"fast": [call, AIMessage("chat"), AIMessage("noted")]})
+    provider._models["fast"] = RecordingChat(script=provider._models["fast"].script)
+    g = build_graph(provider, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin", memories=store.all)
+
+    out = await g.ainvoke(hello("remember that I like window seats"), CFG)
+    assert out["__interrupt__"][0].value["actions"][0]["summary"] == "Remember: I like window seats"
+    assert store.all() == []  # nothing saved before the owner confirms
+    out = await g.ainvoke(Command(resume=True), CFG)
+    assert out["messages"][-1].content == "Got it, I'll remember that."
+    assert [m["text"] for m in store.all()] == ["I like window seats"]
+
+    await g.ainvoke(hello("how are you"), CFG)
+    last_system = provider._models["fast"].seen[-1][0].content
+    assert "(#" in last_system and "I like window seats" in last_system
