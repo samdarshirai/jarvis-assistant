@@ -1,17 +1,46 @@
-# jarvis_app
+# Jarvis Voice App
 
-A new Flutter project.
+A Flutter Android app that brings voice-first access to your calendar, email, tasks, and more via "Hey Jarvis" wake word. Integrates Picovoice, Deepgram, and Cartesia for on-device keyword spotting and cloud speech-to-text and text-to-speech.
 
-## Getting Started
+## Build
 
-This project is a starting point for a Flutter application.
+Install dependencies:
+```
+flutter pub get
+```
 
-A few resources to get you started if this is your first Flutter project:
+Build the APK (requires `PICOVOICE_ACCESS_KEY`):
+```
+flutter build apk --debug --dart-define=PICOVOICE_ACCESS_KEY=<your_key>
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Permissions
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+The app requests (runtime on Android 14+, or manifest otherwise):
+- **Microphone** — to hear your voice
+- **Notifications** — to show alerts and confirmations
+- **Contacts** — to find and message people
+- **Manifest permissions** — alarms, full-screen intents, foreground service
+
+## Untracked Files
+
+Two files must exist locally but are gitignored:
+
+1. **`assets/hey_jarvis_android.ppn`** — Your trained Picovoice keyword model. Create it in the Picovoice console for Android, then save it here. A placeholder (even empty) allows `flutter build` to succeed, but the app will not wake without the real file.
+2. **`android/app/google-services.json`** — Your Firebase Android config (optional). The app builds and runs without it; only push notifications and tap-to-play features are unavailable. Place it here after creating a Firebase project and adding the Android app `com.jarvis.jarvis_app`.
+
+## SDK Requirements
+
+- **Android SDK platform 37** — The build requires `compileSdk = 37`. If your SDK has only `android-37.0`, create a symlink:
+  ```
+  ln -s android-37.0 android-37
+  ```
+  in your SDK's `platforms/` directory.
+
+## Checks
+
+Run tests and lint:
+```
+flutter test
+flutter analyze
+```
