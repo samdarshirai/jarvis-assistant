@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 THREAD = {"configurable": {"thread_id": "owner"}, "recursion_limit": 40}
 FAIL_TEXT = "Something went wrong. Please try again."
 EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you are unsure."
+PHONE_OFFLINE_TEXT = "Phone action not run: the Jarvis voice app is not connected."
 WARN_UNTRUSTED = "⚠ Proposed after reading email content — check recipient and text.\n"
 
 
@@ -33,7 +34,8 @@ def format_confirmation(payload: dict) -> str:
 
 
 class TelegramChannel:
-    def __init__(self, graph, owner_chat_id: int):
+    def __init__(self, graph, owner_chat_id: int, deliver_actions=None):
+        self.deliver_actions = deliver_actions
         self.graph = graph
         self.owner = owner_chat_id
         self.owner_filter = filters.Chat(chat_id=owner_chat_id)
@@ -72,6 +74,10 @@ class TelegramChannel:
             return
         for text in turn_replies(result["messages"]) or [EMPTY_TEXT]:
             await chat.send_message(text)
+        if result.get("client_actions"):
+            delivered = bool(self.deliver_actions) and await self.deliver_actions(result["client_actions"])
+            if not delivered:
+                await chat.send_message(PHONE_OFFLINE_TEXT)
 
     async def on_text(self, update, context):
         chat = update.effective_chat

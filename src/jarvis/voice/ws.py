@@ -141,6 +141,8 @@ class VoiceSession:
         if interrupts:
             await self._offer(interrupts[0])
             return
+        if result.get("client_actions"):  # before the speech, so an alarm is set while Jarvis is still talking
+            await self.send("client_actions", actions=result["client_actions"])
         await self._say(turn_replies(result["messages"]) or [EMPTY_TEXT])
 
     # --- confirmation cards (spoken-yes handling is added in Task 6) ---

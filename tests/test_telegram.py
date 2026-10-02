@@ -304,3 +304,36 @@ async def test_confirmation_card_warns_after_reading_an_email():
     (prompt, kw), = sent(c)
     assert prompt.startswith(WARN_UNTRUSTED) and "send_draft" in prompt and "reply_markup" in kw
     assert sent_calls == []
+
+
+def alarm_tool():
+    return Tool(name="set_alarm", domain="phone", description="d", args_schema=Args, needs_confirm=False,
+                fn=lambda **kw: {"queued_for_phone": True, "client_action": {"type": "set_alarm", "hour": 6, "minute": 0}})
+
+
+def alarm_scripts():
+    call_ = AIMessage("", tool_calls=[{"name": "set_alarm", "args": {}, "id": "1", "type": "tool_call"}])
+    return {"fast": [AIMessage("phone"), call_, AIMessage("Asking your phone to set the alarm.")]}
+
+
+async def test_phone_action_is_forwarded_when_a_voice_client_is_connected():
+    got = []
+
+    async def deliver(actions):
+        got.append(actions)
+        return True
+
+    ch = make_channel(alarm_scripts(), [], extra=[alarm_tool()])
+    ch.deliver_actions = deliver
+    c = chat()
+    await ch.on_text(text_update(c, "alarm at 6"), None)
+    assert got == [[{"type": "set_alarm", "hour": 6, "minute": 0}]]
+    assert sent(c) == [("Asking your phone to set the alarm.", {})]
+
+
+async def test_phone_action_without_a_voice_client_tells_the_user_it_was_not_run():
+    from jarvis.channels.telegram import PHONE_OFFLINE_TEXT
+    ch = make_channel(alarm_scripts(), [], extra=[alarm_tool()])
+    c = chat()
+    await ch.on_text(text_update(c, "alarm at 6"), None)
+    assert sent(c) == [("Asking your phone to set the alarm.", {}), (PHONE_OFFLINE_TEXT, {})]
