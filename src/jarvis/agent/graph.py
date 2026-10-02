@@ -14,20 +14,26 @@ from langgraph.types import Command, interrupt
 
 from jarvis.agent.domains import DOMAINS
 from jarvis.google.auth import ReauthRequired
+from jarvis.memory import memory_block
 from jarvis.timeutil import now_local
 
 log = logging.getLogger(__name__)
 
 ROUTER_PROMPT = (
     "Classify the user's latest request. Reply with ONLY a comma-separated list, in the order the work "
-    "must happen, chosen from: calendar, tasks, gmail, phone, chat. Use 'chat' alone when no calendar, task, "
-    "email or phone work is needed. calendar = anything about the user's schedule, day, agenda, plans, "
-    "availability or what is on or coming up; tasks = to-dos and deadlines; gmail = mail; phone = alarms, "
-    "timers, navigation, texting. Examples: 'what does my day look like' -> calendar; 'am I free Friday' -> "
-    "calendar; 'what do I have to do' -> tasks; 'add that booking email to my calendar' -> gmail, calendar; "
-    "'set an alarm for 6 and put gym at 7 in my calendar' -> calendar, phone."
+    "must happen, chosen from: calendar, tasks, gmail, phone, memory, notes, research, chat. Use 'chat' alone "
+    "when no calendar, task, email, phone, memory, notes or research work is needed. calendar = anything about "
+    "the user's schedule, day, agenda, plans, availability or what is on or coming up; tasks = to-dos and "
+    "deadlines; gmail = mail; phone = alarms, timers, navigation, texting; memory = remembering or forgetting "
+    "facts about the user; notes = the user's own notes; research = looking something up on the web. Examples: "
+    "'what does my day look like' -> calendar; 'am I free Friday' -> calendar; 'what do I have to do' -> tasks; "
+    "'add that booking email to my calendar' -> gmail, calendar; 'set an alarm for 6 and put gym at 7 in my "
+    "calendar' -> calendar, phone; 'research robot vacuums and save a note' -> research, notes; "
+    "'remember I like window seats' -> memory."
 )
 HISTORY = 40
+VOICE_NOTE = ("\nThis reply will be spoken aloud: use two or three short sentences, name sources by site, and never "
+              "read out URLs, ids or code.")
 
 
 class State(TypedDict):
@@ -44,6 +50,9 @@ KEYWORDS = {
     "tasks": r"\btasks?\b|to-?do",
     "gmail": r"e-?mail|inbox|gmail|draft",
     "phone": r"alarm|timer|navigat|directions",
+    "memory": r"\bremember\b|\bforget (?:that|about|what)\b|what do you know about me",
+    "notes": r"\bnotes?\b|jot down|note down",
+    "research": r"search (?:the )?(?:web|online|internet)|look (?:it |that |this )?up|\bresearch\b|\bgoogle\b",
 }
 
 
@@ -119,7 +128,7 @@ def turn_replies(messages: list) -> list[str]:
     return out[::-1]
 
 
-def build_graph(provider, registry, audit, checkpointer, tz: str):
+def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None):
     async def record(*args, **kw) -> None:
         # An audit failure must never break the turn or hide an executed side effect.
         try:
@@ -138,11 +147,19 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
 
     async def agent(state: State, config: RunnableConfig) -> dict:
         dom = DOMAINS[state["domains"][state["idx"]]]
-        # voice turns trade some tool-calling strength for latency; gmail stays strong (untrusted content)
+        # voice turns trade some tool-calling strength for latency; gmail and research stay strong (untrusted content)
         voice = (config.get("configurable") or {}).get("voice")
-        tier = "fast" if voice and dom.name != "gmail" else dom.tier
+        tier = "fast" if voice and dom.name not in ("gmail", "research") else dom.tier
         llm = provider.get(tier, registry.lc_tools(dom.name) or None)
-        system = SystemMessage(f"{dom.prompt}\nCurrent local time: {now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
+        rows: list[dict] = []
+        if memories is not None:
+            try:
+                rows = await asyncio.to_thread(memories)
+            except Exception:
+                log.exception("memory load failed")
+        spoken = VOICE_NOTE if voice and dom.name in ("notes", "research") else ""
+        system = SystemMessage(f"{dom.prompt}{spoken}{memory_block(rows)}\nCurrent local time: "
+                               f"{now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
         reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
         return {"messages": [reply], "approved": False}
 
