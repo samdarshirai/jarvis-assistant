@@ -1,3 +1,4 @@
+import asyncio
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
@@ -113,3 +114,51 @@ def test_stt_stream_ending_cleanly_is_a_failure():
             for _ in range(10):
                 read(ws)
         assert e.value.code == 1011
+
+
+def _stalled_turn(h, ws):
+    read(ws)
+    ping(ws)
+    until(ws, "transcript")
+    while read(ws)[0] != "bytes":  # first audio chunk: the turn is mid-speech
+        pass
+
+
+def test_disconnect_cancels_turn_in_flight():
+    from tests.fakes import FakeTTS
+    h = build(chat_scripts("Hi."), stt_script=[FINAL("hi")], tts=FakeTTS(stall=True))
+    with TestClient(h.app) as c:
+        with c.websocket_connect("/voice", headers=AUTH) as ws:
+            _stalled_turn(h, ws)
+        c.portal.call(asyncio.sleep, 0.2)
+        assert h.tts.cancelled is True
+        assert h.svc.current is None
+
+
+def test_replacement_cancels_turn_in_flight():
+    from tests.fakes import FakeTTS
+    h = build(chat_scripts("Hi."), stt_script=[FINAL("hi")], tts=FakeTTS(stall=True))
+    with TestClient(h.app) as c:
+        with c.websocket_connect("/voice", headers=AUTH) as w1:
+            _stalled_turn(h, w1)
+            with c.websocket_connect("/voice", headers=AUTH) as w2:
+                read(w2)
+                with pytest.raises(WebSocketDisconnect) as e:
+                    for _ in range(10):
+                        read(w1)
+                assert e.value.code == 4000
+        c.portal.call(asyncio.sleep, 0.2)  # w1's handler only unwinds once its client side has left
+        assert h.tts.cancelled is True
+        assert h.svc.current is None
+
+
+def test_bye_emits_no_error_frame():
+    h = build(chat_scripts("Hi."))
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+        ws.send_json({"type": "bye"})
+        seen = []
+        with pytest.raises(WebSocketDisconnect):
+            for _ in range(5):
+                seen.append(read(ws))
+        assert texts(seen, "error") == []

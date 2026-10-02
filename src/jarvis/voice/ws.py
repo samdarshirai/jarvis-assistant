@@ -76,8 +76,7 @@ class VoiceSession:
         t, self.turn = self.turn, None
         if t and not t.done():
             t.cancel()
-            with contextlib.suppress(asyncio.CancelledError, Exception):
-                await t
+            await asyncio.wait({t})  # inner outcome is not raised; our own cancellation still propagates
 
     async def _start(self, coro) -> None:
         await self._stop_turn()
@@ -202,9 +201,14 @@ class VoiceSession:
             pass
         finally:
             events.cancel()
-            await self._stop_turn()
-            with contextlib.suppress(Exception):
-                await self.stt.close()
+            try:  # nested so a cancellation of run() itself still releases the turn and the stt stream
+                await asyncio.gather(events, return_exceptions=True)  # no new turn can start after this
+            finally:
+                try:
+                    await self._stop_turn()
+                finally:
+                    with contextlib.suppress(Exception):
+                        await self.stt.close()
 
 
 class VoiceService:
