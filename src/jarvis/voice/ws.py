@@ -101,7 +101,29 @@ class VoiceSession:
 
     async def _utterance(self, text: str) -> None:
         await self.set_state("thinking")
+        pending = (await self.graph.aget_state(VOICE_CFG)).interrupts
+        if pending:
+            await self._spoken_decision(text, pending[0])
+            return
         await self._invoke({"messages": [HumanMessage(text)]})
+
+    async def _spoken_decision(self, text: str, it) -> None:
+        decision = match_confirmation(text)
+        tap_only = any(a["tool"] in TAP_ONLY for a in it.value["actions"])
+        if decision is None or (decision and tap_only):
+            await self._card(it)  # re-show the card; nothing was decided
+            await self._say([TAP_TEXT if decision else PENDING_TEXT])
+            return
+        await self._invoke(Command(resume=decision))
+
+    async def _tap(self, m: dict) -> None:
+        await self.set_state("thinking")
+        decision = m.get("decision")
+        interrupts = (await self.graph.aget_state(VOICE_CFG)).interrupts
+        if decision not in ("yes", "no") or not interrupts or interrupts[0].id != m.get("interrupt_id"):
+            await self._say([HANDLED_TEXT])  # stale, repeated or bare taps never resume anything
+            return
+        await self._invoke(Command(resume=decision == "yes"))
 
     async def _invoke(self, graph_input) -> None:
         result = await self.graph.ainvoke(graph_input, VOICE_CFG)
@@ -177,6 +199,8 @@ class VoiceSession:
             fcm = m.get("fcm_token")
             if isinstance(fcm, str) and fcm:
                 await asyncio.to_thread(self.devices.set_fcm, self.device_id, fcm)
+        elif kind == "confirm":
+            await self._start(self._tap(m))
         elif kind == "bye":
             return False
         else:
