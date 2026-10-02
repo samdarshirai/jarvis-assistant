@@ -109,7 +109,7 @@ def test_stt_stream_ending_cleanly_is_a_failure():
         seen = until(ws, "error")
         assert texts(seen, "error")
         seen = until_state(ws, "listening")
-        assert h.tts.spoken == ["I can't hear you right now."]
+        assert h.tts.spoken == ["Sorry, I can't hear you right now."]
         with pytest.raises(WebSocketDisconnect) as e:
             for _ in range(10):
                 read(ws)

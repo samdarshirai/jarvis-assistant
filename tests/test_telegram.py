@@ -74,7 +74,7 @@ async def test_confirmation_flow_runs_action_once():
     c2 = chat()
     await ch.on_text(text_update(c2, "something else"), None)
     (refusal, kw0), (card, kw1) = sent(c2)
-    assert refusal == "Confirm or cancel the pending action first." and kw0 == {}
+    assert refusal == "Let's sort out the pending action first, confirm or cancel it." and kw0 == {}
     assert card == prompt and ids(c2) == ids(c)  # the card is re-offered with buttons for the same interrupt
 
     yes, _ = ids(c)
@@ -349,7 +349,7 @@ async def test_pending_card_from_another_channel_is_reoffered_with_working_butto
     c = chat()
     await ch.on_text(text_update(c, "hello?"), None)
     (refusal, _), (card, kw) = sent(c)
-    assert refusal == "Confirm or cancel the pending action first."
+    assert refusal == "Let's sort out the pending action first, confirm or cancel it."
     assert card == format_confirmation(out["__interrupt__"][0].value) and ids(c) == (f"yes:{iid}", f"no:{iid}")
     c2 = chat()
     await ch.on_button(button_update(c2, ids(c)[0]), None)

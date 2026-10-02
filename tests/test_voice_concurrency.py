@@ -209,7 +209,7 @@ def test_spoken_yes_does_not_approve_a_card_this_session_never_presented():
             seen = until_state(ws, "listening")
             assert calls == []
             assert texts(seen, "confirm_card")[0]["interrupt_id"] == iid
-            assert h.tts.spoken[-1].endswith("Say yes or no.")
+            assert h.tts.spoken[-1].endswith("Just say yes or no.")
             ping(ws)  # now it was presented: a yes resumes it
             until_state(ws, "listening")
             assert calls == [("create_event", {"summary": "Gym"})] and "Created." in h.tts.spoken

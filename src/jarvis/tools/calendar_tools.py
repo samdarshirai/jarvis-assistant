@@ -118,8 +118,8 @@ def register_calendar_tools(registry: Registry, client, tz: str) -> None:
     def ev(r):
         return f"'{r['summary']}' {_range(r['start'], r['end'])}"
 
-    dones = {"create_event": lambda r: f"Created {ev(r)}.", "update_event": lambda r: f"Updated {ev(r)}.",
-             "delete_event": lambda r: "Deleted the event."}
+    dones = {"create_event": lambda r: f"All set, I've added {ev(r)}.", "update_event": lambda r: f"Done, I've updated {ev(r)}.",
+             "delete_event": lambda r: "Okay, that's been removed from your calendar."}
     describers = {"create_event": describe_create, "update_event": describe_update, "delete_event": describe_delete}
 
     for name, desc, schema, fn, confirm in [

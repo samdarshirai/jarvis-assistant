@@ -29,7 +29,7 @@ def test_gated_action_sends_a_card_speaks_it_and_does_not_run():
         card, seen = ask(ws)
         assert card["tap_only"] is False and card["after_untrusted"] is False and "create_event" in card["summary"]
         assert card["interrupt_id"] and calls == []
-        assert h.tts.spoken[-1].endswith("Say yes or no.")
+        assert h.tts.spoken[-1].endswith("Just say yes or no.")
 
 
 def test_spoken_yes_resumes_and_runs_once():
@@ -55,7 +55,7 @@ def test_lookalike_yes_does_not_resume_and_card_is_resent():
         seen = until_state(ws, "listening")
         assert calls == []
         assert texts(seen, "confirm_card")[0]["interrupt_id"] == card["interrupt_id"]
-        assert h.tts.spoken[-1] == "Confirm or cancel the pending action first."
+        assert h.tts.spoken[-1] == "Let's sort out the pending action first, confirm or cancel it."
 
 
 def test_spoken_no_cancels_and_nothing_runs():
@@ -82,10 +82,10 @@ def test_spoken_yes_never_confirms_send_draft_but_a_tap_does():
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         read(ws)
         card, _ = ask(ws)
-        assert card["tap_only"] is True and h.tts.spoken[-1].endswith("Tap Confirm on the screen to send.")
+        assert card["tap_only"] is True and h.tts.spoken[-1].endswith("I need you to tap Confirm on the screen to send it.")
         ping(ws)
         seen = until_state(ws, "listening")
-        assert calls == [] and h.tts.spoken[-1] == "Tap Confirm on the screen to send."
+        assert calls == [] and h.tts.spoken[-1] == "I need you to tap Confirm on the screen to send it."
         ws.send_json({"type": "confirm", "decision": "yes", "interrupt_id": card["interrupt_id"]})
         until_state(ws, "listening")
         assert calls == [("send_draft", {})] and "Sent." in h.tts.spoken
@@ -143,7 +143,7 @@ def test_untrusted_card_is_warned_in_the_frame_and_spoken():
         read(ws)
         card, _ = ask(ws)
         assert card["after_untrusted"] is True
-        assert h.tts.spoken[0].startswith("Warning: proposed after reading email content.")
+        assert h.tts.spoken[0].startswith("Heads up, I came up with this after reading an email, so double-check it.")
         assert calls == []
 
 

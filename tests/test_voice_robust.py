@@ -149,7 +149,7 @@ def test_stt_failure_during_session_sends_error_speaks_fallback_and_closes():
         with pytest.raises(WebSocketDisconnect) as e:
             for _ in range(20):
                 read(ws)
-        assert e.value.code == 1011 and h.tts.spoken == ["I can't hear you right now."]
+        assert e.value.code == 1011 and h.tts.spoken == ["Sorry, I can't hear you right now."]
 
 
 def test_stt_open_failure_sends_error_and_closes_1011():
@@ -196,7 +196,7 @@ def test_stt_send_failure_reports_once_speaks_fallback_and_closes():
                 seen.append(read(ws))
         assert e.value.code == 1011
         errors = [t for t in texts(seen) if t["type"] == "error"]
-        assert len(errors) == 1 and h.tts.spoken == ["I can't hear you right now."]  # failure path ran once
+        assert len(errors) == 1 and h.tts.spoken == ["Sorry, I can't hear you right now."]  # failure path ran once
 
 
 def test_oversized_text_frame_is_a_bad_frame_and_the_session_survives():

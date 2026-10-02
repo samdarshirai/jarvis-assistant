@@ -18,9 +18,9 @@ log = logging.getLogger(__name__)
 # One thread for every channel (FR-1). The "voice" flag only selects the fast model tier inside the graph.
 VOICE_CFG = {**THREAD, "configurable": {**THREAD["configurable"], "voice": True}}
 TAP_ONLY = {"send_draft"}  # irreversible and third-party-facing: a spoken yes is never enough
-TAP_TEXT = "Tap Confirm on the screen to send."
-STT_DOWN_TEXT = "I can't hear you right now."
-WARN_TEXT = "Warning: proposed after reading email content. "
+TAP_TEXT = "I need you to tap Confirm on the screen to send it."
+STT_DOWN_TEXT = "Sorry, I can't hear you right now."
+WARN_TEXT = "Heads up, I came up with this after reading an email, so double-check it. "
 
 
 def card_lines(payload: dict) -> list[str]:
@@ -193,7 +193,7 @@ class VoiceSession:
         await self._card(it)
         payload = it.value
         spoken = (WARN_TEXT if payload.get("after_untrusted") else "") + "; ".join(card_lines(payload))
-        await self._say([spoken + (". " + TAP_TEXT if is_tap_only(payload) else ". Say yes or no.")])
+        await self._say([spoken + (". " + TAP_TEXT if is_tap_only(payload) else ". Want me to go ahead? Just say yes or no.")])
 
     # --- input ---
     async def _consume_events(self) -> None:
