@@ -52,7 +52,7 @@ KEYWORDS = {
     "phone": r"alarm|timer|navigat|directions",
     "memory": r"\bremember\b|\bforget (?:that|about|what)\b|what do you know about me",
     "notes": r"\bnotes?\b|jot down|note down",
-    "research": r"search (?:the )?(?:web|online|internet)|look (?:it |that |this )?up|\bresearch\b|\bgoogle\b",
+    "research": r"search (?:the )?(?:web|online|internet)|look (?:it |that |this )?up|\bresearch\b|\bgoogle (?:it|that|this|for)\b",
 }
 
 

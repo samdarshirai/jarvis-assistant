@@ -63,6 +63,10 @@ def test_router_prompt_lists_the_new_domains():
     ("research the best standing desks", ["research"]),
     ("what's on my calendar tomorrow", ["calendar"]),
     ("research robot vacuums and save a note", None),  # two domains: the router decides
+    ("add this to my Google Calendar", ["calendar"]),
+    ("put it on my Google Tasks list", ["tasks"]),
+    ("google that for me", ["research"]),
+    ("google for the best standing desks", ["research"]),
     ("how are you", None),
 ])
 def test_keyword_routing(text, expected):
