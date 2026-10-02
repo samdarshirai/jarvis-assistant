@@ -93,15 +93,19 @@ def repair_tool_gaps(messages: list) -> list:
     return out
 
 
-def wrap_untrusted(text: str) -> str:
-    """Mark third-party text as data; rewrite closing tags so the content cannot end the wrapper early."""
-    safe = re.sub(r"</\s*untrusted_email", "&lt;/untrusted_email", text, flags=re.IGNORECASE)
-    return f"<untrusted_email>{safe}</untrusted_email>"
+UNTRUSTED_TAGS = ("untrusted_email", "untrusted_web")
+
+
+def wrap_untrusted(text: str, tag: str = "untrusted_email") -> str:
+    """Mark third-party text as data; rewrite any closing wrapper tag so the content cannot end it early."""
+    safe = re.sub(r"</\s*(untrusted_(?:email|web))", r"&lt;/\1", text, flags=re.IGNORECASE)
+    return f"<{tag}>{safe}</{tag}>"
 
 
 def untrusted_in_window(messages: list) -> bool:
-    """True while any wrapped email result is still inside the history the model sees."""
-    return any(isinstance(m, ToolMessage) and isinstance(m.content, str) and m.content.startswith("<untrusted_email>")
+    """True while any wrapped third-party result (email or web) is still inside the history the model sees."""
+    opens = tuple(f"<{t}>" for t in UNTRUSTED_TAGS)
+    return any(isinstance(m, ToolMessage) and isinstance(m.content, str) and m.content.startswith(opens)
                for m in window(messages))
 
 
@@ -217,7 +221,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
             if tool is not None and tool.untrusted and label != "blocked" and not is_error:
                 ran_untrusted = True
                 audit_result = {"redacted": True, "chars": len(content), "message_id": c["args"].get("message_id")}
-                content = wrap_untrusted(content)
+                content = wrap_untrusted(content, tool.untrusted_tag)
             await record(
                 "tool", c["name"], args=c["args"], result=audit_result,
                 confirmation=label,

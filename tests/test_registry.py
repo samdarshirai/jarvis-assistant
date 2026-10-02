@@ -46,3 +46,8 @@ def test_for_domain_and_lc_tools():
 def test_untrusted_defaults_false_and_can_be_set():
     assert tool("a").untrusted is False
     assert tool("b", untrusted=True).untrusted is True
+
+
+def test_untrusted_tag_defaults_to_email():
+    assert tool("read", untrusted=True).untrusted_tag == "untrusted_email"
+    assert tool("web", untrusted=True, untrusted_tag="untrusted_web").untrusted_tag == "untrusted_web"

@@ -16,6 +16,7 @@ class Tool:
     describe: Callable[[dict], str] | None = None  # read-only, human summary of a call for the confirm prompt
     done: Callable[[dict], str] | None = None  # result -> final reply; lets a clean confirmed write skip the wrap-up LLM call
     untrusted: bool = False  # output carries third-party text (email): wrapped, redacted in audit, flags later writes
+    untrusted_tag: str = "untrusted_email"  # wrapper tag for this tool's output: untrusted_email or untrusted_web
 
 
 class Registry:
