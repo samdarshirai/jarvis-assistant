@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -54,13 +55,17 @@ async def lifespan(app: FastAPI):
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
             graph = build_graph(LLMProvider(s, audit), registry, audit, saver, s.timezone)
+            # One lock for both channels on the shared thread "owner": "read pending -> decide -> ainvoke" is one step.
+            # ponytail: one global lock, fine for a single owner; per-thread locks if more threads ever appear.
+            lock = asyncio.Lock()
             voice = VoiceService(
                 graph, Devices(pool),
                 DeepgramSTT(s.deepgram_api_key) if s.deepgram_api_key else None,
-                CartesiaTTS(s.cartesia_api_key, s.cartesia_voice_id) if s.cartesia_api_key and s.cartesia_voice_id else None)
+                CartesiaTTS(s.cartesia_api_key, s.cartesia_voice_id) if s.cartesia_api_key and s.cartesia_voice_id else None,
+                lock=lock)
             app.state.voice = voice
-            tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver).build(s.telegram_bot_token)
-            # ponytail: PTB updates run sequentially; the pending-confirmation check in TelegramChannel assumes that, do not enable concurrent_updates
+            tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
+                                 lock=lock).build(s.telegram_bot_token)
             try:
                 await tg.initialize()
             except Exception:

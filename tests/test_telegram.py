@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 from pydantic import BaseModel
@@ -9,7 +9,7 @@ from telegram import Update
 from telegram.error import TelegramError
 
 from jarvis.agent.graph import build_graph
-from jarvis.channels.telegram import FAIL_TEXT, TelegramChannel, format_confirmation
+from jarvis.channels.telegram import FAIL_TEXT, THREAD, TelegramChannel, format_confirmation
 from jarvis.tools.registry import Registry, Tool
 from tests.fakes import FakeProvider, MemoryAudit
 
@@ -73,7 +73,9 @@ async def test_confirmation_flow_runs_action_once():
     # Review focus 1: new text while confirmation pending is refused
     c2 = chat()
     await ch.on_text(text_update(c2, "something else"), None)
-    assert sent(c2) == [("Confirm or cancel the pending action first.", {})]
+    (refusal, kw0), (card, kw1) = sent(c2)
+    assert refusal == "Confirm or cancel the pending action first." and kw0 == {}
+    assert card == prompt and ids(c2) == ids(c)  # the card is re-offered with buttons for the same interrupt
 
     yes, _ = ids(c)
     c3 = chat()
@@ -246,7 +248,7 @@ async def test_legacy_bare_callback_data_is_already_handled():
         await ch.on_button(button_update(c, data), None)
         assert sent(c) == [("Already handled.", {})]
     assert calls == []
-    assert await ch._pending()  # still waiting for a real answer
+    assert (await ch.graph.aget_state(THREAD)).interrupts  # still waiting for a real answer
 
 
 async def test_empty_reply_sends_fallback():
@@ -337,3 +339,18 @@ async def test_phone_action_without_a_voice_client_tells_the_user_it_was_not_run
     c = chat()
     await ch.on_text(text_update(c, "alarm at 6"), None)
     assert sent(c) == [("Asking your phone to set the alarm.", {}), (PHONE_OFFLINE_TEXT, {})]
+
+
+async def test_pending_card_from_another_channel_is_reoffered_with_working_buttons():
+    calls = []
+    ch = pending_channel(calls)
+    out = await ch.graph.ainvoke({"messages": [HumanMessage("book gym")]}, THREAD)  # e.g. proposed by voice
+    iid = out["__interrupt__"][0].id
+    c = chat()
+    await ch.on_text(text_update(c, "hello?"), None)
+    (refusal, _), (card, kw) = sent(c)
+    assert refusal == "Confirm or cancel the pending action first."
+    assert card == format_confirmation(out["__interrupt__"][0].value) and ids(c) == (f"yes:{iid}", f"no:{iid}")
+    c2 = chat()
+    await ch.on_button(button_update(c2, ids(c)[0]), None)
+    assert calls == [{"summary": "Gym"}] and sent(c2) == [("Created.", {})]
