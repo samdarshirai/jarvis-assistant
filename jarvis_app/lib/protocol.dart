@@ -57,7 +57,7 @@ ServerEvent? decodeServer(Object? raw) {
             tapOnly: j['tap_only'] as bool,
             afterUntrusted: j['after_untrusted'] as bool);
       case 'client_actions':
-        return ClientActionsEvent((j['actions'] as List).cast<Map<String, dynamic>>());
+        return ClientActionsEvent(List<Map<String, dynamic>>.from(j['actions'] as List));
       case 'error':
         return ErrorEvent(j['message'] as String);
       default:

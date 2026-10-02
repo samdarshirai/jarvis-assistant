@@ -46,6 +46,10 @@ void main() {
     }
   });
 
+  test('client_actions with a non-map element decodes to null', () {
+    expect(decodeServer('{"type":"client_actions","actions":[1]}'), isNull);
+  });
+
   test('encode makes a typed object', () {
     expect(jsonDecode(encode('confirm', {'decision': 'yes', 'interrupt_id': 'i1'})),
         {'type': 'confirm', 'decision': 'yes', 'interrupt_id': 'i1'});
