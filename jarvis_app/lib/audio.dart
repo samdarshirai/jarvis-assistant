@@ -69,8 +69,25 @@ class TtsSpeaker implements Speaker {
   Future<void>? _init;
   @override
   Future<void> say(String text) async {
-    _init ??= _tts.awaitSpeakCompletion(true); // say() resolves when speech ends
+    _init ??= _setup();
     await _init;
     await _tts.speak(text); // Android's own TTS: works with the backend down
+  }
+
+  Future<void> _setup() async {
+    await _tts.awaitSpeakCompletion(true); // say() resolves when speech ends
+    try {
+      // ponytail: Google TTS en-US/GB male voices are iob/iol/iom/tpd/rjs; none installed -> lower pitch only
+      final voices = await _tts.getVoices as List;
+      final male = voices.cast<Map>().where((v) {
+        final n = '${v['name']}'.toLowerCase();
+        return n.startsWith('en-') && RegExp(r'-x-(iob|iol|iom|tpd|rjs)-').hasMatch(n);
+      });
+      if (male.isNotEmpty) {
+        await _tts.setVoice({'name': '${male.first['name']}', 'locale': '${male.first['locale']}'});
+      } else {
+        await _tts.setPitch(0.75);
+      }
+    } catch (_) {} // voice choice is cosmetic; never block the ack
   }
 }
