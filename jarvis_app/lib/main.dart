@@ -15,13 +15,17 @@ Future<void> main() async {
   } catch (e) {
     debugPrint('push unavailable: $e');
   }
-  runApp(JarvisApp(onSessionEnded: WakeService.resume, fcmToken: PushBridge.token));
+  runApp(JarvisApp(onSessionEnded: WakeService.resume, onSessionStarted: WakeService.pause, fcmToken: PushBridge.token));
   // The manual Talk button must work even without a wake word (missing keyword file / AccessKey), so never crash startup.
   try {
     await WakeService.ensureRunning(); // also covers "service not running" after a reboot once the user opens the app
-    await WakeService.bridgeWakeToSession();
   } catch (e) {
     debugPrint('wake word unavailable: $e');
+  }
+  try {
+    await WakeService.bridgeWakeToSession(); // separate: a service start failure must not drop a saved cold-start wake
+  } catch (e) {
+    debugPrint('wake bridge unavailable: $e');
   }
   try {
     await LaunchBridge.init();

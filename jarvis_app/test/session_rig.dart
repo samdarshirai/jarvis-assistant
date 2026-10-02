@@ -8,6 +8,7 @@ class Rig {
   FakeSocket socket = FakeSocket();
   final mic = FakeMic(), player = FakePlayer(), phone = FakePhone(), speaker = FakeSpeaker();
   int ended = 0;
+  int started = 0;
   bool failConnect = false;
   Completer<void>? connectGate; // when set, connect() waits for it
   late final SessionController c = SessionController(
@@ -22,5 +23,6 @@ class Rig {
     speaker: speaker,
     fcmToken: () async => 'fcm-1',
     onEnded: () => ended++,
+    onStarted: () => started++,
   );
 }

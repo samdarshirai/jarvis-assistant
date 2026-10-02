@@ -41,8 +41,9 @@ class AppHost {
 }
 
 class JarvisApp extends StatefulWidget {
-  const JarvisApp({super.key, this.onSessionEnded, this.fcmToken, this.store = const ConfigStore()});
+  const JarvisApp({super.key, this.onSessionEnded, this.onSessionStarted, this.fcmToken, this.store = const ConfigStore()});
   final VoidCallback? onSessionEnded;
+  final VoidCallback? onSessionStarted;
   final Future<String?> Function()? fcmToken;
   final ConfigStore store;
   @override
@@ -87,6 +88,7 @@ class _JarvisAppState extends State<JarvisApp> {
             speaker: TtsSpeaker(),
             fcmToken: widget.fcmToken,
             onEnded: widget.onSessionEnded,
+            onStarted: widget.onSessionStarted,
           );
     // unpaired: no controller yet, but keep any pending cold-start request until pairing creates one
     if (_controller == null) {

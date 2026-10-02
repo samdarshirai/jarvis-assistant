@@ -42,6 +42,7 @@ class SessionController extends ChangeNotifier {
     required this.speaker,
     this.fcmToken,
     this.onEnded,
+    this.onStarted,
     Vad? vad,
     this.silence = const Duration(seconds: 8),
     this.confirmWait = const Duration(seconds: 30),
@@ -54,6 +55,7 @@ class SessionController extends ChangeNotifier {
   final Speaker speaker;
   final Future<String?> Function()? fcmToken;
   final VoidCallback? onEnded;
+  final VoidCallback? onStarted; // a fresh session is starting: whoever else holds the mic (wake word) lets go of it
   final Vad vad;
   final Duration silence, confirmWait;
 
@@ -69,6 +71,7 @@ class SessionController extends ChangeNotifier {
   bool _ending = false;
   int _gen = 0; // bumped by every teardown so an in-flight start() can tell it was cancelled
   Future<void> _actionsChain = Future.value();
+  final List<String> _queuedSpeak = []; // push text that arrived while this session was still connecting
 
   void _set(Phase p) {
     phase = p;
@@ -76,13 +79,30 @@ class SessionController extends ChangeNotifier {
   }
 
   Future<void> start({String? speakText}) async {
-    if (phase != Phase.idle && phase != Phase.offline) return;
+    if (phase != Phase.idle && phase != Phase.offline) {
+      // already in a session: a pushed brief must not be lost, so speak it on the live socket (or right after hello)
+      if (speakText != null && !_ending) {
+        if (phase == Phase.connecting) {
+          _queuedSpeak.add(speakText);
+        } else {
+          try {
+            _socket?.sendJson('speak', {'text': speakText});
+            _arm();
+          } catch (_) {} // socket closing: the session is ending anyway
+        }
+      }
+      return;
+    }
     final gen = ++_gen;
+    _queuedSpeak.clear();
     _ending = false;
     error = null;
     card = null;
     userText = jarvisText = '';
     _set(Phase.connecting);
+    try {
+      onStarted?.call();
+    } catch (_) {} // a hook failure must not stop the session
     VoiceSocket socket;
     try {
       socket = await connect();
@@ -107,6 +127,10 @@ class SessionController extends ChangeNotifier {
       if (gen != _gen) return; // teardown already closed the socket
       socket.sendJson('hello', {'fcm_token': ?token});
       if (speakText != null) socket.sendJson('speak', {'text': speakText});
+      for (final t in _queuedSpeak) {
+        socket.sendJson('speak', {'text': t});
+      }
+      _queuedSpeak.clear();
       final stream = await mic.start();
       if (gen != _gen) {
         await _quiet(mic.stop);

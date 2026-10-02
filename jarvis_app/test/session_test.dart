@@ -298,4 +298,49 @@ void main() {
       expect(r.ended, 1);
     });
   });
+
+  test('onStarted fires once per fresh start and not for an ignored second start', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.c.start();
+      a.flushMicrotasks();
+      r.c.start();
+      a.flushMicrotasks();
+      expect(r.started, 1);
+    });
+  });
+
+  test('a push arriving during a live session is spoken on the open socket, not dropped', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.c.start();
+      a.flushMicrotasks();
+      r.c.start(speakText: 'Good morning.');
+      a.flushMicrotasks();
+      expect(r.socket.types.where((t) => t == 'hello').length, 1); // no second session
+      expect(r.socket.sent.last.$1, 'speak');
+      expect(r.socket.sent.last.$2, {'text': 'Good morning.'});
+      // an ignored start without text sends nothing
+      final before = r.socket.sent.length;
+      r.c.start();
+      a.flushMicrotasks();
+      expect(r.socket.sent.length, before);
+    });
+  });
+
+  test('a push arriving while connecting is queued and spoken right after hello', () {
+    fakeAsync((a) {
+      final r = Rig()..connectGate = Completer<void>();
+      r.c.start();
+      a.flushMicrotasks();
+      expect(r.c.phase, Phase.connecting);
+      r.c.start(speakText: 'Brief.');
+      a.flushMicrotasks();
+      expect(r.socket.sent, isEmpty);
+      r.connectGate!.complete();
+      a.flushMicrotasks();
+      expect(r.socket.types, ['hello', 'speak']);
+      expect(r.socket.sent[1].$2, {'text': 'Brief.'});
+    });
+  });
 }
