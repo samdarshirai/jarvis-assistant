@@ -116,6 +116,13 @@ class VoiceSession:
             return
         await self._invoke(Command(resume=decision))
 
+    async def _speak_text(self, m: dict) -> None:
+        text = m.get("text")
+        if not isinstance(text, str) or not text.strip() or len(text) > P.MAX_SPEAK_CHARS:
+            await self.send("error", message="speak needs text of 1 to 2000 characters.")
+            return
+        await self._say([text])
+
     async def _tap(self, m: dict) -> None:
         await self.set_state("thinking")
         decision = m.get("decision")
@@ -155,7 +162,10 @@ class VoiceSession:
         try:
             async for ev in self.stt.events():
                 if ev.kind == "partial":
-                    await self.send("transcript", role="user", text=ev.text, final=False)
+                    await self.send("transcript", role="user", text=ev.text, final=False)  # first: the app flushes on it
+                    if self.state == "speaking":  # speech over playback = barge-in
+                        await self._stop_turn()
+                        await self.set_state("listening")
                 else:
                     self.utterance_bytes = 0
                     await self.send("transcript", role="user", text=ev.text, final=True)
@@ -201,6 +211,11 @@ class VoiceSession:
                 await asyncio.to_thread(self.devices.set_fcm, self.device_id, fcm)
         elif kind == "confirm":
             await self._start(self._tap(m))
+        elif kind == "cancel":
+            await self._stop_turn()
+            await self.set_state("listening")
+        elif kind == "speak":
+            await self._start(self._speak_text(m))
         elif kind == "bye":
             return False
         else:
