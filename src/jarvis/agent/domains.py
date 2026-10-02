@@ -18,7 +18,7 @@ _BASE = (
 )
 
 DOMAINS = {
-    "calendar": Domain("calendar", "strong", _BASE + " You handle Google Calendar: find, create, move, delete "
+    "calendar": Domain("calendar", "fast", _BASE + " You handle Google Calendar: find, create, move, delete "
                        "events and find free slots. For recurring events, ask whether the user means one "
                        "occurrence or the whole series if it is unclear."),
     "tasks": Domain("tasks", "strong", _BASE + " You handle Google Tasks: list, create, complete and reschedule tasks. "

@@ -36,6 +36,20 @@ class State(TypedDict):
     read_untrusted: bool
 
 
+KEYWORDS = {
+    "calendar": r"calendar|event|meeting|appointment|free slot",
+    "tasks": r"\btasks?\b|to-?do",
+    "gmail": r"e-?mail|inbox|gmail|draft",
+    "phone": r"alarm|timer|navigat|directions",
+}
+
+
+def keyword_domain(text: str) -> list[str] | None:
+    """Skip the router LLM call when exactly one domain's keywords appear; anything unclear goes to the router."""
+    hits = [d for d, rx in KEYWORDS.items() if re.search(rx, text, re.IGNORECASE)]
+    return hits if len(hits) == 1 else None
+
+
 def parse_domains(text: str) -> list[str]:
     found: list[str] = []
     for tok in re.split(r"[,\s]+", text.lower()):
@@ -107,6 +121,10 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
             log.exception("audit record failed")
 
     async def router(state: State) -> dict:
+        last = state["messages"][-1]
+        quick = keyword_domain(last.content) if isinstance(last, HumanMessage) and isinstance(last.content, str) else None
+        if quick:
+            return {"domains": quick, "idx": 0, "approved": False, "client_actions": [], "read_untrusted": False}
         resp = await provider.get("fast").ainvoke([SystemMessage(ROUTER_PROMPT), *repair_tool_gaps(window(state["messages"], 6))])
         return {"domains": parse_domains(str(resp.content)), "idx": 0, "approved": False, "client_actions": [],
                 "read_untrusted": False}
@@ -163,6 +181,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
         actions = list(state.get("client_actions", []))
         out = []
         ran_untrusted = False
+        dones: list[str] = []  # one wrap-up line per clean confirmed write; used only if every call in the step has one
         for c in state["messages"][-1].tool_calls:
             tool = registry.get(c["name"])
             confirm = registry.needs_confirm(c["name"])
@@ -203,6 +222,10 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
             if isinstance(result, dict) and "client_action" in result:
                 actions.append(result["client_action"])
             out.append(ToolMessage(content, tool_call_id=c["id"]))
+            if label == "approved" and not is_error and tool.done:
+                dones.append(tool.done(result))
+        if dones and len(dones) == len(out):  # ponytail: templated reply, no LLM wrap-up; model phrasing only on errors/reads
+            out.append(AIMessage(" ".join(dones)))
         return {"messages": out, "client_actions": actions,
                 "read_untrusted": bool(state.get("read_untrusted")) or ran_untrusted}
 
@@ -220,6 +243,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
     g.add_edge("router", "agent")
     g.add_conditional_edges("agent", after_agent, ["gate", "advance"])
     g.add_edge("reject", "agent")
-    g.add_edge("tools", "agent")
+    g.add_conditional_edges("tools", lambda s: "advance" if isinstance(s["messages"][-1], AIMessage) else "agent",
+                            ["agent", "advance"])
     g.add_conditional_edges("advance", after_advance, ["agent", END])
     return g.compile(checkpointer=checkpointer)

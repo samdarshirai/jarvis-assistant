@@ -1,5 +1,7 @@
 import asyncio
 import logging
+import threading
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
@@ -28,6 +30,20 @@ from jarvis.voice.ws import VoiceService
 log = logging.getLogger(__name__)
 
 
+def cached_service(build, ttl: float = 1800.0, clock=time.monotonic):
+    """Reuse the built Google client per thread (httplib2 is not thread-safe); rebuild after ttl so token
+    refresh and ReauthRequired still surface. Tools run in to_thread, hence the thread-local."""
+    local = threading.local()
+
+    def get():
+        hit = getattr(local, "hit", None)
+        if hit is None or clock() - hit[0] > ttl:
+            hit = local.hit = (clock(), build())
+        return hit[1]
+
+    return get
+
+
 def build_registry(svc, tz: str) -> Registry:
     registry = Registry()
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz)
@@ -48,7 +64,7 @@ async def lifespan(app: FastAPI):
         store = PgTokenStore(pool)
 
         def svc(name: str, version: str):
-            return lambda: build_service(name, version, store, s.fernet_key)
+            return cached_service(lambda: build_service(name, version, store, s.fernet_key))
 
         registry = build_registry(svc, s.timezone)
 

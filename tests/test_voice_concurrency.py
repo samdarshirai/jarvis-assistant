@@ -217,8 +217,8 @@ def test_spoken_yes_does_not_approve_a_card_this_session_never_presented():
 
 def test_spoken_yes_meant_for_a_card_resolved_elsewhere_does_not_approve_the_next_one():
     calls = []
-    h = build({"fast": [AIMessage("calendar, tasks"), call("create_event", {"summary": "Gym"}, id="c1")],
-               "strong": [AIMessage("cal done"), call("create_task", {"summary": "Mum"}, id="c2")]},
+    h = build({"fast": [AIMessage("calendar, tasks"), call("create_event", {"summary": "Gym"}, id="c1"), AIMessage("cal done")],
+               "strong": [call("create_task", {"summary": "Mum"}, id="c2")]},
               [tool("create_event", "calendar", calls), tool("create_task", "tasks", calls)],
               [FINAL("gym and remind me about mum"), FINAL("yes")])
     ch = TelegramChannel(h.graph, OWNER)

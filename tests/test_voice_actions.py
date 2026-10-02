@@ -7,7 +7,7 @@ from tests.fakes import FakeSTT, FakeTTS
 from tests.test_graph import call, tool
 from tests.voice_helpers import AUTH, FINAL, build, audio, ping, read, texts, until_state
 
-ALARM = {"fast": [AIMessage("phone"), call("set_alarm", {"hour": 6, "minute": 0}),
+ALARM = {"fast": [call("set_alarm", {"hour": 6, "minute": 0}),
                   AIMessage("Asking your phone to set a 06:00 alarm.")]}
 
 

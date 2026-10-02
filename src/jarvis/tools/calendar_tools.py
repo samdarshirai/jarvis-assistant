@@ -115,6 +115,11 @@ def register_calendar_tools(registry: Registry, client, tz: str) -> None:
     def describe_delete(a):
         return f"Delete {current(a['event_id'])}" + (" - the whole recurring series" if a["scope"] == "all" else "")
 
+    def ev(r):
+        return f"'{r['summary']}' {_range(r['start'], r['end'])}"
+
+    dones = {"create_event": lambda r: f"Created {ev(r)}.", "update_event": lambda r: f"Updated {ev(r)}.",
+             "delete_event": lambda r: "Deleted the event."}
     describers = {"create_event": describe_create, "update_event": describe_update, "delete_event": describe_delete}
 
     for name, desc, schema, fn, confirm in [
@@ -127,4 +132,4 @@ def register_calendar_tools(registry: Registry, client, tz: str) -> None:
         ("delete_event", "Delete an event or a whole recurring series.", DeleteEventArgs, delete_event, True),
     ]:
         registry.add(Tool(name=name, domain="calendar", description=desc, args_schema=schema,
-                          fn=fn, needs_confirm=confirm, describe=describers.get(name)))
+                          fn=fn, needs_confirm=confirm, describe=describers.get(name), done=dones.get(name)))

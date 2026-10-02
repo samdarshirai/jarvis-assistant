@@ -64,7 +64,7 @@ async def test_plain_reply():
 async def test_confirmation_flow_runs_action_once():
     calls = []
     tool_call = AIMessage("", tool_calls=[{"name": "create_event", "args": {"summary": "Gym"}, "id": "1", "type": "tool_call"}])
-    ch = make_channel({"fast": [AIMessage("calendar")], "strong": [tool_call, AIMessage("Created.")]}, calls)
+    ch = make_channel({"fast": [AIMessage("calendar"), tool_call, AIMessage("Created.")]}, calls)
     c = chat()
     await ch.on_text(text_update(c), None)
     (prompt, kw), = sent(c)
@@ -93,7 +93,7 @@ async def test_confirmation_flow_runs_action_once():
 async def test_cancel_button_runs_nothing():
     calls = []
     tool_call = AIMessage("", tool_calls=[{"name": "create_event", "args": {}, "id": "1", "type": "tool_call"}])
-    ch = make_channel({"fast": [AIMessage("calendar")], "strong": [tool_call, AIMessage("Cancelled.")]}, calls)
+    ch = make_channel({"fast": [AIMessage("calendar"), tool_call, AIMessage("Cancelled.")]}, calls)
     c0 = chat()
     await ch.on_text(text_update(c0), None)
     c = chat()
@@ -129,7 +129,7 @@ TOOL_CALL = AIMessage("", tool_calls=[{"name": "create_event", "args": {"summary
 
 
 def pending_channel(calls):
-    return make_channel({"fast": [AIMessage("calendar")], "strong": [TOOL_CALL, AIMessage("Created.")]}, calls)
+    return make_channel({"fast": [AIMessage("calendar"), TOOL_CALL, AIMessage("Created.")]}, calls)
 
 
 async def test_non_owner_button_dropped_and_logged(caplog):
@@ -202,8 +202,8 @@ TASK_CALL = AIMessage("", tool_calls=[{"name": "create_task", "args": {"summary"
 def two_write_channel(calls):
     t = Tool(name="create_task", domain="tasks", description="d", args_schema=Args,
              fn=lambda **kw: calls.append(("task", kw)) or {"ok": True})
-    return make_channel({"fast": [AIMessage("calendar, tasks")],
-                         "strong": [TOOL_CALL, AIMessage("cal done"), TASK_CALL, AIMessage("all done")]},
+    return make_channel({"fast": [AIMessage("calendar, tasks"), TOOL_CALL, AIMessage("cal done")],
+                         "strong": [TASK_CALL, AIMessage("all done")]},
                         calls, extra=[t])
 
 
@@ -315,7 +315,7 @@ def alarm_tool():
 
 def alarm_scripts():
     call_ = AIMessage("", tool_calls=[{"name": "set_alarm", "args": {}, "id": "1", "type": "tool_call"}])
-    return {"fast": [AIMessage("phone"), call_, AIMessage("Asking your phone to set the alarm.")]}
+    return {"fast": [call_, AIMessage("Asking your phone to set the alarm.")]}
 
 
 async def test_phone_action_is_forwarded_when_a_voice_client_is_connected():

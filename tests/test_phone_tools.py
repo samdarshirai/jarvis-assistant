@@ -42,7 +42,7 @@ def test_argument_validation():
 
 
 async def test_alarm_reaches_client_actions_through_the_graph():
-    g, audit = make_graph({"fast": [AIMessage("phone"), call("set_alarm", {"hour": 6, "minute": 0}),
+    g, audit = make_graph({"fast": [call("set_alarm", {"hour": 6, "minute": 0}),
                                     AIMessage("Asking your phone to set a 06:00 alarm.")]}, reg())
     out = await g.ainvoke(say("set an alarm for 6"), CFG)
     assert "__interrupt__" not in out

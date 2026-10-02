@@ -64,7 +64,7 @@ def test_turn_replies_only_current_turn_in_order():
 # --- graph ---
 async def test_read_tool_runs_without_confirmation():
     calls = []
-    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("list_events"), AIMessage("You have gym.")]},
+    g, audit = make({"fast": [AIMessage("calendar"), call("list_events"), AIMessage("You have gym.")]},
                     [tool("list_events", "calendar", calls, needs_confirm=False)])
     out = await g.ainvoke(say(), CFG)
     assert "__interrupt__" not in out
@@ -75,7 +75,7 @@ async def test_read_tool_runs_without_confirmation():
 
 async def test_write_tool_pauses_and_does_not_run_until_approved():
     calls = []
-    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("create_event", {"summary": "Gym"}), AIMessage("Created.")]},
+    g, audit = make({"fast": [AIMessage("calendar"), call("create_event", {"summary": "Gym"}), AIMessage("Created.")]},
                     [tool("create_event", "calendar", calls)])
     out = await g.ainvoke(say(), CFG)
     assert out["__interrupt__"][0].value == {"actions": [{"tool": "create_event", "args": {"summary": "Gym"}}]}
@@ -88,7 +88,7 @@ async def test_write_tool_pauses_and_does_not_run_until_approved():
 
 async def test_cancel_runs_nothing_and_model_is_told():
     calls = []
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("create_event"), AIMessage("Okay, cancelled.")]},
+    g, _ = make({"fast": [AIMessage("calendar"), call("create_event"), AIMessage("Okay, cancelled.")]},
                 [tool("create_event", "calendar", calls)])
     await g.ainvoke(say(), CFG)
     out = await g.ainvoke(Command(resume=False), CFG)
@@ -108,7 +108,7 @@ async def test_untagged_new_tool_defaults_to_confirmation():
 
 async def test_domain_cannot_call_another_domains_tool():
     calls = []
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("list_tasks"), AIMessage("sorry")]},
+    g, _ = make({"fast": [AIMessage("calendar"), call("list_tasks"), AIMessage("sorry")]},
                 [tool("list_tasks", "tasks", calls, needs_confirm=False)])
     out = await g.ainvoke(say(), CFG)
     assert calls == []
@@ -116,7 +116,7 @@ async def test_domain_cannot_call_another_domains_tool():
 
 
 async def test_unknown_tool_is_not_executed():
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("rm_rf"), AIMessage("sorry")]}, [])
+    g, _ = make({"fast": [AIMessage("calendar"), call("rm_rf"), AIMessage("sorry")]}, [])
     out = await g.ainvoke(say(), CFG)
     assert "__interrupt__" in out  # unknown names are treated as needing confirmation
     out = await g.ainvoke(Command(resume=True), CFG)
@@ -128,7 +128,7 @@ async def test_mixed_safe_and_write_in_one_step_does_not_ask_and_blocks_the_writ
     both = AIMessage("", tool_calls=[
         {"name": "list_events", "args": {}, "id": "a", "type": "tool_call"},
         {"name": "create_event", "args": {}, "id": "b", "type": "tool_call"}])
-    g, audit = make({"fast": [AIMessage("calendar")], "strong": [both, AIMessage("ok")]},
+    g, audit = make({"fast": [AIMessage("calendar"), both, AIMessage("ok")]},
                     [tool("list_events", "calendar", calls, needs_confirm=False), tool("create_event", "calendar", calls)])
     out = await g.ainvoke(say(), CFG)
     assert "__interrupt__" not in out
@@ -144,7 +144,7 @@ async def test_several_confirm_gated_calls_alone_get_one_card_with_all():
     two = AIMessage("", tool_calls=[
         {"name": "create_event", "args": {"summary": "A"}, "id": "a", "type": "tool_call"},
         {"name": "create_event", "args": {"summary": "B"}, "id": "b", "type": "tool_call"}])
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [two, AIMessage("ok")]},
+    g, _ = make({"fast": [AIMessage("calendar"), two, AIMessage("ok")]},
                 [tool("create_event", "calendar", calls)])
     out = await g.ainvoke(say(), CFG)
     assert [a["args"] for a in out["__interrupt__"][0].value["actions"]] == [{"summary": "A"}, {"summary": "B"}]
@@ -155,8 +155,8 @@ async def test_several_confirm_gated_calls_alone_get_one_card_with_all():
 
 async def test_multi_domain_runs_in_order_and_replies_in_order():
     calls = []
-    g, _ = make({"fast": [AIMessage("calendar, tasks")],
-                 "strong": [call("list_events"), AIMessage("Calendar done."), call("list_tasks"), AIMessage("Tasks done.")]},
+    g, _ = make({"fast": [AIMessage("calendar, tasks"), call("list_events"), AIMessage("Calendar done.")],
+                 "strong": [call("list_tasks"), AIMessage("Tasks done.")]},
                 [tool("list_events", "calendar", calls, False), tool("list_tasks", "tasks", calls, False)])
     out = await g.ainvoke(say(), CFG)
     assert [c[0] for c in calls] == ["list_events", "list_tasks"]
@@ -166,7 +166,7 @@ async def test_multi_domain_runs_in_order_and_replies_in_order():
 async def test_tool_value_error_goes_back_to_model_and_loop_continues():
     def bad(**kw):
         raise ValueError("end must be after start")
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("list_events"), AIMessage("Let me fix that.")]},
+    g, _ = make({"fast": [AIMessage("calendar"), call("list_events"), AIMessage("Let me fix that.")]},
                 [tool("list_events", "calendar", [], False, fn=bad)])
     out = await g.ainvoke(say(), CFG)
     tm = [m for m in out["messages"] if isinstance(m, ToolMessage)][0]
@@ -175,7 +175,7 @@ async def test_tool_value_error_goes_back_to_model_and_loop_continues():
 
 
 async def test_client_actions_collected_from_tool_results():
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("list_events"), AIMessage("ok")]},
+    g, _ = make({"fast": [AIMessage("calendar"), call("list_events"), AIMessage("ok")]},
                 [tool("list_events", "calendar", [], False, fn=lambda **kw: {"client_action": {"type": "set_alarm", "time": "06:00"}})])
     out = await g.ainvoke(say(), CFG)
     assert out["client_actions"] == [{"type": "set_alarm", "time": "06:00"}]
@@ -184,7 +184,7 @@ async def test_client_actions_collected_from_tool_results():
 async def test_tool_key_error_is_invalid_arguments_and_loop_continues():
     def bad(**kw):
         raise KeyError("Nowhere/Land")
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("list_events"), AIMessage("Let me fix that.")]},
+    g, _ = make({"fast": [AIMessage("calendar"), call("list_events"), AIMessage("Let me fix that.")]},
                 [tool("list_events", "calendar", [], False, fn=bad)])
     out = await g.ainvoke(say(), CFG)
     tm = [m for m in out["messages"] if isinstance(m, ToolMessage)][0]
@@ -199,8 +199,7 @@ async def test_audit_failure_does_not_break_turn_or_hide_result():
     calls = []
     reg = Registry()
     reg.add(tool("list_events", "calendar", calls, needs_confirm=False))
-    g = build_graph(FakeProvider({"fast": [AIMessage("calendar")],
-                                  "strong": [call("list_events"), AIMessage("You have gym.")]}),
+    g = build_graph(FakeProvider({"fast": [AIMessage("calendar"), call("list_events"), AIMessage("You have gym.")]}),
                     reg, BrokenAudit(), InMemorySaver(), "Europe/Berlin")
     out = await g.ainvoke(say(), CFG)
     assert calls == [("list_events", {})]
@@ -243,9 +242,10 @@ async def test_abandoned_interrupt_history_is_repaired_for_model():
     calls = []
     reg = Registry()
     reg.add(tool("create_event", "calendar", calls))
-    prov = FakeProvider({"fast": [AIMessage("calendar"), AIMessage("calendar")], "strong": []})
+    prov = FakeProvider({"fast": []})
     SEEN.clear()
-    prov._models["strong"] = RecChat(script=[call("create_event", id="old"), AIMessage("fine")])
+    # "make event" skips the router by keyword; "never mind, hello" goes through it
+    prov._models["fast"] = RecChat(script=[call("create_event", id="old"), AIMessage("calendar"), AIMessage("fine")])
     g = build_graph(prov, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
     out = await g.ainvoke(say("make event"), CFG)
     assert "__interrupt__" in out
@@ -266,7 +266,7 @@ def described(name, domain, calls, describe):
 async def test_interrupt_payload_includes_summary_from_describe():
     seen = []
     t = described("create_event", "calendar", [], lambda a: seen.append(a) or "Create 'Gym'")
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("create_event", {"summary": "Gym"}), AIMessage("x")]}, [t])
+    g, _ = make({"fast": [AIMessage("calendar"), call("create_event", {"summary": "Gym"}), AIMessage("x")]}, [t])
     out = await g.ainvoke(say(), CFG)
     act = out["__interrupt__"][0].value["actions"][0]
     assert act == {"tool": "create_event", "args": {"summary": "Gym"}, "summary": "Create 'Gym'"}
@@ -279,7 +279,7 @@ async def test_describe_failure_still_interrupts_without_summary():
 
     calls = []
     t = described("create_event", "calendar", calls, boom)
-    g, _ = make({"fast": [AIMessage("calendar")], "strong": [call("create_event", {"summary": "Gym"}), AIMessage("x")]}, [t])
+    g, _ = make({"fast": [AIMessage("calendar"), call("create_event", {"summary": "Gym"}), AIMessage("x")]}, [t])
     out = await g.ainvoke(say(), CFG)
     assert out["__interrupt__"][0].value["actions"] == [{"tool": "create_event", "args": {"summary": "Gym"}}]
     assert calls == []
@@ -304,17 +304,17 @@ async def test_prompt_has_weekday_and_date(monkeypatch):
 # --- audit labels ---
 async def test_blocked_calls_are_labelled_blocked_and_executed_ones_approved():
     calls = []
-    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("list_tasks"), AIMessage("sorry")]},
+    g, audit = make({"fast": [AIMessage("calendar"), call("list_tasks"), AIMessage("sorry")]},
                     [tool("list_tasks", "tasks", calls, needs_confirm=False)])
     await g.ainvoke(say(), CFG)  # other-domain tool: blocked even though it needs no confirmation
     assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["blocked"]
 
-    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("rm_rf"), AIMessage("sorry")]}, [])
+    g, audit = make({"fast": [AIMessage("calendar"), call("rm_rf"), AIMessage("sorry")]}, [])
     await g.ainvoke(say(), CFG)
     await g.ainvoke(Command(resume=True), CFG)
     assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["blocked"]
 
-    g, audit = make({"fast": [AIMessage("calendar")], "strong": [call("create_event"), AIMessage("ok")]},
+    g, audit = make({"fast": [AIMessage("calendar"), call("create_event"), AIMessage("ok")]},
                     [tool("create_event", "calendar", calls)])
     await g.ainvoke(say(), CFG)
     await g.ainvoke(Command(resume=True), CFG)
@@ -560,3 +560,21 @@ def test_phone_domain_is_routable_and_named_in_router_prompt():
     from jarvis.agent.graph import ROUTER_PROMPT
     assert parse_domains("calendar, phone") == ["calendar", "phone"]
     assert "phone" in ROUTER_PROMPT
+
+
+def test_keyword_domain_only_when_exactly_one_domain_matches():
+    from jarvis.agent.graph import keyword_domain
+    assert keyword_domain("Move my meeting to 5") == ["calendar"]
+    assert keyword_domain("set an alarm for 6") == ["phone"]
+    assert keyword_domain("add that booking email to my calendar") is None  # two domains: router decides
+    assert keyword_domain("yes, do it") is None
+
+
+async def test_clean_confirmed_write_with_done_skips_the_wrap_up_llm_call():
+    calls = []
+    t = Tool(name="create_event", domain="calendar", description="d", args_schema=Args,
+             fn=lambda **kw: calls.append(kw) or {"ok": True}, done=lambda r: "Created it.")
+    g, _ = make({"fast": [call("create_event")]}, [t])  # script has no wrap-up and no router message
+    await g.ainvoke(say("add a meeting"), CFG)
+    out = await g.ainvoke(Command(resume=True), CFG)
+    assert calls == [{}] and turn_replies(out["messages"]) == ["Created it."]

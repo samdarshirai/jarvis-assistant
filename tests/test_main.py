@@ -324,3 +324,17 @@ async def test_lifespan_refuses_voice_during_teardown_and_drains_abandoned_steps
         app.state.voice.steps.add(t)
     assert app.state.voice is None  # new connections get 1013 while the app shuts down
     assert done == ["audited"]  # teardown waited for the step before the saver and pool closed
+
+
+def test_cached_service_reuses_then_rebuilds_after_ttl():
+    from jarvis.main import cached_service
+    now, n = [0.0], [0]
+
+    def build():
+        n[0] += 1
+        return n[0]
+
+    get = cached_service(build, ttl=10, clock=lambda: now[0])
+    assert get() == get() == 1
+    now[0] = 11
+    assert get() == 2
