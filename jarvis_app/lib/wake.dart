@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
@@ -30,6 +32,7 @@ class WakeTaskHandler extends TaskHandler {
   sherpa.OnlineStream? _stream;
   StreamSubscription<Uint8List>? _sub;
   bool _listening = false;
+  int _chunks = 0;
 
   /// The native library reads model files from disk, so copy the bundled assets out once.
   Future<sherpa.KeywordSpotter> _spotter() async {
@@ -47,7 +50,7 @@ class WakeTaskHandler extends TaskHandler {
         debug: false,
       ),
       keywordsFile: '${dir.path}/keywords.txt',
-      keywordsThreshold: 0.25, // lower = fewer false accepts, higher = fewer misses; tune on the phone
+      keywordsThreshold: 0.15, // lower = fewer false accepts, higher = fewer misses; tune on the phone
       keywordsScore: 1.0,
     ));
   }
@@ -62,15 +65,22 @@ class WakeTaskHandler extends TaskHandler {
       _listening = true;
       _sub = pcm.listen((bytes) {
         if (!_listening) return;
-        final s16 = bytes.buffer.asInt16List(bytes.offsetInBytes, bytes.lengthInBytes ~/ 2);
-        final f32 = Float32List(s16.length);
-        for (var i = 0; i < s16.length; i++) {
-          f32[i] = s16[i] / 32768.0;
+        final pcm16 = ByteData.sublistView(bytes); // asInt16List throws when the chunk starts at an odd offset
+        final f32 = Float32List(bytes.lengthInBytes ~/ 2);
+        for (var i = 0; i < f32.length; i++) {
+          f32[i] = pcm16.getInt16(i * 2, Endian.little) / 32768.0;
+        }
+        if (++_chunks % 20 == 0) { // TEMP debug: audio level reaching the spotter
+          var peak = 0.0;
+          for (final v in f32) { peak = math.max(peak, v.abs()); }
+          debugPrint('wake: chunks=$_chunks len=${f32.length} peak=${peak.toStringAsFixed(3)}');
         }
         stream.acceptWaveform(samples: f32, sampleRate: 16000);
         while (kws.isReady(stream)) {
           kws.decode(stream);
-          if (kws.getResult(stream).keyword.isNotEmpty) {
+          final r = kws.getResult(stream).keyword;
+          if (r.isNotEmpty) {
+            debugPrint('wake: DETECTED $r');
             kws.reset(stream);
             _onWake();
             return;

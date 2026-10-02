@@ -16,6 +16,12 @@ class RecordMic implements Mic {
         numChannels: 1,
         echoCancel: true, // barge-in depends on the mic not hearing Jarvis's own speaker
         noiseSuppress: true,
+        // echoCancel alone is ignored on the default mic source; the voice-communication source enables the hardware AEC.
+        androidConfig: AndroidRecordConfig(
+          audioSource: AndroidAudioSource.voiceCommunication,
+          audioManagerMode: AudioManagerMode.modeInCommunication,
+          speakerphone: true, // communication mode otherwise plays through the earpiece
+        ),
       ));
 
   @override
