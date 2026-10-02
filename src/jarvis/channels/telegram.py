@@ -16,9 +16,10 @@ THREAD = {"configurable": {"thread_id": "owner"}, "recursion_limit": 40}
 FAIL_TEXT = "Something went wrong. Please try again."
 EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you are unsure."
 PENDING_TEXT = "Let's sort out the pending action first, confirm or cancel it."
+RAW_CAP, CARD_MAX = 1500, 4000
 HANDLED_TEXT = "Already handled."
 PHONE_OFFLINE_TEXT = "Phone action not run: the Jarvis voice app is not connected."
-WARN_UNTRUSTED = "⚠ Proposed after reading email content — check recipient and text.\n"
+WARN_UNTRUSTED = "⚠ Proposed after reading third-party content (email or web) — check recipient and text.\n"
 
 
 def keyboard(interrupt_id: str) -> InlineKeyboardMarkup:
@@ -27,13 +28,25 @@ def keyboard(interrupt_id: str) -> InlineKeyboardMarkup:
                                   InlineKeyboardButton("Cancel", callback_data=f"no:{interrupt_id}")]])
 
 
+def _clip(s: str, cap: int) -> str:
+    return s if len(s) <= cap else s[:cap] + f"… ({len(s)} chars total)"
+
+
 def format_confirmation(payload: dict) -> str:
-    lines = []
-    for a in payload["actions"]:
-        raw = f"{a['tool']}: {json.dumps(a['args'], ensure_ascii=False)}"
-        lines.append(f"• {a['summary']}\n  ({raw})" if a.get("summary") else f"• {raw}")
+    # Telegram rejects messages over 4096 chars and an unsendable card wedges the pending interrupt: clip the raw args
     head = WARN_UNTRUSTED if payload.get("after_untrusted") else ""
-    return head + "Confirm this action?\n" + "\n".join(lines)
+
+    def build(cap):
+        lines = []
+        for a in payload["actions"]:
+            raw = _clip(f"{a['tool']}: {json.dumps(a['args'], ensure_ascii=False)}", cap)
+            lines.append(f"• {a['summary']}\n  ({raw})" if a.get("summary") else f"• {raw}")
+        return head + "Confirm this action?\n" + "\n".join(lines)
+
+    cap = RAW_CAP
+    while cap > 0 and len(build(cap)) > CARD_MAX:  # ponytail: halving; summaries are short so this ends fast
+        cap //= 2
+    return build(cap)
 
 
 class TelegramChannel:

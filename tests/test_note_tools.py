@@ -49,7 +49,7 @@ def test_describe_shows_title_and_a_body_preview_so_pasted_web_text_is_visible()
     r = reg(s)
     long = "w" * 500
     d = r.get("create_note").describe({"title": "Vacuums", "body": long})
-    assert d.startswith("Save note 'Vacuums': ") and d.endswith("…") and len(d) < 260
+    assert d.startswith("Save note 'Vacuums': ") and d.endswith("… (+300 more chars)") and len(d) < 260
     assert r.get("create_note").describe({"title": "Empty"}) == "Save note 'Empty'"
     n = s.create("Plan", "x")
     assert r.get("append_note").describe({"note_id": n["id"], "text": "more"}) == "Add to note 'Plan': more"

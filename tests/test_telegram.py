@@ -354,3 +354,27 @@ async def test_pending_card_from_another_channel_is_reoffered_with_working_butto
     c2 = chat()
     await ch.on_button(button_update(c2, ids(c)[0]), None)
     assert calls == [{"summary": "Gym"}] and sent(c2) == [("Created.", {})]
+
+
+def test_oversized_cards_stay_under_the_telegram_limit_and_keep_summary_and_warning():
+    note = {"tool": "create_note", "args": {"title": "T", "body": "n" * 20000}, "summary": "Save note 'T': nnn"}
+    draft = {"tool": "send_draft", "args": {"draft_id": "d1", "body": "g" * 20000}, "summary": "Send draft to bob"}
+    card = format_confirmation({"actions": [note, draft], "after_untrusted": True})
+    assert len(card) < 4096
+    assert card.startswith(WARN_UNTRUSTED) and "Save note 'T': nnn" in card and "Send draft to bob" in card
+    assert "chars total" in card
+    many = {"actions": [{"tool": "create_note", "args": {"body": "x" * 5000}, "summary": f"s{i}"} for i in range(8)]}
+    assert len(format_confirmation(many)) < 4096
+
+
+async def test_oversized_card_is_offered_with_working_buttons():
+    big = AIMessage("", tool_calls=[{"name": "create_event", "args": {"summary": "x" * 20000}, "id": "1",
+                                     "type": "tool_call"}])
+    calls = []
+    ch = make_channel({"fast": [AIMessage("calendar"), big, AIMessage("Created.")]}, calls)
+    c = chat()
+    await ch.on_text(text_update(c), None)
+    (card, kw), = sent(c)
+    assert len(card) < 4096 and "reply_markup" in kw
+    await ch.on_button(button_update(chat(), ids(c)[0]), None)
+    assert calls == [{"summary": "x" * 20000}]  # the real args still run in full

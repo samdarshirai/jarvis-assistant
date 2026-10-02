@@ -149,3 +149,26 @@ async def test_remember_goes_through_the_gate_then_shows_up_in_the_next_prompt(p
     await g.ainvoke(hello("how are you"), CFG)
     last_system = provider._models["fast"].seen[-1][0].content
     assert "(#" in last_system and "I like window seats" in last_system
+
+
+async def test_note_card_after_a_web_read_in_an_earlier_step_is_flagged_untrusted():
+    from jarvis.tools.registry import Tool
+    from pydantic import BaseModel
+
+    class A(BaseModel):
+        query: str = ""
+        title: str = ""
+        body: str = ""
+
+    reg = Registry()
+    reg.add(Tool(name="web_search", domain="research", description="d", args_schema=A,
+                 fn=lambda **kw: {"results": []}, needs_confirm=False, untrusted=True, untrusted_tag="untrusted_web"))
+    reg.add(Tool(name="create_note", domain="notes", description="d", args_schema=A, fn=lambda **kw: {"id": 1}))
+    call = lambda name, args: AIMessage("", tool_calls=[{"name": name, "args": args, "id": name, "type": "tool_call"}])
+    provider = FakeProvider({"fast": [AIMessage("research, notes"), call("create_note", {"title": "T", "body": "b"}),
+                                      AIMessage("saved")],
+                             "strong": [call("web_search", {"query": "vacuums"}), AIMessage("found it")]})
+    g = build_graph(provider, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
+    out = await g.ainvoke(hello("research robot vacuums and save a note"), CFG)
+    payload = out["__interrupt__"][0].value
+    assert payload["actions"][0]["tool"] == "create_note" and payload["after_untrusted"] is True

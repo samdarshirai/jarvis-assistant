@@ -33,7 +33,7 @@ class ListNotesArgs(BaseModel):
 
 
 def _preview(text: str) -> str:
-    return text if len(text) <= 200 else text[:200] + "…"
+    return text if len(text) <= 200 else f"{text[:200]}… (+{len(text) - 200} more chars)"
 
 
 def register_note_tools(registry: Registry, store) -> None:

@@ -150,7 +150,7 @@ def fetch_page(url: str, *, client: httpx.Client | None = None, resolve=socket.g
             parts, ip = _check_url(url, resolve)
             pinned, hostport, ext = _pin(parts, ip)
             try:
-                with client.stream("GET", pinned, headers={"User-Agent": "Jarvis/1.0", "Host": hostport},
+                with client.stream("GET", pinned, headers={"User-Agent": "Jarvis/1.0", "Host": hostport, "Accept-Encoding": "identity"},
                                    extensions=ext, follow_redirects=False) as r:
                     if r.is_redirect:
                         target = r.headers.get("location")
@@ -162,7 +162,7 @@ def fetch_page(url: str, *, client: httpx.Client | None = None, resolve=socket.g
                         raise FetchError(f"The page returned HTTP {r.status_code}.")
                     ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
                     if ctype not in TEXT_TYPES:
-                        raise FetchError(f"Can't read {ctype or 'unknown'} content.")
+                        raise FetchError("That page isn't text or HTML, so it can't be read.")
                     raw = bytearray()
                     for chunk in r.iter_bytes():
                         raw += chunk

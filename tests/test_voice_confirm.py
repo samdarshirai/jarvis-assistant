@@ -143,7 +143,7 @@ def test_untrusted_card_is_warned_in_the_frame_and_spoken():
         read(ws)
         card, _ = ask(ws)
         assert card["after_untrusted"] is True
-        assert h.tts.spoken[0].startswith("Heads up, I came up with this after reading an email, so double-check it.")
+        assert h.tts.spoken[0].startswith("Heads up, I came up with this after reading an email or a web page, so double-check it.")
         assert calls == []
 
 
