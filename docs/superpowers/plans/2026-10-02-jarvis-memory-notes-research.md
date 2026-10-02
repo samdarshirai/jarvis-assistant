@@ -1799,7 +1799,7 @@ async def test_remember_goes_through_the_gate_then_shows_up_in_the_next_prompt(p
 - [ ] **Step 2: Run to verify failure**
 
 Run: `pytest tests/test_config.py tests/test_knowledge_graph.py -v`
-Expected: config test FAILS (`'Settings' object has no attribute 'tavily_api_key'`). The end-to-end test may already pass because Task 5 and 6 built its parts;
+Expected: config test FAILS (`'Settings' object has no attribute 'tavily_api_key'`). The end-to-end test may already pass because Tasks 5 and 6 built its parts; if it fails, the failure points at a real integration gap to fix before continuing.
 
 - [ ] **Step 3: Implement**
 
