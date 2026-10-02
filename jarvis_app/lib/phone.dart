@@ -12,7 +12,7 @@ class AndroidPhoneActions implements PhoneActions {
     final all = await FlutterContacts.getAll(properties: {ContactProperty.phone});
     return pickContact(name, [
       for (final c in all)
-        if (c.phones.isNotEmpty) (c.displayName ?? '', c.phones.first.number)
+        if (c.phones.isNotEmpty && c.phones.first.number.trim().isNotEmpty) (c.displayName ?? '', c.phones.first.number)
     ]);
   }
 
@@ -20,7 +20,16 @@ class AndroidPhoneActions implements PhoneActions {
   Future<String?> run(Map<String, dynamic> action) async {
     String? phone;
     if (action['type'] == 'compose_message') {
-      phone = await _phoneFor('${action['contact']}');
+      if (action['contact'] is! String ||
+          action['text'] is! String ||
+          (action['app'] != 'whatsapp' && action['app'] != 'sms')) {
+        return 'Unsupported phone action: compose_message.';
+      }
+      try {
+        phone = await _phoneFor(action['contact'] as String);
+      } catch (e) {
+        return 'Could not read contacts: $e';
+      }
       if (phone == null) return 'No contact named ${action['contact']}.';
     }
     final spec = buildIntent(action, phone);

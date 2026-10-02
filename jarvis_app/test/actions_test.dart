@@ -65,6 +65,11 @@ void main() {
       expect(pickContact('anna', people), '111'); // prefix of "Anna Schmidt" (first prefix match)
       expect(pickContact('lee', people), '444');
     });
+    test('exact beats earlier prefix', () => expect(pickContact('anna', [('Annabel', '1'), ('Anna', '2')]), '2'));
+    test('blank numbers are skipped', () {
+      expect(pickContact('anna', [('Anna', ''), ('Anna Schmidt', '111')]), '111');
+      expect(pickContact('anna', [('Anna', '  ')]), isNull);
+    });
     test('no match is null', () => expect(pickContact('zed', people), isNull));
   });
 }

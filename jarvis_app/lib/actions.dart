@@ -52,7 +52,7 @@ String? pickContact(String name, List<(String, String)> contacts) {
   if (n.isEmpty) return null;
   for (final test in <bool Function(String)>[(s) => s == n, (s) => s.startsWith(n), (s) => s.contains(n)]) {
     for (final (display, phone) in contacts) {
-      if (test(display.toLowerCase())) return phone;
+      if (phone.trim().isNotEmpty && test(display.toLowerCase())) return phone;
     }
   }
   return null;
