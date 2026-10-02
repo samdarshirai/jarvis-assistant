@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import 'audio.dart';
@@ -11,7 +13,31 @@ import 'ws_socket.dart';
 /// Lets the wake-word, assistant and push entry points start a session on the one controller.
 class AppHost {
   static SessionController? controller;
-  static Future<void> startSession({String? speakText}) async => controller?.start(speakText: speakText);
+  static DateTime Function() now = DateTime.now; // injectable for tests
+  static const pendingTtl = Duration(seconds: 30);
+  static ({String? speakText, DateTime at})? _pending;
+
+  /// Cold-start entry points can fire before the controller exists: remember the last request and run it on attach.
+  static Future<void> startSession({String? speakText}) async {
+    final c = controller;
+    if (c != null) return c.start(speakText: speakText);
+    _pending = (speakText: speakText, at: now());
+  }
+
+  /// Sets the controller (null clears it and any pending request) and drains a fresh pending request exactly once.
+  static void attach(SessionController? c) {
+    controller = c;
+    if (c == null) {
+      _pending = null;
+      return;
+    }
+    final p = _pending;
+    _pending = null;
+    if (p == null || now().difference(p.at) > pendingTtl) return;
+    scheduleMicrotask(() {
+      if (controller == c) c.start(speakText: p.speakText);
+    });
+  }
 }
 
 class JarvisApp extends StatefulWidget {
@@ -44,7 +70,7 @@ class _JarvisAppState extends State<JarvisApp> {
   @override
   void dispose() {
     _controller?.dispose();
-    if (AppHost.controller == _controller) AppHost.controller = null;
+    if (AppHost.controller == _controller) AppHost.attach(null);
     super.dispose();
   }
 
@@ -62,7 +88,12 @@ class _JarvisAppState extends State<JarvisApp> {
             fcmToken: widget.fcmToken,
             onEnded: widget.onSessionEnded,
           );
-    AppHost.controller = _controller;
+    // unpaired: no controller yet, but keep any pending cold-start request until pairing creates one
+    if (_controller == null) {
+      AppHost.controller = null;
+    } else {
+      AppHost.attach(_controller);
+    }
   }
 
   @override
