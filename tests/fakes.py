@@ -141,3 +141,21 @@ class FakeProactiveStore:
 
     def purge(self, days=90):
         pass
+
+
+class FakeNotifier:
+    """Records what the jobs would have sent: (kind, text, undo_event_id)."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    async def telegram(self, text, undo_event_id=None):
+        self.calls.append(("telegram", text, undo_event_id))
+
+    async def push(self, text):
+        self.calls.append(("push", text, None))
+        return 1
+
+    async def both(self, text):
+        await self.telegram(text)
+        await self.push(text)
