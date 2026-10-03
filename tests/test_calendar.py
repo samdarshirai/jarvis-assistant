@@ -157,7 +157,9 @@ def test_create_event_describe_is_offline():
     r, svc = described_registry()
     s = r.get("create_event").describe({"summary": "Gym", "start": "2026-10-06T07:00:00", "end": "2026-10-06T08:00:00"})
     assert s == "Create 'Gym' Tue 2026-10-06 07:00-08:00"
-    svc.events.assert_not_called()
+    # the card now reads the calendar for conflicts, but must never write
+    for w in ("insert", "update", "patch", "delete"):
+        getattr(svc.events.return_value, w).assert_not_called()
 
 
 def test_list_for_proactive_maps_flags_and_drops_cancelled():

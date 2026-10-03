@@ -55,9 +55,10 @@ def cached_service(build, ttl: float = 1800.0, clock=time.monotonic):
 
 def build_registry(svc, tz: str, pool=None, tavily_key: str = "") -> Registry:
     registry = Registry()
-    register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz)
+    gmail = GmailClient(svc("gmail", "v1"))
+    register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz, gmail.sent_to)
     register_task_tools(registry, TasksClient(svc("tasks", "v1")))
-    register_gmail_tools(registry, GmailClient(svc("gmail", "v1")))
+    register_gmail_tools(registry, gmail)
     register_phone_tools(registry)
     if pool is not None:
         register_memory_tools(registry, MemoryStore(pool))
