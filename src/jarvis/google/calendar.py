@@ -130,6 +130,11 @@ class CalendarClient:
                 kwargs["sendUpdates"] = "all"
         return _slim(self._svc().events().patch(calendarId="primary", eventId=target, body=body, **kwargs).execute())
 
+    def attendee_emails(self, event_id: str, scope: str) -> list[str]:
+        target = self._target(event_id, scope)
+        current = self._svc().events().get(calendarId="primary", eventId=target).execute().get("attendees", [])
+        return [a["email"] for a in current if a.get("email")]
+
     def delete_event(self, event_id, scope) -> dict:
         target = self._target(event_id, scope)
         self._svc().events().delete(calendarId="primary", eventId=target).execute()

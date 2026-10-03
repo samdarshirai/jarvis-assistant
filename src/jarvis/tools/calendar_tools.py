@@ -178,6 +178,25 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
         ev = client.get_event(event_id)
         return f"'{ev['summary']}' ({_range(ev['start'], ev['end'])})"
 
+    def add_invitees_lines(a) -> str:
+        if not a.get("add_attendees"):
+            return ""
+        wanted = clean_recipients(", ".join(a["add_attendees"]))
+        try:
+            existing = client.attendee_emails(a["event_id"], a["scope"])
+        except Exception:
+            log.exception("existing attendees lookup failed")
+            return invite_line("Adds invitees (they are emailed)", wanted) + "\n(could not check existing guests)"
+        have = {x.casefold() for x in existing}
+        new = [x for x in wanted if x.casefold() not in have]
+        if not new:  # mirrors CalendarClient.update_event: nothing new, nothing sent
+            return "\nAdds invitees: none new (already invited)"
+        text = invite_line("Adds invitees (they are emailed)", new)
+        if existing:
+            shown = ", ".join(existing[:10]) + (f" and {len(existing) - 10} more" if len(existing) > 10 else "")
+            text += f"\nExisting guests also get an update email: {shown}"
+        return text
+
     def describe_update(a):
         ev = client.get_event(a["event_id"])
         changes = []
@@ -188,7 +207,7 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
                 changes.append(f"{k} -> {_when(parse_dt(a[k], tz).isoformat())}")
         series = ", whole recurring series" if a["scope"] == "all" else ""
         text = f"Change '{ev['summary']}' ({_range(ev['start'], ev['end'])}){series}: " + "; ".join(changes)
-        text += reminder_line(a.get("reminders")) + invite_line("Adds invitees (they are emailed)", a.get("add_attendees"))
+        text += reminder_line(a.get("reminders")) + add_invitees_lines(a)
         if a["scope"] != "all" and ("start" in a or "end" in a):
             old_s, old_e = parse_dt(ev["start"], tz), parse_dt(ev["end"], tz)
             s = parse_dt(a["start"], tz) if "start" in a else old_s

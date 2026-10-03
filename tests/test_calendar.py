@@ -42,6 +42,19 @@ def test_update_scope_this_targets_instance_all_targets_series():
     assert svc.events.return_value.patch.call_args.kwargs["eventId"] == "r1"
 
 
+def test_attendee_emails_resolves_target_and_skips_entries_without_email():
+    c, svc = client()
+    g = svc.events.return_value.get
+    g.return_value.execute.return_value = {"id": "i1", "recurringEventId": "r1",
+                                           "attendees": [{"email": "Raj@X.com"}, {"displayName": "room"}, {"email": "m@y.org"}]}
+    assert c.attendee_emails("i1", "this") == ["Raj@X.com", "m@y.org"]
+    assert g.call_args.kwargs["eventId"] == "i1"
+    c.attendee_emails("i1", "all")
+    assert g.call_args.kwargs["eventId"] == "r1"
+    g.return_value.execute.return_value = {"id": "i1"}
+    assert c.attendee_emails("i1", "this") == []
+
+
 def test_delete_scope_all_on_non_recurring_uses_own_id():
     c, svc = client()
     svc.events.return_value.get.return_value.execute.return_value = {"id": "e9"}

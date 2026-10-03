@@ -21,6 +21,7 @@ def setup(sent_to="default"):
     client = MagicMock()
     client.conflicts.return_value = []
     client.busy.return_value = []
+    client.attendee_emails.return_value = []
     r = Registry()
     register_calendar_tools(r, client, TZ, (lambda a: True) if sent_to == "default" else sent_to)
     return r, client
@@ -156,3 +157,47 @@ def test_writes_stay_confirm_gated():
     r, _ = setup()
     for name in ("create_event", "update_event", "delete_event"):
         assert r.needs_confirm(name) is True
+
+
+def upd(r, **kw):
+    return r.get("update_event").describe({"event_id": "e1", "scope": "this", "add_attendees": ["raj@x.com"], **kw})
+
+
+def test_update_card_names_existing_guests_who_also_get_an_email():
+    r, client = setup()
+    client.get_event.return_value = ev()
+    client.attendee_emails.return_value = ["mia@y.org", "Sam@z.io"]
+    text = upd(r, reminders=[60])
+    assert text.endswith("\nReminders: 1 hour before\nAdds invitees (they are emailed): raj@x.com"
+                         "\nExisting guests also get an update email: mia@y.org, Sam@z.io")
+    client.attendee_emails.assert_called_once_with("e1", "this")
+
+
+def test_update_card_with_invitee_already_on_the_event_sends_nothing():
+    r, client = setup()
+    client.get_event.return_value = ev()
+    client.attendee_emails.return_value = ["Raj@X.com", "mia@y.org"]
+    text = upd(r)
+    assert text.endswith("\nAdds invitees: none new (already invited)")
+    assert "emailed" not in text and "Existing guests" not in text
+
+
+def test_update_card_says_when_existing_guests_could_not_be_read():
+    r, client = setup()
+    client.get_event.return_value = ev()
+    client.attendee_emails.side_effect = RuntimeError("google down")
+    assert upd(r).endswith("(could not check existing guests)")
+
+
+def test_update_card_caps_the_existing_guest_list():
+    r, client = setup()
+    client.get_event.return_value = ev()
+    client.attendee_emails.return_value = [f"g{i}@x.com" for i in range(12)]
+    text = upd(r)
+    assert "g9@x.com" in text and "g10@x.com" not in text and text.endswith("and 2 more")
+
+
+def test_update_card_no_existing_guests_has_no_extra_line():
+    r, client = setup()
+    client.get_event.return_value = ev()
+    assert "Existing guests" not in upd(r)
