@@ -13,7 +13,7 @@ A single-user personal AI assistant (owner: Samdarshi) managing Google Calendar,
 | 4 | Memory, notes, research (FR-20..22, scenario 5 and 9) | DONE, merged |
 | 5 | Proactive features (morning brief, alerts, email-to-calendar FR-11 auto-detection, FR-23/24) | NOT STARTED |
 
-Specs and plans (all committed): `docs/superpowers/specs/2026-10-01-jarvis-agent-core-design.md`, `...-02-jarvis-gmail-design.md`, `...-02-jarvis-voice-design.md`; plans in `docs/superpowers/plans/` with the same names. `ACCEPTANCE.md` is the manual acceptance table (rows 1-47) and all setup steps.
+Specs and plans (all committed): `docs/superpowers/specs/2026-10-01-jarvis-agent-core-design.md`, `...-02-jarvis-gmail-design.md`, `...-02-jarvis-voice-design.md`; plans in `docs/superpowers/plans/` with the same names. `ACCEPTANCE.md` is the manual acceptance table (rows 1-48) and all setup steps.
 
 ## Stack and layout
 Python 3.11+ (host 3.14), FastAPI, LangGraph (+ Postgres checkpointer), langchain-openai against OpenRouter (`data_collection: "deny"`, `require_parameters: true`), python-telegram-bot 22 long-polling, Postgres 16 (audit log, encrypted Google OAuth token, `devices`, checkpointer), Google API client, Fernet, pydantic-settings, pytest + pytest-asyncio. Voice: Deepgram STT, Cartesia TTS over WebSocket, FCM push via HTTP v1 (httpx). App: Flutter, Android only, package `com.jarvis.jarvis_app`.
@@ -23,7 +23,7 @@ Python 3.11+ (host 3.14), FastAPI, LangGraph (+ Postgres checkpointer), langchai
 - `src/jarvis/channels/telegram.py`, `src/jarvis/voice/` (`ws.py` VoiceService/VoiceSession, `stt.py`, `tts.py`, `confirm.py`, `protocol.py`, `devices.py`, `token.py`, `push.py`, `client.py`), `src/jarvis/main.py` (lifespan wiring, `/health`, `/voice`).
 - `jarvis_app/` Flutter app (`lib/session.dart` SessionController with ports; `wake.dart`; `app.dart` AppHost with a pending-start slot; Kotlin assistant services under `android/app/src/main/kotlin/`).
 - `src/jarvis/memory.py`, `notes.py`, `web.py`, `tools/{memory,note,research}_tools.py`; the memory block is injected in every domain.
-- `tests/` 445 Python tests (fakes in `tests/fakes.py`, voice helpers in `tests/voice_helpers.py`); `jarvis_app/test/` 64 Flutter tests.
+- `tests/` 448 Python tests (fakes in `tests/fakes.py`, voice helpers in `tests/voice_helpers.py`); `jarvis_app/test/` 65 Flutter tests.
 
 ## Safety invariants (do not break)
 - Every side effect goes through the graph's `interrupt()` confirmation gate (in the graph, not the prompt). A mixed step (confirm-gated + non-gated call) never interrupts: the gated call is refused "propose it again by itself".
@@ -51,9 +51,10 @@ Python 3.11+ (host 3.14), FastAPI, LangGraph (+ Postgres checkpointer), langchai
 - 30-day conversation-transcript retention is NOT implemented (the Postgres checkpointer keeps full conversations, including email bodies, with no retention). Needs its own design; more significant now that voice turns land there too.
 - PRD scenario 7 ("evening in India" and "before 09:00 CET") is internally inconsistent; its acceptance check is held until the PRD owner clarifies.
 - Manual acceptance has NOT been run by the user: `ACCEPTANCE.md` rows 1-19 (Telegram, Gmail), 20-38 (Pixel: wake word, screen wake, barge-in/echo, intents, assistant long-press, push, latency vs PRD targets, battery) and 39-48 (memory, notes, research; needs `JARVIS_TAVILY_API_KEY`). Device-only behaviour is unverified: wake word, full-screen-intent wake, assistant role, FCM tap, Kotlin services, echo cancellation.
+- Known limits: search queries (sent to Tavily) and indexed URL variants (?d=a, ?d=b) are low-bandwidth leak channels that the fetch_page allowlist does not close.
 - Known limits: the voice reply is sent to TTS only after the graph turn completes (if measured p50 misses 1.5 s, stream the final agent tokens into TTS; ACCEPTANCE row 33); Telegram graph steps are not shielded; an abandoned voice step that fails is only logged.
 - Deferred minors: `PcmPlayer` never calls `closePlayer`; `PairingScreen` accepts empty/invalid URL and token; hard-coded `compileSdk = 37` needs platform 37 on every build machine; stop + quick restart can stop a newer session's mic (narrow race); unknown phone actions are shown on screen only (the protocol has no upstream error frame); Telegram `deliver_actions` raising after the reply; pubspec description placeholder; revoking a device does not end its live session and a 4401 shows as "Jarvis is offline"; raw JSON is read aloud for a gated tool without a `describe`; search_emails makes up to 21 sequential Gmail calls; `update_draft` lacks reply-subject normalisation; Bcc is dropped on `update_draft`; the 403 mapping matches "insufficient" anywhere in the error text.
 - Deliberate deviations from the voice spec (documented, safe): FCM via the HTTP v1 API with httpx instead of Firebase Admin; paste-only pairing (no QR); the voice fast tier applies to every domain except Gmail and research (calendar and tasks included; revisit after measuring scenarios 1, 2, 6, 9); a spoken "no" still cancels a `send_draft` card.
 
 ## Suggested next step
-Either run the manual acceptance (rows 1-47) on the Pixel and laptop first (it will surface real-world latency/echo/permission issues before more is built on top), or start sub-project 5 with `/superpowers:brainstorming` (decide whether the morning brief auto-plays or plays on tap; the tap-to-play path is already built).
+Either run the manual acceptance (rows 1-48) on the Pixel and laptop first (it will surface real-world latency/echo/permission issues before more is built on top), or start sub-project 5 with `/superpowers:brainstorming` (decide whether the morning brief auto-plays or plays on tap; the tap-to-play path is already built).

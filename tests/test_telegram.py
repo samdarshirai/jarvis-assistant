@@ -367,6 +367,34 @@ def test_oversized_cards_stay_under_the_telegram_limit_and_keep_summary_and_warn
     assert len(format_confirmation(many)) < 4096
 
 
+def u16(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def test_card_is_hard_clamped_for_unbounded_summaries_and_action_counts():
+    rem = {"tool": "remember", "args": {"text": "r" * 10000}, "summary": "Remember: " + "r" * 10000}
+    card = format_confirmation({"actions": [rem], "after_untrusted": True})
+    assert u16(card) < 4096 and card.startswith(WARN_UNTRUSTED) and card.endswith("…")
+    many = [{"tool": "create_task", "args": {"t": i}, "summary": f"Task {i}"} for i in range(80)]
+    assert u16(format_confirmation({"actions": many})) < 4096
+    ev = {"tool": "create_event", "args": {}, "summary": "e" * 5000}
+    note = {"tool": "create_note", "args": {}, "summary": "n" * 6000}
+    assert u16(format_confirmation({"actions": [ev]})) < 4096
+    assert u16(format_confirmation({"actions": [note]})) < 4096
+
+
+def test_card_clamp_counts_utf16_units_and_never_splits_a_character():
+    act = {"tool": "remember", "args": {}, "summary": "😀" * 3000}
+    card = format_confirmation({"actions": [act]})
+    assert u16(card) < 4096
+    card.encode("utf-16-le")  # raises on a lone surrogate
+
+
+def test_short_card_is_unchanged_by_the_clamp():
+    card = format_confirmation({"actions": [{"tool": "create_task", "args": {"t": "x"}, "summary": "Task x"}]})
+    assert not card.endswith("…") and "Task x" in card
+
+
 async def test_oversized_card_is_offered_with_working_buttons():
     big = AIMessage("", tool_calls=[{"name": "create_event", "args": {"summary": "x" * 20000}, "id": "1",
                                      "type": "tool_call"}])

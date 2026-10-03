@@ -46,7 +46,11 @@ def format_confirmation(payload: dict) -> str:
     cap = RAW_CAP
     while cap > 0 and len(build(cap)) > CARD_MAX:  # ponytail: halving; summaries are short so this ends fast
         cap //= 2
-    return build(cap)
+    card = build(cap)
+    # hard clamp: summaries and the action count are unbounded; Telegram counts UTF-16 units, so cut there and drop a split pair
+    if len(card.encode("utf-16-le")) // 2 >= CARD_MAX:
+        card = card.encode("utf-16-le")[: 2 * (CARD_MAX - 1)].decode("utf-16-le", errors="ignore") + "…"
+    return card
 
 
 class TelegramChannel:

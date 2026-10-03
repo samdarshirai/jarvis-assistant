@@ -33,7 +33,7 @@ class SessionScreen extends StatelessWidget {
                   if (controller.error != null) Text(controller.error!, style: const TextStyle(color: Colors.red)),
                   const Spacer(),
                   if (c != null) ...[
-                    if (c.afterUntrusted) const Text('⚠ Proposed after reading email content — check recipient and text.'),
+                    if (c.afterUntrusted) const Text('⚠ Proposed after reading third-party content (email or web) — check recipient and text.'),
                     Text(c.summary),
                     const SizedBox(height: 12),
                     Row(children: [
