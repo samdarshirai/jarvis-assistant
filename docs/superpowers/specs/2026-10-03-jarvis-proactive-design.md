@@ -37,21 +37,26 @@ Delivery:
 - `mail_seen(message_id pk, outcome, event_id, at)`
 - `alerts_sent(key pk, at)` — dedupe across sweeps and restarts
 - `auto_events(event_id pk, message_id, at)` — Undo whitelist and daily cap
+- `proactive_state(key pk, value)` — the mail-poll cursor (a Unix timestamp; first run starts from now).
 Rows older than 90 days are purged with the audit purge.
 
 ## Config (pydantic-settings, `.env.example` updated)
-`brief_enabled=true`, `brief_time="07:30"`, `leave_lead_minutes=30`, `mail_poll_minutes=5`, `auto_event_cap=5` (per day). Time zone is the existing `timezone` setting.
+`brief_enabled=true`, `brief_time="07:30"`, `leave_lead_minutes=30`, `mail_poll_minutes=5`, `auto_event_cap=5` (rolling 24 h). Time zone is the existing `timezone` setting.
 
 ## Flows
 
 ### Email auto-detect
 1. Every poll, list inbox mail newer than the last check; skip any `message_id` in `mail_seen`. First run starts from "now" (no backfill).
-2. **Prefilter** (plain code): keyword or `.ics` match (flight, booking, reservation, appointment, invitation, itinerary, ticket). No match: record `skipped`, no LLM.
+2. **Prefilter** (plain code): keyword match on subject and snippet (no attachment check; flight, booking, reservation, appointment, invitation, itinerary, ticket). No match: record `skipped`, no LLM.
 3. **Extract:** one fast-tier LLM call, no tools, body wrapped as `<untrusted_email>`. Output is JSON for a fixed schema (kind, title, start, end, location). Code validates: start in the future and within one year, end after start, title and location length-capped, kind in an allowed set. Invalid: record `invalid`, no write.
 4. **Dedupe:** skip if the message id was processed; skip if the calendar already has an event whose time overlaps start ±2 h and whose title is similar or whose location matches; events Jarvis creates store the message id in private `extendedProperties`.
 5. **Write:** plain code creates the event. Flights: reminders at 24 h (check-in) and about 3 h (leave for airport). Other kinds: 1 day and 1 hour. Refuse when `auto_event_cap` is reached today (record `capped`, notify once).
 6. **Notify** on Telegram: "Added: <title>, <when>" with **Undo**. Record `mail_seen` and `auto_events`, and write an audit row.
 7. **Undo** deletes only an event present in `auto_events` and removes its row. A stale or repeated tap answers "Already handled." Audited.
+
+A message that fails (LLM error, bad data) is recorded as `error` and not retried; at most 20 new messages are examined per poll.
+
+Audit trail: `auto_event_attempt` (before the insert), then `auto_event_created` on success, `auto_event_undone` on Undo, `mail_error` on failure. If a crash or timeout left an event created by this same message (whitelisted id, or a 409 on our own deterministic id), the next poll treats it as created: it records it, audits it and sends the Undo notice. A 409 on a foreign event stays a silent duplicate.
 
 ### Morning brief
 Each source (events, tasks, mail) is fetched in its own try/except; a failed source becomes "X unavailable" in the text. One tool-less LLM call writes about 60-80 spoken words (scenario 2: under 20 s of speech); email subjects and snippets are wrapped untrusted. On LLM failure, a templated list is used. Send via Telegram and push.
