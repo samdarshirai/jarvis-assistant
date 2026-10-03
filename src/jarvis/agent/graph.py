@@ -166,9 +166,17 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
     def after_agent(state: State) -> str:
         return "gate" if state["messages"][-1].tool_calls else "advance"
 
+    def untrusted_seen(state: State) -> bool:
+        return bool(state.get("read_untrusted")) or untrusted_in_window(state["messages"])
+
+    def gated(name: str, seen: bool) -> bool:
+        tool = registry.get(name)
+        return registry.needs_confirm(name) or bool(tool and tool.confirm_after_untrusted and seen)
+
     async def gate(state: State) -> Command[Literal["tools", "reject"]]:
         calls = state["messages"][-1].tool_calls
-        pending = [c for c in calls if registry.needs_confirm(c["name"])]
+        seen = untrusted_seen(state)
+        pending = [c for c in calls if gated(c["name"], seen)]
         if not pending:
             return Command(goto="tools", update={"approved": True})
         if len(pending) < len(calls):  # confirmed text must not change under the card: propose writes alone
@@ -185,7 +193,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
                     log.exception("describe failed for %s", c["name"])
             actions.append(action)
         payload: dict = {"actions": actions}
-        if state.get("read_untrusted") or untrusted_in_window(state["messages"]):
+        if seen:
             payload["after_untrusted"] = True
         decision = interrupt(payload)
         if decision is True:
@@ -206,9 +214,10 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         out = []
         ran_untrusted = False
         dones: list[str] = []  # one wrap-up line per clean confirmed write; used only if every call in the step has one
+        seen = untrusted_seen(state)
         for c in state["messages"][-1].tool_calls:
             tool = registry.get(c["name"])
-            confirm = registry.needs_confirm(c["name"])
+            confirm = gated(c["name"], seen)
             result: object
             t0 = time.monotonic()
             label = "blocked"
