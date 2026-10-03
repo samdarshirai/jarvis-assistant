@@ -28,7 +28,7 @@ ROUTER_PROMPT = (
     "'what does my day look like' -> calendar; 'am I free Friday' -> calendar; 'what do I have to do' -> tasks; "
     "'add that booking email to my calendar' -> gmail, calendar; 'set an alarm for 6 and put gym at 7 in my "
     "calendar' -> calendar, phone; 'research robot vacuums and save a note' -> research, notes; "
-    "'remember I like window seats' -> memory; 'add milk and eggs to my shopping list' -> tasks."
+    "'remember I like window seats' -> memory; 'add milk and eggs to my shopping list' -> tasks; 'invite Raj to lunch Friday at 12' -> gmail, calendar."
 )
 HISTORY = 40
 VOICE_NOTE = ("\nThis reply will be spoken aloud: use two or three short sentences, name sources by site, and never "
@@ -57,6 +57,8 @@ KEYWORDS = {
 
 def keyword_domain(text: str) -> list[str] | None:
     """Skip the router LLM call when exactly one domain's keywords appear; anything unclear goes to the router."""
+    if re.search(r"\binvit", text, re.IGNORECASE):  # inviting needs the gmail contact lookup: let the router plan it
+        return None
     hits = [d for d, rx in KEYWORDS.items() if re.search(rx, text, re.IGNORECASE)]
     return hits if len(hits) == 1 else None
 

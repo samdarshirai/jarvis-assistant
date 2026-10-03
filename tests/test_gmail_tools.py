@@ -28,12 +28,12 @@ def test_only_send_draft_confirms():
     r = reg()
     assert {t.name for t in r.for_domain("gmail") if t.needs_confirm} == {"send_draft"}
     assert {t.name for t in r.for_domain("gmail")} == {
-        "search_emails", "read_email", "create_draft", "update_draft", "send_draft"}
+        "search_emails", "read_email", "find_contact", "create_draft", "update_draft", "send_draft"}
 
 
 def test_reading_tools_are_untrusted_and_writers_are_not():
     r = reg()
-    assert {t.name for t in r.for_domain("gmail") if t.untrusted} == {"search_emails", "read_email"}
+    assert {t.name for t in r.for_domain("gmail") if t.untrusted} == {"search_emails", "read_email", "find_contact"}
 
 
 def test_only_send_draft_has_describe():
@@ -71,3 +71,17 @@ def test_search_limit_is_bounded_by_the_schema():
     for bad in (0, 21):
         with pytest.raises(ValidationError):
             schema(query="x", limit=bad)
+
+
+def test_find_contact_is_a_read_only_untrusted_gmail_tool():
+    from unittest.mock import MagicMock
+    from jarvis.tools.gmail_tools import register_gmail_tools
+    from jarvis.tools.registry import Registry
+    client = MagicMock()
+    client.find_contacts.return_value = [{"name": "Raj", "address": "raj@x.com", "you_emailed": True, "seen": 3}]
+    r = Registry()
+    register_gmail_tools(r, client)
+    t = r.get("find_contact")
+    assert t.domain == "gmail" and t.needs_confirm is False and t.untrusted is True
+    assert t.fn(name="raj") == [{"name": "Raj", "address": "raj@x.com", "you_emailed": True, "seen": 3}]
+    client.find_contacts.assert_called_once_with(name="raj")

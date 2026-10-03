@@ -695,3 +695,12 @@ def test_shopping_words_route_to_tasks_and_the_prompts_mention_shopping():
     assert keyword_domain("what's on my grocery list") == ["tasks"]
     assert "shopping" in ROUTER_PROMPT
     assert "add_shopping_items" in DOMAINS["tasks"].prompt
+
+
+def test_invite_requests_skip_the_keyword_shortcut_and_the_prompts_explain_the_lookup():
+    from jarvis.agent.domains import DOMAINS
+    from jarvis.agent.graph import ROUTER_PROMPT, keyword_domain
+    assert keyword_domain("schedule a meeting and invite Raj") is None
+    assert keyword_domain("Move my meeting to 5") == ["calendar"]
+    assert "invite" in ROUTER_PROMPT and "gmail, calendar" in ROUTER_PROMPT
+    assert "find_contact" in DOMAINS["gmail"].prompt
