@@ -686,3 +686,12 @@ async def test_cancelled_gated_shopping_add_writes_nothing():
     await g.ainvoke(Command(resume=False), CFG)
     assert adds == []
     assert "cancelled" in [r["confirmation"] for r in audit.records if r["kind"] == "tool"]
+
+
+def test_shopping_words_route_to_tasks_and_the_prompts_mention_shopping():
+    from jarvis.agent.domains import DOMAINS
+    from jarvis.agent.graph import ROUTER_PROMPT, keyword_domain
+    assert keyword_domain("add milk to my shopping list") == ["tasks"]
+    assert keyword_domain("what's on my grocery list") == ["tasks"]
+    assert "shopping" in ROUTER_PROMPT
+    assert "add_shopping_items" in DOMAINS["tasks"].prompt

@@ -27,7 +27,9 @@ DOMAINS = {
                        "events and find free slots. For recurring events, ask whether the user means one "
                        "occurrence or the whole series if it is unclear."),
     "tasks": Domain("tasks", "strong", _BASE + " You handle Google Tasks: list, create, complete and reschedule tasks. "
-                    "Overdue means due before today."),
+                    "Overdue means due before today. The shopping list is separate from tasks: use add_shopping_items, "
+                    "list_shopping and complete_shopping_item for it (never create_task for shopping items), and add "
+                    "several items in one call."),
     "gmail": Domain("gmail", "strong", _BASE + " You handle Gmail: search and read emails, summarise them, draft "
                     "replies or new messages, and send a draft. Create a draft first and show the user its recipient, "
                     "subject and text; call send_draft only when the user asks to send. Drafts are saved in "
