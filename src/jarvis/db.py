@@ -42,6 +42,25 @@ CREATE TABLE IF NOT EXISTS notes (
   tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', title || ' ' || body)) STORED
 );
 CREATE INDEX IF NOT EXISTS notes_tsv_idx ON notes USING GIN (tsv);
+CREATE TABLE IF NOT EXISTS mail_seen (
+  message_id TEXT PRIMARY KEY,
+  outcome TEXT NOT NULL,
+  event_id TEXT,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS alerts_sent (
+  key TEXT PRIMARY KEY,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS auto_events (
+  event_id TEXT PRIMARY KEY,
+  message_id TEXT NOT NULL,
+  at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS proactive_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 
