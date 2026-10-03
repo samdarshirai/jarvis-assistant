@@ -2,7 +2,9 @@ from datetime import datetime
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
+import httplib2
 import pytest
+from googleapiclient.errors import HttpError
 
 from jarvis.google.calendar import CalendarClient
 from jarvis.tools.calendar_tools import register_calendar_tools
@@ -156,3 +158,58 @@ def test_create_event_describe_is_offline():
     s = r.get("create_event").describe({"summary": "Gym", "start": "2026-10-06T07:00:00", "end": "2026-10-06T08:00:00"})
     assert s == "Create 'Gym' Tue 2026-10-06 07:00-08:00"
     svc.events.assert_not_called()
+
+
+def test_list_for_proactive_maps_flags_and_drops_cancelled():
+    c, svc = client()
+    svc.events.return_value.list.return_value.execute.return_value = {"items": [
+        {"id": "a", "summary": "Standup", "start": {"dateTime": "2026-10-06T09:00:00+02:00"},
+         "end": {"dateTime": "2026-10-06T09:15:00+02:00"}, "location": "Office"},
+        {"id": "b", "start": {"date": "2026-10-06"}, "end": {"date": "2026-10-07"}, "transparency": "transparent"},
+        {"id": "c", "summary": "Declined", "start": {"dateTime": "2026-10-06T10:00:00+02:00"},
+         "end": {"dateTime": "2026-10-06T11:00:00+02:00"},
+         "attendees": [{"email": "x@y.z"}, {"self": True, "responseStatus": "declined"}]},
+        {"id": "d", "status": "cancelled", "start": {"dateTime": "2026-10-06T12:00:00+02:00"},
+         "end": {"dateTime": "2026-10-06T13:00:00+02:00"}},
+        {"id": "e", "summary": "Mine", "start": {"dateTime": "2026-10-06T14:00:00+02:00"},
+         "end": {"dateTime": "2026-10-06T15:00:00+02:00"},
+         "extendedProperties": {"private": {"jarvisMsgId": "m1"}}},
+    ]}
+    out = {e["id"]: e for e in c.list_for_proactive(datetime(2026, 10, 6, tzinfo=B), datetime(2026, 10, 8, tzinfo=B))}
+    assert set(out) == {"a", "b", "c", "e"}
+    assert out["a"] == {"id": "a", "summary": "Standup", "start": "2026-10-06T09:00:00+02:00",
+                        "end": "2026-10-06T09:15:00+02:00", "location": "Office", "all_day": False,
+                        "declined": False, "busy": True, "source_message": None}
+    assert out["b"]["all_day"] is True and out["b"]["busy"] is False and out["b"]["summary"] == ""
+    assert out["c"]["declined"] is True
+    assert out["e"]["source_message"] == "m1"
+    kw = svc.events.return_value.list.call_args.kwargs
+    assert kw["singleEvents"] is True and kw["calendarId"] == "primary"
+
+
+def test_create_auto_event_sends_id_reminders_and_message_property():
+    c, svc = client()
+    svc.events.return_value.insert.return_value.execute.return_value = {"id": "abc", "summary": "Flight"}
+    out = c.create_auto_event("abc", "Flight", datetime(2026, 10, 9, 8, 10, tzinfo=B), datetime(2026, 10, 9, 10, 10, tzinfo=B),
+                              "FRA", [1440, 180], "m1", "Added by Jarvis from an email: Your flight")
+    body = svc.events.return_value.insert.call_args.kwargs["body"]
+    assert out["id"] == "abc"
+    assert body["id"] == "abc" and body["location"] == "FRA"
+    assert body["description"] == "Added by Jarvis from an email: Your flight"
+    assert body["reminders"] == {"useDefault": False, "overrides": [
+        {"method": "popup", "minutes": 1440}, {"method": "popup", "minutes": 180}]}
+    assert body["extendedProperties"] == {"private": {"jarvisMsgId": "m1"}}
+    assert body["start"]["timeZone"] == TZ and "attendees" not in body
+
+
+def test_create_auto_event_omits_empty_location_and_treats_409_as_already_there():
+    c, svc = client()
+    insert = svc.events.return_value.insert.return_value.execute
+    insert.return_value = {"id": "abc"}
+    c.create_auto_event("abc", "X", datetime(2026, 10, 9, 8, tzinfo=B), datetime(2026, 10, 9, 9, tzinfo=B), None, [60], "m", "d")
+    assert "location" not in svc.events.return_value.insert.call_args.kwargs["body"]
+    insert.side_effect = HttpError(httplib2.Response({"status": "409"}), b"")
+    assert c.create_auto_event("abc", "X", datetime(2026, 10, 9, 8, tzinfo=B), datetime(2026, 10, 9, 9, tzinfo=B), None, [60], "m", "d") is None
+    insert.side_effect = HttpError(httplib2.Response({"status": "500"}), b"")
+    with pytest.raises(HttpError):
+        c.create_auto_event("abc", "X", datetime(2026, 10, 9, 8, tzinfo=B), datetime(2026, 10, 9, 9, tzinfo=B), None, [60], "m", "d")
