@@ -146,8 +146,13 @@ class MailWatch:
             await record("none")
             return
         nearby = await asyncio.to_thread(self.calendar.list_for_proactive, x.start - timedelta(days=1), x.start + timedelta(days=1))
+        event_id = event_id_for(mid)
+        ours = await asyncio.to_thread(self.store.is_auto_event, event_id)
         if is_duplicate(x, nearby, mid, self.tz):
-            await record("duplicate")
+            if ours or any(e["source_message"] == mid for e in nearby):
+                await self._created(m, full, x, event_id, record)  # our own earlier write whose bookkeeping was lost
+            else:
+                await record("duplicate")
             return
         if await asyncio.to_thread(self.store.auto_events_last_day) >= self.cap:
             await record("capped")
@@ -155,15 +160,33 @@ class MailWatch:
                 await self.notifier.telegram(f"Auto-add limit ({self.cap} per day) reached; not added: {x.title}. "
                                              "Ask me to add it if you want it.")
             return
-        event_id = event_id_for(mid)
         subject = _clean(full.get("subject") or "", MAX_TITLE)
+        await self._audit("auto_event_attempt", {"message_id": mid, "event_id": event_id, "title": x.title,
+                                                 "start": x.start.isoformat()}, {})
         await asyncio.to_thread(self.store.add_auto_event, event_id, mid)  # before the write, so Undo works even after a crash
-        created = await asyncio.to_thread(
-            self.calendar.create_auto_event, event_id, x.title, x.start, x.end, x.location, reminders_for(x.kind), mid,
-            f"Added by Jarvis from an email: {subject}")
-        if created is None:  # 409: an earlier attempt already created it
-            await record("duplicate")
+        try:
+            created = await asyncio.to_thread(
+                self.calendar.create_auto_event, event_id, x.title, x.start, x.end, x.location, reminders_for(x.kind), mid,
+                f"Added by Jarvis from an email: {subject}")
+        except ReauthRequired:
+            raise
+        except Exception as e:  # the insert may have committed before the error: keep the whitelist, leave a trail
+            await self._audit("mail_error", {"message_id": mid, "event_id": event_id}, {"error": str(e)[:200]})
+            raise
+        if created is None:  # 409: an earlier attempt created it
+            if ours:
+                await self._created(m, full, x, event_id, record)
+            else:  # not ours: never let Undo touch it
+                await asyncio.to_thread(self.store.remove_auto_event, event_id)
+                await record("duplicate")
             return
+        await self._created(m, full, x, event_id, record)
+
+    async def _created(self, m, full, x, event_id, record) -> None:
+        mid = m["id"]
+        subject = _clean(full.get("subject") or "", MAX_TITLE)
+        if not await asyncio.to_thread(self.store.is_auto_event, event_id):
+            await asyncio.to_thread(self.store.add_auto_event, event_id, mid)
         await record("created", event_id)
         await self._audit("auto_event_created", {"message_id": mid, "title": x.title, "start": x.start.isoformat()},
                           {"event_id": event_id})
