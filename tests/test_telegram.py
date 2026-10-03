@@ -354,3 +354,55 @@ async def test_pending_card_from_another_channel_is_reoffered_with_working_butto
     c2 = chat()
     await ch.on_button(button_update(c2, ids(c)[0]), None)
     assert calls == [{"summary": "Gym"}] and sent(c2) == [("Created.", {})]
+
+
+def test_oversized_cards_stay_under_the_telegram_limit_and_keep_summary_and_warning():
+    note = {"tool": "create_note", "args": {"title": "T", "body": "n" * 20000}, "summary": "Save note 'T': nnn"}
+    draft = {"tool": "send_draft", "args": {"draft_id": "d1", "body": "g" * 20000}, "summary": "Send draft to bob"}
+    card = format_confirmation({"actions": [note, draft], "after_untrusted": True})
+    assert len(card) < 4096
+    assert card.startswith(WARN_UNTRUSTED) and "Save note 'T': nnn" in card and "Send draft to bob" in card
+    assert "chars total" in card
+    many = {"actions": [{"tool": "create_note", "args": {"body": "x" * 5000}, "summary": f"s{i}"} for i in range(8)]}
+    assert len(format_confirmation(many)) < 4096
+
+
+def u16(s):
+    return len(s.encode("utf-16-le")) // 2
+
+
+def test_card_is_hard_clamped_for_unbounded_summaries_and_action_counts():
+    rem = {"tool": "remember", "args": {"text": "r" * 10000}, "summary": "Remember: " + "r" * 10000}
+    card = format_confirmation({"actions": [rem], "after_untrusted": True})
+    assert u16(card) < 4096 and card.startswith(WARN_UNTRUSTED) and card.endswith("…")
+    many = [{"tool": "create_task", "args": {"t": i}, "summary": f"Task {i}"} for i in range(80)]
+    assert u16(format_confirmation({"actions": many})) < 4096
+    ev = {"tool": "create_event", "args": {}, "summary": "e" * 5000}
+    note = {"tool": "create_note", "args": {}, "summary": "n" * 6000}
+    assert u16(format_confirmation({"actions": [ev]})) < 4096
+    assert u16(format_confirmation({"actions": [note]})) < 4096
+
+
+def test_card_clamp_counts_utf16_units_and_never_splits_a_character():
+    act = {"tool": "remember", "args": {}, "summary": "😀" * 3000}
+    card = format_confirmation({"actions": [act]})
+    assert u16(card) < 4096
+    card.encode("utf-16-le")  # raises on a lone surrogate
+
+
+def test_short_card_is_unchanged_by_the_clamp():
+    card = format_confirmation({"actions": [{"tool": "create_task", "args": {"t": "x"}, "summary": "Task x"}]})
+    assert not card.endswith("…") and "Task x" in card
+
+
+async def test_oversized_card_is_offered_with_working_buttons():
+    big = AIMessage("", tool_calls=[{"name": "create_event", "args": {"summary": "x" * 20000}, "id": "1",
+                                     "type": "tool_call"}])
+    calls = []
+    ch = make_channel({"fast": [AIMessage("calendar"), big, AIMessage("Created.")]}, calls)
+    c = chat()
+    await ch.on_text(text_update(c), None)
+    (card, kw), = sent(c)
+    assert len(card) < 4096 and "reply_markup" in kw
+    await ch.on_button(button_update(chat(), ids(c)[0]), None)
+    assert calls == [{"summary": "x" * 20000}]  # the real args still run in full

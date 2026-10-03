@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     cartesia_api_key: str = ""
     cartesia_voice_id: str = ""
     fcm_credentials_path: str = ""  # Firebase service-account JSON, kept outside the repo
+    tavily_api_key: str = ""  # optional: web search for the research domain; empty = web_search says it is not configured
 
     def models(self, tier: str) -> list[str]:
         raw = {"fast": self.models_fast, "strong": self.models_strong}[tier]

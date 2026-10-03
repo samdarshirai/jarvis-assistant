@@ -1,3 +1,5 @@
+import re
+
 from psycopg_pool import ConnectionPool
 
 SCHEMA = """
@@ -26,6 +28,20 @@ CREATE TABLE IF NOT EXISTS devices (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen TIMESTAMPTZ
 );
+CREATE TABLE IF NOT EXISTS memories (
+  id SERIAL PRIMARY KEY,
+  text TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS notes (
+  id SERIAL PRIMARY KEY,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', title || ' ' || body)) STORED
+);
+CREATE INDEX IF NOT EXISTS notes_tsv_idx ON notes USING GIN (tsv);
 """
 
 
@@ -36,3 +52,8 @@ def make_pool(url: str) -> ConnectionPool:
 def init_schema(pool: ConnectionPool) -> None:
     with pool.connection() as conn:
         conn.execute(SCHEMA)
+
+
+def like_pattern(q: str) -> str:
+    """Contains-match pattern for ILIKE with %, _ and backslash taken literally."""
+    return "%" + re.sub(r"([\\%_])", r"\\\1", q) + "%"

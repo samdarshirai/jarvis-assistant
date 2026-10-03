@@ -20,7 +20,7 @@ VOICE_CFG = {**THREAD, "configurable": {**THREAD["configurable"], "voice": True}
 TAP_ONLY = {"send_draft"}  # irreversible and third-party-facing: a spoken yes is never enough
 TAP_TEXT = "I need you to tap Confirm on the screen to send it."
 STT_DOWN_TEXT = "Sorry, I can't hear you right now."
-WARN_TEXT = "Heads up, I came up with this after reading an email, so double-check it. "
+WARN_TEXT = "Heads up, I came up with this after reading an email or a web page, so double-check it. "
 
 
 def card_lines(payload: dict) -> list[str]:

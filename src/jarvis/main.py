@@ -17,11 +17,17 @@ from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
 from jarvis.llm import LLMProvider
+from jarvis.memory import MemoryStore
+from jarvis.notes import NoteStore
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
+from jarvis.tools.memory_tools import register_memory_tools
+from jarvis.tools.note_tools import register_note_tools
 from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
+from jarvis.tools.research_tools import register_research_tools
 from jarvis.tools.task_tools import register_task_tools
+from jarvis.web import WebSearch
 from jarvis.voice.devices import Devices
 from jarvis.voice.stt import DeepgramSTT
 from jarvis.voice.tts import CartesiaTTS
@@ -44,12 +50,16 @@ def cached_service(build, ttl: float = 1800.0, clock=time.monotonic):
     return get
 
 
-def build_registry(svc, tz: str) -> Registry:
+def build_registry(svc, tz: str, pool=None, tavily_key: str = "") -> Registry:
     registry = Registry()
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz)
     register_task_tools(registry, TasksClient(svc("tasks", "v1")))
     register_gmail_tools(registry, GmailClient(svc("gmail", "v1")))
     register_phone_tools(registry)
+    if pool is not None:
+        register_memory_tools(registry, MemoryStore(pool))
+        register_note_tools(registry, NoteStore(pool))
+    register_research_tools(registry, WebSearch(tavily_key) if tavily_key else None)
     return registry
 
 
@@ -66,11 +76,12 @@ async def lifespan(app: FastAPI):
         def svc(name: str, version: str):
             return cached_service(lambda: build_service(name, version, store, s.fernet_key))
 
-        registry = build_registry(svc, s.timezone)
+        registry = build_registry(svc, s.timezone, pool, s.tavily_api_key)
 
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
-            graph = build_graph(LLMProvider(s, audit), registry, audit, saver, s.timezone)
+            graph = build_graph(LLMProvider(s, audit), registry, audit, saver, s.timezone,
+                                memories=MemoryStore(pool).all)
             # One lock for both channels on the shared thread "owner": "read pending -> decide -> ainvoke" is one step.
             # ponytail: one global lock, fine for a single owner; per-thread locks if more threads ever appear.
             lock = asyncio.Lock()

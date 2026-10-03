@@ -16,7 +16,7 @@ void main() {
     await t.pump();
     expect(find.text('put gym at seven'), findsOneWidget);
     expect(find.textContaining('Create Gym'), findsOneWidget);
-    expect(find.textContaining('after reading email'), findsOneWidget);
+    expect(find.textContaining('after reading third-party content (email or web)'), findsOneWidget);
     await t.tap(find.text('Confirm'));
     await t.pump();
     expect(r.socket.sent.last.$1, 'confirm');
