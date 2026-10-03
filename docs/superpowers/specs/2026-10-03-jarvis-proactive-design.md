@@ -17,7 +17,7 @@ Covered requirements: FR-23 (morning brief, default 07:30, configurable), FR-24 
 
 ## Structure
 New package `src/jarvis/proactive/`; none of it goes through the graph.
-- `scheduler.py` — registers jobs: brief (cron mon-fri at `brief_time`, misfire grace 1 h), mail watch (every `mail_poll_minutes`), calendar sweep (every 5 min; conflicts and leave-now share one calendar read). Jobs never raise: failures are logged and audited.
+- `scheduler.py` — registers jobs: brief (cron mon-fri at `brief_time`, misfire grace 1 h: covers a paused/slept process; a restart after brief_time skips that day's brief (no catch-up)), mail watch (every `mail_poll_minutes`), calendar sweep (every 5 min; conflicts and leave-now share one calendar read). Jobs never raise: failures are logged and audited.
 - `brief.py` — gather today's events, overdue tasks, unread important mail; summarise; deliver.
 - `mailwatch.py` — poll, prefilter, extract, dedupe, write, notify.
 - `alerts.py` — conflict detection and leave-now selection (pure functions plus a thin sweep).
@@ -50,7 +50,7 @@ Rows older than 90 days are purged with the audit purge.
 2. **Prefilter** (plain code): keyword match on subject and snippet (no attachment check; flight, booking, reservation, appointment, invitation, itinerary, ticket). No match: record `skipped`, no LLM.
 3. **Extract:** one fast-tier LLM call, no tools, body wrapped as `<untrusted_email>`. Output is JSON for a fixed schema (kind, title, start, end, location). Code validates: start in the future and within one year, end after start, title and location length-capped, kind in an allowed set. Invalid: record `invalid`, no write.
 4. **Dedupe:** skip if the message id was processed; skip if the calendar already has an event whose time overlaps start ±2 h and whose title is similar or whose location matches; events Jarvis creates store the message id in private `extendedProperties`.
-5. **Write:** plain code creates the event. Flights: reminders at 24 h (check-in) and about 3 h (leave for airport). Other kinds: 1 day and 1 hour. Refuse when `auto_event_cap` is reached today (record `capped`, notify once).
+5. **Write:** plain code creates the event. Flights: reminders at 24 h (check-in) and about 3 h (leave for airport). Other kinds: 1 day and 1 hour. Refuse when `auto_event_cap` is reached within the rolling 24 h (record `capped`, notify once).
 6. **Notify** on Telegram: "Added: <title>, <when>" with **Undo**. Record `mail_seen` and `auto_events`, and write an audit row.
 7. **Undo** deletes only an event present in `auto_events` and removes its row. A stale or repeated tap answers "Already handled." Audited.
 

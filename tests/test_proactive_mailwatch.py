@@ -114,6 +114,7 @@ class FakeGmail:
 class FakeCal:
     def __init__(self, events=()):
         self.events, self.created, self.deleted, self.exists = list(events), [], [], False
+        self.lookup = "exists"  # exists | 404 | 500
 
     def list_for_proactive(self, start, end):
         return self.events
@@ -123,6 +124,11 @@ class FakeCal:
             return None
         self.created.append(dict(event_id=event_id, summary=summary, start=start, end=end, location=location,
                                  reminders=reminder_minutes, message_id=message_id, description=description))
+        return {"id": event_id}
+
+    def get_event(self, event_id):
+        if self.lookup != "exists":
+            raise HttpError(httplib2.Response({"status": self.lookup}), b"")
         return {"id": event_id}
 
     def delete_event(self, event_id, scope):
@@ -205,8 +211,11 @@ async def test_existing_event_made_from_this_mail_is_treated_as_created():
     assert [r["name"] for r in w.audit.records] == ["auto_event_created"]
 
 
-async def test_create_failure_leaves_an_audit_trail_and_keeps_undo():
+@pytest.mark.parametrize("lookup,outcome,whitelisted,notices", [("exists", "created", True, 1), ("404", "error", False, 0),
+                                                                    ("500", "error", True, 0)])
+async def test_create_failure_leaves_an_audit_trail(lookup, outcome, whitelisted, notices):
     w = make(script=[FLIGHT])
+    w.cal.lookup = lookup
 
     def boom(*a, **k):
         raise TimeoutError("response lost")
@@ -214,9 +223,14 @@ async def test_create_failure_leaves_an_audit_trail_and_keeps_undo():
     await w.job.run_once(NOW)
     eid = event_id_for("m1")
     names = [r["name"] for r in w.audit.records]
-    assert names == ["auto_event_attempt", "mail_error", "mail_error"]
-    assert all(r["args"].get("event_id") == eid for r in w.audit.records[:2])
-    assert w.store.is_auto_event(eid) and w.store.mail["m1"][0] == "error"
+    if lookup == "exists":  # Google committed the insert: treated as created, with Undo
+        assert names == ["auto_event_attempt", "mail_error", "auto_event_created"]
+        assert w.notifier.calls[0][2] == eid
+    else:
+        assert names == ["auto_event_attempt", "mail_error", "mail_error"]
+        assert all(r["args"].get("event_id") == eid for r in w.audit.records[:2])
+    assert w.store.is_auto_event(eid) is whitelisted and w.store.mail["m1"][0] == outcome
+    assert len(w.notifier.calls) == notices
 
 
 async def test_newsletter_never_reaches_the_llm():
@@ -331,3 +345,28 @@ async def test_undo_keeps_the_whitelist_when_google_fails():
     with pytest.raises(HttpError):
         await undo_event(Down(), store, MemoryAudit(), "mine")
     assert store.is_auto_event("mine")  # the owner can tap again
+
+
+# --- final review fixes -----------------------------------------------------------------------
+
+def test_offset_start_keeps_its_instant():
+    x = validate_extraction({**FLIGHT, "start": "2026-10-09T18:00:00-04:00", "end": None}, NOW, TZ)
+    assert x.start.utcoffset() == timedelta(hours=-4) and x.start == datetime(2026, 10, 9, 22, 0, tzinfo=ZoneInfo("UTC"))
+
+
+async def test_offset_start_reaches_the_calendar_unchanged():
+    w = make(script=[{**FLIGHT, "start": "2026-10-09T18:00:00-04:00", "end": None}])
+    await w.job.run_once(NOW)
+    [c] = w.cal.created
+    assert c["start"].utcoffset() == timedelta(hours=-4) and c["start"] == datetime(2026, 10, 9, 22, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_date_only_start_is_rejected_and_date_only_end_defaults():
+    assert validate_extraction({**FLIGHT, "start": "2026-10-09"}, NOW, TZ) is None
+    assert validate_extraction({**FLIGHT, "end": "2026-10-09"}, NOW, TZ).end == datetime(2026, 10, 9, 10, 10, tzinfo=B)
+
+
+@pytest.mark.parametrize("summary", ["Call", "to"])  # "to" is a substring of the booking title
+def test_short_title_does_not_make_a_duplicate(summary):
+    x = validate_extraction(FLIGHT, NOW, TZ)
+    assert not is_duplicate(x, [cal_ev(summary=summary)], "m1", TZ)

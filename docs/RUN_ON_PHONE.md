@@ -68,4 +68,4 @@ Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
 
 ## Full manual test table
 
-See `ACCEPTANCE.md` rows 1-38.
+See `ACCEPTANCE.md` rows 1-56.
