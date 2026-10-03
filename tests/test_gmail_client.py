@@ -367,3 +367,16 @@ def test_sent_to_checks_the_sent_folder_for_one_message():
     assert c.sent_to("raj@work.com") is False
     with pytest.raises(ValueError):
         c.sent_to("not an address")
+
+
+def test_find_contacts_skips_non_ascii_addresses_and_cleans_names():
+    c, _ = contacts_setup([meta("1", ["INBOX"],
+                                From="Raj <r\u0430j@work.com>",
+                                To='"Raj\u202e Patel" <raj@work.com>, "raj@evil.com" <raj2@work.com>')])
+    out = {x["address"]: x["name"] for x in c.find_contacts("raj")}
+    assert out == {"raj@work.com": "Raj Patel", "raj2@work.com": ""}
+
+
+def test_find_contacts_does_not_count_the_from_of_a_sent_message_as_emailed():
+    c, _ = contacts_setup([meta("1", ["SENT"], From="Raj <raj@work.com>", To="me@x.com")])
+    assert c.find_contacts("raj")[0]["you_emailed"] is False

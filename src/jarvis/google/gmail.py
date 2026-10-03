@@ -1,6 +1,7 @@
 import base64
 import binascii
 import re
+import unicodedata
 from email import message_from_bytes, policy
 from email.message import EmailMessage
 from email.utils import getaddresses, parseaddr
@@ -201,7 +202,7 @@ class GmailClient:
             for hname in ("From", "To", "Cc"):
                 for display, addr in getaddresses([header(p, hname) or ""]):
                     addr = addr.strip().lower()
-                    if "@" not in addr or not (key in display.casefold() or key in addr.split("@")[0]):
+                    if not addr.isascii() or "@" not in addr or not (key in display.casefold() or key in addr.split("@")[0]):
                         continue
                     try:
                         clean_recipients(addr)
@@ -212,7 +213,8 @@ class GmailClient:
                         c["seen"] += 1
                         counted.add(addr)
                     if not c["name"] and display.strip():
-                        c["name"] = " ".join(display.split())[:60]
+                        nm = "".join(ch for ch in " ".join(display.split()) if unicodedata.category(ch) not in ("Cf", "Cc"))
+                        c["name"] = "" if "@" in nm else nm[:60]
                     if sent and hname in ("To", "Cc"):
                         c["you_emailed"] = True
         return sorted(found.values(), key=lambda c: (not c["you_emailed"], -c["seen"]))[:5]

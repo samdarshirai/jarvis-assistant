@@ -1,4 +1,5 @@
 import logging
+import unicodedata
 from datetime import datetime, time, timedelta
 from typing import Annotated, Literal
 
@@ -22,7 +23,7 @@ class ListEventsArgs(BaseModel):
 
 
 class CreateEventArgs(BaseModel):
-    summary: str
+    summary: str = Field(max_length=200)
     start: str = Field(description=DT)
     end: str = Field(description=DT)
     recurrence: list[str] | None = Field(default=None, description="RRULE strings, e.g. ['RRULE:FREQ=WEEKLY']")
@@ -33,7 +34,7 @@ class CreateEventArgs(BaseModel):
 class UpdateEventArgs(BaseModel):
     event_id: str
     scope: Scope = Field(description="'this' = one occurrence, 'all' = whole series (summary only; start/end cannot change for a series)")
-    summary: str | None = None
+    summary: str | None = Field(default=None, max_length=200)
     start: str | None = Field(default=None, description=DT + " Only with scope='this'; not allowed for 'all'.")
     end: str | None = Field(default=None, description=DT + " Only with scope='this'; not allowed for 'all'.")
     reminders: list[Minutes] | None = Field(default=None, max_length=5, description="Replaces the event's popup reminders (minutes before the start)")
@@ -68,6 +69,17 @@ def _range(start: str, end: str) -> str:
     return f"{s}-{e[-5:]}" if "T" in start and s[:14] == e[:14] else f"{s} to {e}"
 
 
+def attendee_list(values) -> list[str]:
+    """Cleaned, ASCII-only, case-insensitively de-duplicated addresses; the card and the call both use this."""
+    out: list[str] = []
+    for a in clean_recipients(", ".join(values)):
+        if not a.isascii() or len(a) > 254 or any(unicodedata.category(c) in ("Cf", "Cc") for c in a):
+            raise ValueError("attendee address must be plain ASCII")
+        if a.casefold() not in {x.casefold() for x in out}:
+            out.append(a)
+    return out
+
+
 def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -> None:
     def span(start: str, end: str):
         s, e = parse_dt(start, tz), parse_dt(end, tz)
@@ -90,13 +102,15 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
         return " ".join(str(s).split())[:cap]
 
     def reminder_line(reminders) -> str:
-        return ("\nReminders: " + ", ".join(minutes_text(m) for m in reminders)) if reminders is not None else ""
+        if reminders is None:
+            return ""
+        return "\nReminders: " + (", ".join(minutes_text(m) for m in reminders) or "none")
 
     def invite_line(label: str, addresses) -> str:
         if not addresses:
             return ""
         parts = []
-        for a in clean_recipients(", ".join(addresses)):
+        for a in attendee_list(addresses):
             note = ""
             if sent_to is not None:
                 try:
@@ -125,10 +139,10 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
             names += f" and {len(hits) - 3} more"
         try:
             free = alternatives(start, end - start)
+            tail = (" Free instead: " + "; ".join(free) + ".") if free else " No free slot found in the next 7 days between 08:00 and 20:00."
         except Exception:
             log.exception("alternatives lookup failed")
-            free = []
-        tail = (" Free instead: " + "; ".join(free) + ".") if free else " No free slot found in the next 7 days between 08:00 and 20:00."
+            tail = " (could not look up free slots)"
         return f"\nWarning: conflicts with {names}.{tail}"
 
     def list_events(start, end, query=None):
@@ -139,7 +153,7 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
         if reminders is not None:
             extra["reminders"] = reminders
         if attendees:
-            extra["attendees"] = clean_recipients(", ".join(attendees))
+            extra["attendees"] = attendee_list(attendees)
         return client.create_event(summary, *span(start, end), recurrence=recurrence, **extra)
 
     def update_event(event_id, scope, summary=None, start=None, end=None, reminders=None, add_attendees=None):
@@ -154,7 +168,7 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
         if reminders is not None:
             extra["reminders"] = reminders
         if add_attendees:
-            extra["add_attendees"] = clean_recipients(", ".join(add_attendees))
+            extra["add_attendees"] = attendee_list(add_attendees)
         return client.update_event(event_id, scope, summary=summary, start=s, end=e, **extra)
 
     def delete_event(event_id, scope):
@@ -171,17 +185,18 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
     def describe_create(a):
         s, e = span(a["start"], a["end"])
         # ponytail: a recurring series is checked at its first occurrence only
-        return (f"Create '{a['summary']}' {_range(s.isoformat(), e.isoformat())}" + reminder_line(a.get("reminders"))
-                + invite_line("Invites emailed to", a.get("attendees")) + conflict_note(s, e))
+        # invitee lines come first so a clipped card can never hide who gets an email
+        return (f"Create '{clip(a['summary'], 120)}' {_range(s.isoformat(), e.isoformat())}"
+                + invite_line("Invites emailed to", a.get("attendees")) + reminder_line(a.get("reminders")) + conflict_note(s, e))
 
     def current(event_id):
         ev = client.get_event(event_id)
-        return f"'{ev['summary']}' ({_range(ev['start'], ev['end'])})"
+        return f"'{clip(ev['summary'], 120)}' ({_range(ev['start'], ev['end'])})"
 
     def add_invitees_lines(a) -> str:
         if not a.get("add_attendees"):
             return ""
-        wanted = clean_recipients(", ".join(a["add_attendees"]))
+        wanted = attendee_list(a["add_attendees"])
         try:
             existing = client.attendee_emails(a["event_id"], a["scope"])
         except Exception:
@@ -201,13 +216,13 @@ def register_calendar_tools(registry: Registry, client, tz: str, sent_to=None) -
         ev = client.get_event(a["event_id"])
         changes = []
         if "summary" in a:
-            changes.append(f"title -> '{a['summary']}'")
+            changes.append(f"title -> '{clip(a['summary'], 120)}'")
         for k in ("start", "end"):
             if k in a:
                 changes.append(f"{k} -> {_when(parse_dt(a[k], tz).isoformat())}")
         series = ", whole recurring series" if a["scope"] == "all" else ""
-        text = f"Change '{ev['summary']}' ({_range(ev['start'], ev['end'])}){series}: " + "; ".join(changes)
-        text += reminder_line(a.get("reminders")) + add_invitees_lines(a)
+        text = f"Change '{clip(ev['summary'], 120)}' ({_range(ev['start'], ev['end'])}){series}: " + "; ".join(changes)
+        text += add_invitees_lines(a) + reminder_line(a.get("reminders"))
         if a["scope"] != "all" and ("start" in a or "end" in a):
             old_s, old_e = parse_dt(ev["start"], tz), parse_dt(ev["end"], tz)
             s = parse_dt(a["start"], tz) if "start" in a else old_s

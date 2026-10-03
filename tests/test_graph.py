@@ -676,6 +676,21 @@ async def test_confirm_after_untrusted_tool_is_gated_while_the_email_is_still_in
     assert out["__interrupt__"][0].value["after_untrusted"] is True and adds == []
 
 
+async def test_shopping_add_beside_a_read_only_tool_after_untrusted_is_refused_not_run():
+    adds, reads = [], []
+    g, _ = make({"fast": [AIMessage("gmail, tasks")],
+                 "strong": [call("read_email", {"message_id": "m1"}), AIMessage("read it"),
+                            AIMessage("", tool_calls=[
+                                {"name": "add_shopping_items", "args": {"summary": "milk"}, "id": "a1", "type": "tool_call"},
+                                {"name": "list_tasks", "args": {}, "id": "a2", "type": "tool_call"}]),
+                            AIMessage("ok")]},
+                [untrusted_tool(), shopping_tool(adds), tool("list_tasks", "tasks", reads, needs_confirm=False)])
+    out = await g.ainvoke(say("hi"), CFG)
+    assert "__interrupt__" not in out and adds == [] and len(reads) == 1
+    msgs = {m.tool_call_id: m.content for m in tool_messages(out)}
+    assert "Propose it again by itself" in msgs["a1"]
+
+
 async def test_cancelled_gated_shopping_add_writes_nothing():
     adds = []
     g, audit = make({"fast": [AIMessage("gmail, tasks")],

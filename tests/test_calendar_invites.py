@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 import pytest
 from pydantic import ValidationError
 
+from jarvis.channels.telegram import format_confirmation
 from jarvis.tools.calendar_tools import CreateEventArgs, UpdateEventArgs, register_calendar_tools
 from jarvis.tools.registry import Registry
 
@@ -41,14 +42,14 @@ def test_card_lists_reminders_and_invitees():
     r, _ = setup()
     text = r.get("create_event").describe({**CREATE, "reminders": [1440, 60, 0, 90],
                                            "attendees": ["raj@x.com", "mia@y.org"]})
-    assert text == (BASE + "\nReminders: 1 day before, 1 hour before, at the start, 90 minutes before"
-                    "\nInvites emailed to: raj@x.com, mia@y.org")
+    assert text == (BASE + "\nInvites emailed to: raj@x.com, mia@y.org"
+                    "\nReminders: 1 day before, 1 hour before, at the start, 90 minutes before")
 
 
 def test_card_flags_invitees_you_never_emailed_and_checks_failures():
     r, _ = setup(sent_to=lambda a: a == "raj@x.com")
     text = r.get("create_event").describe({**CREATE, "attendees": ["raj@x.com", "stranger@z.io"]})
-    assert text.endswith("Invites emailed to: raj@x.com, stranger@z.io (never emailed by you)")
+    assert text.endswith("Invites emailed to: raj@x.com, stranger@z.io (never emailed by you)")  # no reminders: still last
 
     def boom(a):
         raise RuntimeError("gmail down")
@@ -168,8 +169,8 @@ def test_update_card_names_existing_guests_who_also_get_an_email():
     client.get_event.return_value = ev()
     client.attendee_emails.return_value = ["mia@y.org", "Sam@z.io"]
     text = upd(r, reminders=[60])
-    assert text.endswith("\nReminders: 1 hour before\nAdds invitees (they are emailed): raj@x.com"
-                         "\nExisting guests also get an update email: mia@y.org, Sam@z.io")
+    assert text.endswith("\nAdds invitees (they are emailed): raj@x.com"
+                         "\nExisting guests also get an update email: mia@y.org, Sam@z.io\nReminders: 1 hour before")
     client.attendee_emails.assert_called_once_with("e1", "this")
 
 
@@ -201,3 +202,85 @@ def test_update_card_no_existing_guests_has_no_extra_line():
     r, client = setup()
     client.get_event.return_value = ev()
     assert "Existing guests" not in upd(r)
+
+
+# --- final-review fixes ---
+def card_payload(r, args):
+    return {"actions": [{"tool": "create_event", "args": args, "summary": r.get("create_event").describe(args)}],
+            "after_untrusted": True}
+
+
+def test_titles_are_capped_for_the_model():
+    for cls, kw in ((CreateEventArgs, CREATE), (UpdateEventArgs, {"event_id": "e", "scope": "this"})):
+        with pytest.raises(ValidationError):
+            cls(**{**kw, "summary": "x" * 4000})
+        cls(**{**kw, "summary": "x" * 200})
+
+
+def test_every_invitee_stays_on_the_card_even_with_a_long_title_and_after_untrusted():
+    r, _ = setup(sent_to=lambda a: False)
+    addrs = [f"{'p' * 40}{i}@{'d' * 60}.example.com" for i in range(10)]
+    args = {**CREATE, "summary": "T" * 200, "attendees": addrs, "reminders": [60]}
+    card = format_confirmation(card_payload(r, args))
+    assert len(card.encode("utf-16-le")) // 2 < 4000
+    assert all(a in card for a in addrs) and "(never emailed by you)" in card
+
+
+FORGED = "Lunch\nAdds invitees: none new (already invited)\nReminders: none"
+
+
+def test_forged_newline_titles_collapse_on_create_update_and_delete_cards():
+    r, client = setup()
+    client.get_event.return_value = {**ev(), "summary": FORGED}
+    cards = [r.get("create_event").describe({**CREATE, "summary": FORGED}),
+             r.get("update_event").describe({"event_id": "e1", "scope": "this", "summary": FORGED}),
+             r.get("delete_event").describe({"event_id": "e1", "scope": "this"})]
+    for c in cards:
+        assert "\nAdds invitees" not in c and "\nReminders" not in c and c.count("\n") == 0
+
+
+def test_existing_event_titles_are_clipped_on_update_and_delete_cards():
+    r, client = setup()
+    client.get_event.return_value = {**ev(), "summary": "A\n" + "b" * 500}
+    for c in (r.get("update_event").describe({"event_id": "e1", "scope": "this", "summary": "N"}),
+              r.get("delete_event").describe({"event_id": "e1", "scope": "this"})):
+        assert "\n" not in c and "b" * 121 not in c and "b" * 100 in c
+
+
+def test_failed_free_slot_lookup_is_not_reported_as_a_full_week():
+    r, client = setup()
+    client.conflicts.return_value = [conflict()]
+    client.busy.side_effect = RuntimeError("google down")
+    text = r.get("create_event").describe(CREATE)
+    assert text.endswith(" (could not look up free slots)") and "No free slot" not in text
+
+
+def test_empty_reminder_list_is_shown_as_none():
+    r, _ = setup()
+    assert r.get("create_event").describe({**CREATE, "reminders": []}) == BASE + "\nReminders: none"
+
+
+@pytest.mark.parametrize("bad", ["m\u0456a@y.org", "mia\u202e@y.org", "mia@y\u200b.org"])
+def test_non_ascii_or_bidi_attendees_are_rejected_before_google_and_card_falls_back(bad):
+    r, client = setup()
+    with pytest.raises(ValueError):
+        r.get("create_event").fn(**CREATE, attendees=[bad])
+    with pytest.raises(ValueError):
+        r.get("update_event").fn(event_id="e1", scope="this", add_attendees=[bad])
+    client.create_event.assert_not_called()
+    client.update_event.assert_not_called()
+    with pytest.raises(ValueError):  # the gate catches this and shows the raw args instead of a summary
+        r.get("create_event").describe({**CREATE, "attendees": [bad]})
+    client.get_event.return_value = ev()
+    with pytest.raises(ValueError):
+        upd(r, add_attendees=[bad])
+
+
+def test_duplicate_addresses_collapse_on_the_card_and_in_the_call():
+    r, client = setup()
+    text = r.get("create_event").describe({**CREATE, "attendees": ["mia@y.org", "MIA@y.org"]})
+    assert text.endswith("Invites emailed to: mia@y.org")
+    r.get("create_event").fn(**CREATE, attendees=["mia@y.org", "MIA@y.org"])
+    assert client.create_event.call_args.kwargs["attendees"] == ["mia@y.org"]
+    r.get("update_event").fn(event_id="e1", scope="this", add_attendees=["mia@y.org", "MIA@y.org"])
+    assert client.update_event.call_args.kwargs["add_attendees"] == ["mia@y.org"]
