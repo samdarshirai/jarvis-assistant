@@ -1,4 +1,4 @@
-# Jarvis — handoff note (state at 2026-10-03, branch `feat/proactive`, merge pending; sub-projects 1-4 on `main` @ 0bd2b27)
+# Jarvis — handoff note (state at 2026-10-03, `main`, all 5 sub-projects merged)
 
 Read this first in a new session, then the spec/plan of whatever you work on next.
 
@@ -11,7 +11,7 @@ A single-user personal AI assistant (owner: Samdarshi) managing Google Calendar,
 | 2 | Gmail tools | DONE, merged |
 | 3 | Pixel voice app (server + Flutter) | DONE, merged (device-only behaviour untested, see below) |
 | 4 | Memory, notes, research (FR-20..22, scenario 5 and 9) | DONE, merged |
-| 5 | Proactive features (morning brief, alerts, email-to-calendar FR-11 auto-detection, FR-23/24) | DONE on branch feat/proactive, merge pending |
+| 5 | Proactive features (morning brief, alerts, email-to-calendar FR-11 auto-detection, FR-23/24) | DONE, merged |
 
 Specs and plans (all committed): `docs/superpowers/specs/2026-10-01-jarvis-agent-core-design.md`, `...-02-jarvis-gmail-design.md`, `...-02-jarvis-voice-design.md`; plans in `docs/superpowers/plans/` with the same names. `ACCEPTANCE.md` is the manual acceptance table (rows 1-56) and all setup steps.
 
@@ -24,7 +24,7 @@ Python 3.11+ (host 3.14), FastAPI, LangGraph (+ Postgres checkpointer), langchai
 - `jarvis_app/` Flutter app (`lib/session.dart` SessionController with ports; `wake.dart`; `app.dart` AppHost with a pending-start slot; Kotlin assistant services under `android/app/src/main/kotlin/`).
 - `src/jarvis/memory.py`, `notes.py`, `web.py`, `tools/{memory,note,research}_tools.py`; the memory block is injected in every domain.
 - `src/jarvis/proactive/` — `scheduler.py` (APScheduler in-process: brief cron, mail poll, alert sweep), `brief.py`, `alerts.py` (conflict and leave-now), `mailwatch.py` (email-to-calendar auto-detect, Undo), `notify.py` (Telegram + push), `store.py` (`mail_seen`, `alerts_sent`, `auto_events`, `proactive_state`). Spec: `docs/superpowers/specs/2026-10-03-jarvis-proactive-design.md`.
-- `tests/` 536 Python tests (fakes in `tests/fakes.py`, voice helpers in `tests/voice_helpers.py`); `jarvis_app/test/` 65 Flutter tests.
+- `tests/` 543 Python tests (fakes in `tests/fakes.py`, voice helpers in `tests/voice_helpers.py`); `jarvis_app/test/` 65 Flutter tests.
 
 ## Safety invariants (do not break)
 - Every side effect goes through the graph's `interrupt()` confirmation gate (in the graph, not the prompt) (one bounded exception: see the next bullet). A mixed step (confirm-gated + non-gated call) never interrupts: the gated call is refused "propose it again by itself".
