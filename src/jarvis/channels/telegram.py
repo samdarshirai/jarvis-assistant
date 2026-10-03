@@ -18,6 +18,8 @@ EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you ar
 PENDING_TEXT = "Let's sort out the pending action first, confirm or cancel it."
 RAW_CAP, CARD_MAX = 1500, 4000
 HANDLED_TEXT = "Already handled."
+UNDO_DONE_TEXT = "Removed it from your calendar."
+UNDO_FAILED_TEXT = "Could not remove it. Please check your calendar."
 PHONE_OFFLINE_TEXT = "Phone action not run: the Jarvis voice app is not connected."
 WARN_UNTRUSTED = "⚠ Proposed after reading third-party content (email or web) — check recipient and text.\n"
 
@@ -54,8 +56,9 @@ def format_confirmation(payload: dict) -> str:
 
 
 class TelegramChannel:
-    def __init__(self, graph, owner_chat_id: int, deliver_actions=None, lock: asyncio.Lock | None = None):
+    def __init__(self, graph, owner_chat_id: int, deliver_actions=None, lock: asyncio.Lock | None = None, undo=None):
         self.deliver_actions = deliver_actions
+        self.undo = undo  # async (event_id) -> bool; removes an event Jarvis auto-created from email
         self.graph = graph
         self.owner = owner_chat_id
         self.owner_filter = filters.Chat(chat_id=owner_chat_id)
@@ -115,6 +118,15 @@ class TelegramChannel:
             return
         await self._reply(chat, result)
 
+    async def _undo(self, chat, event_id: str) -> None:
+        try:
+            done = bool(self.undo) and await self.undo(event_id)
+        except Exception:
+            log.exception("undo failed")
+            await chat.send_message(UNDO_FAILED_TEXT)
+            return
+        await chat.send_message(UNDO_DONE_TEXT if done else HANDLED_TEXT)
+
     async def on_button(self, update, context):
         q = update.callback_query
         await q.answer()
@@ -127,6 +139,9 @@ class TelegramChannel:
         except TelegramError:
             log.warning("could not remove confirmation buttons", exc_info=True)
         action, _, iid = (q.data or "").partition(":")
+        if action == "undo":  # a calendar undo, not a graph confirmation: no lock, no graph step
+            await self._undo(chat, iid)
+            return
         async with self.lock:
             interrupts = (await self.graph.aget_state(THREAD)).interrupts
             stale = action not in ("yes", "no") or not interrupts or interrupts[0].id != iid
