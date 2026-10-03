@@ -1,4 +1,4 @@
-# Jarvis — handoff note (state at 2026-10-02, `main` @ 5657ba5)
+# Jarvis — handoff note (state at 2026-10-03, `main` @ 0bd2b27)
 
 Read this first in a new session, then the spec/plan of whatever you work on next.
 
@@ -31,7 +31,7 @@ Python 3.11+ (host 3.14), FastAPI, LangGraph (+ Postgres checkpointer), langchai
 - Voice may resume a confirmation only by a bare yes/no (`voice/confirm.py`, plain code) AND only for the interrupt that session itself presented (`VoiceSession.offered`); a spoken "yes" never confirms `send_draft` (tap only; a spoken "no" still cancels).
 - One `asyncio.Lock` shared by Telegram and voice serialises "read pending -> decide -> ainvoke" on the single thread `thread_id: "owner"`. A voice graph step is shielded: barge-in/disconnect/replacement abandon waiting but never cancel a running step (so a confirmed write is always audited).
 - Untrusted wrapper is per-tool (`untrusted_email` / `untrusted_web`); research output is redacted in the audit log; `fetch_page` refuses non-global addresses on every hop and pins the connection to the checked IP; `remember` is gated so a page cannot plant a memory silently.
-- Untrusted email text is data: wrapped, redacted in audit, and a write proposed after reading email carries a visible warning (also spoken by voice). Audit log purged at 90 days; no audio/transcripts are stored or audited.
+- Untrusted email and web text is data: wrapped, redacted in audit, and a write proposed after reading either carries a visible warning (also spoken by voice). Audit log purged at 90 days; no audio/transcripts are stored or audited.
 - Device token: sent as `Authorization: Bearer`, checked in constant time against a SHA-256 hash, connection closed before accept on a bad token; one live voice session (new connection replaces the old).
 
 ## Environment and commands
