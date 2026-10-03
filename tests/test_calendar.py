@@ -213,3 +213,66 @@ def test_create_auto_event_omits_empty_location_and_treats_409_as_already_there(
     insert.side_effect = HttpError(httplib2.Response({"status": "500"}), b"")
     with pytest.raises(HttpError):
         c.create_auto_event("abc", "X", datetime(2026, 10, 9, 8, tzinfo=B), datetime(2026, 10, 9, 9, tzinfo=B), None, [60], "m", "d")
+
+
+def test_create_event_with_reminders_and_attendees_sends_updates_only_with_attendees():
+    c, svc = client()
+    insert = svc.events.return_value.insert
+    insert.return_value.execute.return_value = {"id": "e1", "summary": "Lunch"}
+    s, e = datetime(2026, 10, 9, 12, tzinfo=B), datetime(2026, 10, 9, 13, tzinfo=B)
+    c.create_event("Lunch", s, e, reminders=[1440, 60], attendees=["raj@x.com", "mia@y.org"])
+    kw = insert.call_args.kwargs
+    assert kw["sendUpdates"] == "all"
+    assert kw["body"]["attendees"] == [{"email": "raj@x.com"}, {"email": "mia@y.org"}]
+    assert kw["body"]["reminders"] == {"useDefault": False, "overrides": [
+        {"method": "popup", "minutes": 1440}, {"method": "popup", "minutes": 60}]}
+    c.create_event("Solo", s, e)
+    kw = insert.call_args.kwargs
+    assert "sendUpdates" not in kw and "attendees" not in kw["body"] and "reminders" not in kw["body"]
+
+
+def test_update_event_adds_attendees_without_dropping_existing_and_notifies():
+    c, svc = client()
+    svc.events.return_value.get.return_value.execute.return_value = {
+        "id": "i1", "attendees": [{"email": "Raj@X.com", "responseStatus": "accepted"}]}
+    patch = svc.events.return_value.patch
+    patch.return_value.execute.return_value = {"id": "i1"}
+    c.update_event("i1", "this", add_attendees=["raj@x.com", "mia@y.org"], reminders=[30])
+    kw = patch.call_args.kwargs
+    assert kw["sendUpdates"] == "all"
+    assert kw["body"]["attendees"] == [{"email": "Raj@X.com", "responseStatus": "accepted"}, {"email": "mia@y.org"}]
+    assert kw["body"]["reminders"]["overrides"] == [{"method": "popup", "minutes": 30}]
+
+
+def test_update_event_with_only_already_invited_people_does_not_notify():
+    c, svc = client()
+    svc.events.return_value.get.return_value.execute.return_value = {"id": "i1", "attendees": [{"email": "raj@x.com"}]}
+    patch = svc.events.return_value.patch
+    patch.return_value.execute.return_value = {"id": "i1"}
+    c.update_event("i1", "this", summary="New", add_attendees=["RAJ@x.com"])
+    kw = patch.call_args.kwargs
+    assert "sendUpdates" not in kw and "attendees" not in kw["body"] and kw["body"] == {"summary": "New"}
+
+
+def conflict_items():
+    def item(id, s, e, **kw):
+        base = {"id": id, "summary": id, "start": s, "end": e, "location": None, "all_day": False,
+                "declined": False, "busy": True, "source_message": None}
+        return {**base, **kw}
+    return [
+        item("overlap", "2026-10-06T09:30:00+02:00", "2026-10-06T10:30:00+02:00"),
+        item("touching", "2026-10-06T10:00:00+02:00", "2026-10-06T11:00:00+02:00"),
+        item("before", "2026-10-06T08:00:00+02:00", "2026-10-06T09:00:00+02:00"),
+        item("allday", "2026-10-06", "2026-10-07", all_day=True),
+        item("declined", "2026-10-06T09:15:00+02:00", "2026-10-06T09:45:00+02:00", declined=True),
+        item("free", "2026-10-06T09:15:00+02:00", "2026-10-06T09:45:00+02:00", busy=False),
+        item("self", "2026-10-06T09:10:00+02:00", "2026-10-06T09:20:00+02:00"),
+    ]
+
+
+def test_conflicts_are_strict_overlaps_of_busy_timed_events_excluding_the_moved_one():
+    c, _ = client()
+    c.list_for_proactive = lambda s, e: conflict_items()
+    start, end = datetime(2026, 10, 6, 9, 0, tzinfo=B), datetime(2026, 10, 6, 10, 0, tzinfo=B)
+    assert [x["id"] for x in c.conflicts(start, end, exclude_id="self")] == ["overlap"]
+    assert [x["id"] for x in c.conflicts(start, end)] == ["overlap", "self"]
