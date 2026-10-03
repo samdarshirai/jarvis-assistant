@@ -1,6 +1,7 @@
 import base64
 import binascii
 import re
+import unicodedata
 from email import message_from_bytes, policy
 from email.message import EmailMessage
 from email.utils import getaddresses, parseaddr
@@ -181,6 +182,48 @@ class GmailClient:
         return {"id": full["id"], "thread_id": full.get("threadId"), "from": header(p, "From"),
                 "to": header(p, "To"), "subject": header(p, "Subject"), "date": header(p, "Date"),
                 "body": text[:MAX_BODY], "truncated": len(text) > MAX_BODY}
+
+    def find_contacts(self, name: str, limit: int = 15) -> list[dict]:
+        """Candidate addresses for a name, from From/To/Cc headers only (no subject, snippet or body is read)."""
+        q = " ".join(name.replace('"', " ").replace("\\", " ").split())[:60]
+        if not q:
+            raise ValueError("name is required")
+        key = q.casefold()
+        svc = self._svc()
+        resp = self._run(svc.users().messages().list(
+            userId="me", q=f'from:"{q}" OR to:"{q}" OR cc:"{q}"', maxResults=min(limit, 20)))
+        found: dict[str, dict] = {}
+        for m in resp.get("messages", []):
+            full = self._run(svc.users().messages().get(
+                userId="me", id=m["id"], format="metadata", metadataHeaders=["From", "To", "Cc"]))
+            p = full.get("payload", {})
+            sent = "SENT" in full.get("labelIds", [])
+            counted: set[str] = set()
+            for hname in ("From", "To", "Cc"):
+                for display, addr in getaddresses([header(p, hname) or ""]):
+                    addr = addr.strip().lower()
+                    if not addr.isascii() or "@" not in addr or not (key in display.casefold() or key in addr.split("@")[0]):
+                        continue
+                    try:
+                        clean_recipients(addr)
+                    except ValueError:
+                        continue
+                    c = found.setdefault(addr, {"name": "", "address": addr, "you_emailed": False, "seen": 0})
+                    if addr not in counted:
+                        c["seen"] += 1
+                        counted.add(addr)
+                    if not c["name"] and display.strip():
+                        nm = "".join(ch for ch in " ".join(display.split()) if unicodedata.category(ch) not in ("Cf", "Cc"))
+                        c["name"] = "" if "@" in nm else nm[:60]
+                    if sent and hname in ("To", "Cc"):
+                        c["you_emailed"] = True
+        return sorted(found.values(), key=lambda c: (not c["you_emailed"], -c["seen"]))[:5]
+
+    def sent_to(self, address: str) -> bool:
+        """True when the owner has sent at least one message to this address."""
+        addr = clean_recipients(address)[0]
+        resp = self._run(self._svc().users().messages().list(userId="me", q=f"in:sent to:{addr}", maxResults=1))
+        return bool(resp.get("messages"))
 
     def create_draft(self, to: str, subject: str, body: str, reply_to_message_id: str | None = None) -> dict:
         recipients = clean_recipients(to)

@@ -624,3 +624,98 @@ async def test_write_after_web_read_is_flagged():
     out = await g.ainvoke(say(), CFG)
     assert out["__interrupt__"][0].value["after_untrusted"] is True
     assert sends == []
+
+
+# --- confirm_after_untrusted ---
+def shopping_tool(calls):
+    return Tool(name="add_shopping_items", domain="tasks", description="d", args_schema=Args,
+                fn=lambda **kw: calls.append(kw) or {"ok": True}, needs_confirm=False,
+                confirm_after_untrusted=True, describe=lambda a: "Add to shopping list")
+
+
+def test_confirm_after_untrusted_defaults_to_false():
+    assert Tool(name="x", domain="d", description="d", args_schema=Args, fn=lambda **kw: {}).confirm_after_untrusted is False
+
+
+async def test_confirm_after_untrusted_tool_runs_without_a_tap_when_nothing_untrusted_was_read():
+    adds = []
+    g, audit = make({"fast": [AIMessage("tasks")],
+                     "strong": [call("add_shopping_items", {"summary": "milk"}), AIMessage("Added.")]},
+                    [shopping_tool(adds)])
+    out = await g.ainvoke(say("hi"), CFG)
+    assert "__interrupt__" not in out
+    assert adds == [{"summary": "milk"}]
+    assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["not_required"]
+
+
+async def test_confirm_after_untrusted_tool_is_gated_after_an_untrusted_read_in_the_same_turn():
+    adds = []
+    g, audit = make({"fast": [AIMessage("gmail, tasks")],
+                     "strong": [call("read_email", {"message_id": "m1"}), AIMessage("read it"),
+                                call("add_shopping_items", {"summary": "milk"}, id="c2"), AIMessage("Added.")]},
+                    [untrusted_tool(), shopping_tool(adds)])
+    out = await g.ainvoke(say("hi"), CFG)
+    payload = out["__interrupt__"][0].value
+    assert payload["after_untrusted"] is True and adds == []
+    assert payload["actions"] == [{"tool": "add_shopping_items", "args": {"summary": "milk"},
+                                   "summary": "Add to shopping list"}]
+    await g.ainvoke(Command(resume=True), CFG)
+    assert adds == [{"summary": "milk"}]
+    assert [r["confirmation"] for r in audit.records if r["kind"] == "tool"] == ["not_required", "approved"]
+
+
+async def test_confirm_after_untrusted_tool_is_gated_while_the_email_is_still_in_the_window():
+    adds = []
+    g, _ = make({"fast": [AIMessage("gmail"), AIMessage("tasks")],
+                 "strong": [call("read_email", {"message_id": "m1"}), AIMessage("read it"),
+                            call("add_shopping_items", {"summary": "milk"}), AIMessage("Added.")]},
+                [untrusted_tool(), shopping_tool(adds)])
+    out = await g.ainvoke(say("read my mail"), CFG)
+    assert "__interrupt__" not in out
+    out = await g.ainvoke(say("add milk"), CFG)
+    assert out["__interrupt__"][0].value["after_untrusted"] is True and adds == []
+
+
+async def test_shopping_add_beside_a_read_only_tool_after_untrusted_is_refused_not_run():
+    adds, reads = [], []
+    g, _ = make({"fast": [AIMessage("gmail, tasks")],
+                 "strong": [call("read_email", {"message_id": "m1"}), AIMessage("read it"),
+                            AIMessage("", tool_calls=[
+                                {"name": "add_shopping_items", "args": {"summary": "milk"}, "id": "a1", "type": "tool_call"},
+                                {"name": "list_tasks", "args": {}, "id": "a2", "type": "tool_call"}]),
+                            AIMessage("ok")]},
+                [untrusted_tool(), shopping_tool(adds), tool("list_tasks", "tasks", reads, needs_confirm=False)])
+    out = await g.ainvoke(say("hi"), CFG)
+    assert "__interrupt__" not in out and adds == [] and len(reads) == 1
+    msgs = {m.tool_call_id: m.content for m in tool_messages(out)}
+    assert "Propose it again by itself" in msgs["a1"]
+
+
+async def test_cancelled_gated_shopping_add_writes_nothing():
+    adds = []
+    g, audit = make({"fast": [AIMessage("gmail, tasks")],
+                     "strong": [call("read_email", {"message_id": "m1"}), AIMessage("read it"),
+                                call("add_shopping_items", {"summary": "milk"}, id="c2"), AIMessage("ok")]},
+                    [untrusted_tool(), shopping_tool(adds)])
+    await g.ainvoke(say("hi"), CFG)
+    await g.ainvoke(Command(resume=False), CFG)
+    assert adds == []
+    assert "cancelled" in [r["confirmation"] for r in audit.records if r["kind"] == "tool"]
+
+
+def test_shopping_words_route_to_tasks_and_the_prompts_mention_shopping():
+    from jarvis.agent.domains import DOMAINS
+    from jarvis.agent.graph import ROUTER_PROMPT, keyword_domain
+    assert keyword_domain("add milk to my shopping list") == ["tasks"]
+    assert keyword_domain("what's on my grocery list") == ["tasks"]
+    assert "shopping" in ROUTER_PROMPT
+    assert "add_shopping_items" in DOMAINS["tasks"].prompt
+
+
+def test_invite_requests_skip_the_keyword_shortcut_and_the_prompts_explain_the_lookup():
+    from jarvis.agent.domains import DOMAINS
+    from jarvis.agent.graph import ROUTER_PROMPT, keyword_domain
+    assert keyword_domain("schedule a meeting and invite Raj") is None
+    assert keyword_domain("Move my meeting to 5") == ["calendar"]
+    assert "invite" in ROUTER_PROMPT and "gmail, calendar" in ROUTER_PROMPT
+    assert "find_contact" in DOMAINS["gmail"].prompt

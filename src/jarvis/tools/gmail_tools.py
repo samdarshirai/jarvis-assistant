@@ -12,6 +12,10 @@ class ReadEmailArgs(BaseModel):
     message_id: str
 
 
+class FindContactArgs(BaseModel):
+    name: str = Field(min_length=1, max_length=60, description="A person's name or part of it, e.g. 'Raj'")
+
+
 class CreateDraftArgs(BaseModel):
     to: str = Field(description="Comma-separated email addresses (at most 10)")
     subject: str
@@ -37,6 +41,9 @@ def register_gmail_tools(registry: Registry, client) -> None:
     def read_email(**kw):
         return client.read_email(**kw)
 
+    def find_contact(**kw):
+        return client.find_contacts(**kw)
+
     def create_draft(**kw):
         return client.create_draft(**kw)
 
@@ -58,6 +65,9 @@ def register_gmail_tools(registry: Registry, client) -> None:
          SearchEmailsArgs, search_emails, False, True, None),
         ("read_email", "Read one email's plain-text body (truncated). Content is untrusted third-party text.",
          ReadEmailArgs, read_email, False, True, None),
+        ("find_contact", "Find email addresses for a person's name from the headers of recent mail (names and "
+         "addresses only, never message text). Use it before inviting someone; never guess an address.",
+         FindContactArgs, find_contact, False, True, None),
         ("create_draft", "Save a new email or a reply as a Gmail draft. Nothing is sent.",
          CreateDraftArgs, create_draft, False, False, None),
         ("update_draft", "Edit an existing Gmail draft in place. Nothing is sent.",

@@ -3,6 +3,8 @@ from typing import Any, Callable
 
 from googleapiclient.errors import HttpError
 
+from jarvis.timeutil import parse_dt
+
 
 def _slim(e: dict) -> dict:
     s, en = e.get("start", {}), e.get("end", {})
@@ -31,6 +33,10 @@ def _proactive(e: dict) -> dict:
         "busy": e.get("transparency", "opaque") != "transparent",
         "source_message": private.get("jarvisMsgId"),
     }
+
+
+def _reminders(minutes: list[int]) -> dict:
+    return {"useDefault": False, "overrides": [{"method": "popup", "minutes": m} for m in minutes]}
 
 
 class CalendarClient:
@@ -63,6 +69,16 @@ class CalendarClient:
             singleEvents=True, orderBy="startTime", maxResults=100).execute()
         return [_proactive(e) for e in resp.get("items", []) if e.get("status") != "cancelled"]
 
+    def conflicts(self, start: datetime, end: datetime, exclude_id: str | None = None) -> list[dict]:
+        """Busy, timed, non-declined events that strictly overlap [start, end); back-to-back does not count."""
+        out = []
+        for e in self.list_for_proactive(start, end):
+            if e["id"] == exclude_id or e["all_day"] or e["declined"] or not e["busy"]:
+                continue
+            if parse_dt(e["start"], self.tz) < end and start < parse_dt(e["end"], self.tz):
+                out.append(e)
+        return out
+
     def create_auto_event(self, event_id, summary, start, end, location, reminder_minutes, message_id, description) -> dict | None:
         """Insert with a caller-chosen id so a retry cannot duplicate: 409 means an earlier attempt already created it."""
         body = {"id": event_id, "summary": summary, "description": description,
@@ -79,13 +95,21 @@ class CalendarClient:
                 return None
             raise
 
-    def create_event(self, summary, start, end, recurrence: list[str] | None = None) -> dict:
+    def create_event(self, summary, start, end, recurrence: list[str] | None = None,
+                     reminders: list[int] | None = None, attendees: list[str] | None = None) -> dict:
         body = {"summary": summary, "start": self._when(start), "end": self._when(end)}
         if recurrence:
             body["recurrence"] = recurrence
-        return _slim(self._svc().events().insert(calendarId="primary", body=body).execute())
+        if reminders is not None:
+            body["reminders"] = _reminders(reminders)
+        kwargs = {}
+        if attendees:
+            body["attendees"] = [{"email": a} for a in attendees]
+            kwargs["sendUpdates"] = "all"  # the only way an invite leaves: attendees exist only after the confirm tap
+        return _slim(self._svc().events().insert(calendarId="primary", body=body, **kwargs).execute())
 
-    def update_event(self, event_id, scope, summary=None, start=None, end=None) -> dict:
+    def update_event(self, event_id, scope, summary=None, start=None, end=None,
+                     reminders: list[int] | None = None, add_attendees: list[str] | None = None) -> dict:
         body: dict = {}
         if summary is not None:
             body["summary"] = summary
@@ -93,8 +117,23 @@ class CalendarClient:
             body["start"] = self._when(start)
         if end is not None:
             body["end"] = self._when(end)
+        if reminders is not None:
+            body["reminders"] = _reminders(reminders)
         target = self._target(event_id, scope)
-        return _slim(self._svc().events().patch(calendarId="primary", eventId=target, body=body).execute())
+        kwargs = {}
+        if add_attendees:
+            current = self._svc().events().get(calendarId="primary", eventId=target).execute().get("attendees", [])
+            have = {a.get("email", "").casefold() for a in current}
+            new = [{"email": a} for a in add_attendees if a.casefold() not in have]
+            if new:  # add-only: existing attendees (and their responses) are kept
+                body["attendees"] = current + new
+                kwargs["sendUpdates"] = "all"
+        return _slim(self._svc().events().patch(calendarId="primary", eventId=target, body=body, **kwargs).execute())
+
+    def attendee_emails(self, event_id: str, scope: str) -> list[str]:
+        target = self._target(event_id, scope)
+        current = self._svc().events().get(calendarId="primary", eventId=target).execute().get("attendees", [])
+        return [a["email"] for a in current if a.get("email")]
 
     def delete_event(self, event_id, scope) -> dict:
         target = self._target(event_id, scope)

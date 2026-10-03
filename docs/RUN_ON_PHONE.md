@@ -60,6 +60,7 @@ Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
 ## Caveats
 
 - Not tested on a real device yet: wake word, screen wake, assistant long-press, Kotlin services, echo cancellation. Expect some bugs.
+- "Add X to my shopping list", event reminders and invites work by voice and chat. Invites need a Confirm tap (or a spoken yes on voice); adding shopping items needs none.
 - A spoken "yes" never sends an email. Say "send it", then tap Confirm on the card. This is on purpose.
 - The morning brief arrives as a push at the configured time (default 07:30 on weekdays) and plays when tapped.
 - The laptop must stay awake with the server and tunnel running whenever you use the app.
@@ -68,4 +69,4 @@ Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
 
 ## Full manual test table
 
-See `ACCEPTANCE.md` rows 1-56.
+See `ACCEPTANCE.md` rows 1-65.

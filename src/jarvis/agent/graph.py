@@ -23,13 +23,12 @@ ROUTER_PROMPT = (
     "Classify the user's latest request. Reply with ONLY a comma-separated list, in the order the work "
     "must happen, chosen from: calendar, tasks, gmail, phone, memory, notes, research, chat. Use 'chat' alone "
     "when no calendar, task, email, phone, memory, notes or research work is needed. calendar = anything about "
-    "the user's schedule, day, agenda, plans, availability or what is on or coming up; tasks = to-dos and "
-    "deadlines; gmail = mail; phone = alarms, timers, navigation, texting; memory = remembering or forgetting "
+    "the user's schedule, day, agenda, plans, availability or what is on or coming up; tasks = to-dos, deadlines and the shopping list; gmail = mail; phone = alarms, timers, navigation, texting; memory = remembering or forgetting "
     "facts about the user; notes = the user's own notes; research = looking something up on the web. Examples: "
     "'what does my day look like' -> calendar; 'am I free Friday' -> calendar; 'what do I have to do' -> tasks; "
     "'add that booking email to my calendar' -> gmail, calendar; 'set an alarm for 6 and put gym at 7 in my "
     "calendar' -> calendar, phone; 'research robot vacuums and save a note' -> research, notes; "
-    "'remember I like window seats' -> memory."
+    "'remember I like window seats' -> memory; 'add milk and eggs to my shopping list' -> tasks; 'invite Raj to lunch Friday at 12' -> gmail, calendar."
 )
 HISTORY = 40
 VOICE_NOTE = ("\nThis reply will be spoken aloud: use two or three short sentences, name sources by site, and never "
@@ -47,7 +46,7 @@ class State(TypedDict):
 
 KEYWORDS = {
     "calendar": r"calendar|event|meeting|appointment|free slot|schedule|agenda|my day|am i free",
-    "tasks": r"\btasks?\b|to-?do",
+    "tasks": r"\btasks?\b|to-?do|shopping|grocer",
     "gmail": r"e-?mail|inbox|gmail|draft",
     "phone": r"alarm|timer|navigat|directions",
     "memory": r"\bremember\b|\bforget (?:that|about|what)\b|what do you know about me",
@@ -58,6 +57,8 @@ KEYWORDS = {
 
 def keyword_domain(text: str) -> list[str] | None:
     """Skip the router LLM call when exactly one domain's keywords appear; anything unclear goes to the router."""
+    if re.search(r"\binvit", text, re.IGNORECASE):  # inviting needs the gmail contact lookup: let the router plan it
+        return None
     hits = [d for d, rx in KEYWORDS.items() if re.search(rx, text, re.IGNORECASE)]
     return hits if len(hits) == 1 else None
 
@@ -166,9 +167,17 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
     def after_agent(state: State) -> str:
         return "gate" if state["messages"][-1].tool_calls else "advance"
 
+    def untrusted_seen(state: State) -> bool:
+        return bool(state.get("read_untrusted")) or untrusted_in_window(state["messages"])
+
+    def gated(name: str, seen: bool) -> bool:
+        tool = registry.get(name)
+        return registry.needs_confirm(name) or bool(tool and tool.confirm_after_untrusted and seen)
+
     async def gate(state: State) -> Command[Literal["tools", "reject"]]:
         calls = state["messages"][-1].tool_calls
-        pending = [c for c in calls if registry.needs_confirm(c["name"])]
+        seen = untrusted_seen(state)
+        pending = [c for c in calls if gated(c["name"], seen)]
         if not pending:
             return Command(goto="tools", update={"approved": True})
         if len(pending) < len(calls):  # confirmed text must not change under the card: propose writes alone
@@ -185,7 +194,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
                     log.exception("describe failed for %s", c["name"])
             actions.append(action)
         payload: dict = {"actions": actions}
-        if state.get("read_untrusted") or untrusted_in_window(state["messages"]):
+        if seen:
             payload["after_untrusted"] = True
         decision = interrupt(payload)
         if decision is True:
@@ -206,9 +215,10 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         out = []
         ran_untrusted = False
         dones: list[str] = []  # one wrap-up line per clean confirmed write; used only if every call in the step has one
+        seen = untrusted_seen(state)
         for c in state["messages"][-1].tool_calls:
             tool = registry.get(c["name"])
-            confirm = registry.needs_confirm(c["name"])
+            confirm = gated(c["name"], seen)
             result: object
             t0 = time.monotonic()
             label = "blocked"
