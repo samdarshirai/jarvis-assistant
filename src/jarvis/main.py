@@ -19,6 +19,9 @@ from jarvis.google.tasks import TasksClient
 from jarvis.llm import LLMProvider
 from jarvis.memory import MemoryStore
 from jarvis.notes import NoteStore
+from jarvis.proactive.mailwatch import undo_event
+from jarvis.proactive.scheduler import start_proactive
+from jarvis.proactive.store import ProactiveStore
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
 from jarvis.tools.memory_tools import register_memory_tools
@@ -71,28 +74,38 @@ async def lifespan(app: FastAPI):
         init_schema(pool)
         audit = Audit(pool)
         audit.purge(90)
+        proactive_store = ProactiveStore(pool)
+        proactive_store.purge(90)
         store = PgTokenStore(pool)
 
         def svc(name: str, version: str):
             return cached_service(lambda: build_service(name, version, store, s.fernet_key))
 
         registry = build_registry(svc, s.timezone, pool, s.tavily_api_key)
+        calendar = CalendarClient(svc("calendar", "v3"), s.timezone)
+        tasks_client = TasksClient(svc("tasks", "v1"))
+        gmail = GmailClient(svc("gmail", "v1"))
+        llm = LLMProvider(s, audit)
+        devices = Devices(pool)
+
+        async def undo(event_id: str) -> bool:
+            return await undo_event(calendar, proactive_store, audit, event_id)
 
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
-            graph = build_graph(LLMProvider(s, audit), registry, audit, saver, s.timezone,
+            graph = build_graph(llm, registry, audit, saver, s.timezone,
                                 memories=MemoryStore(pool).all)
             # One lock for both channels on the shared thread "owner": "read pending -> decide -> ainvoke" is one step.
             # ponytail: one global lock, fine for a single owner; per-thread locks if more threads ever appear.
             lock = asyncio.Lock()
             voice = VoiceService(
-                graph, Devices(pool),
+                graph, devices,
                 DeepgramSTT(s.deepgram_api_key) if s.deepgram_api_key else None,
                 CartesiaTTS(s.cartesia_api_key, s.cartesia_voice_id) if s.cartesia_api_key and s.cartesia_voice_id else None,
                 lock=lock)
             app.state.voice = voice
             tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
-                                 lock=lock).build(s.telegram_bot_token)
+                                 lock=lock, undo=undo).build(s.telegram_bot_token)
             try:
                 await tg.initialize()
             except Exception:
@@ -102,15 +115,19 @@ async def lifespan(app: FastAPI):
                 except Exception:
                     log.exception("failed to shutdown telegram app after init failure")
                 raise
+            sched = None
             try:
                 await tg.start()
                 await tg.updater.start_polling()
+                sched = start_proactive(s, proactive_store, calendar, tasks_client, gmail, llm, audit, tg.bot, devices)
                 try:
                     yield
                 finally:
                     pass  # Teardown happens in outer finally
             finally:
                 # Ordered teardown for all paths through start/start_polling/yield
+                if sched is not None:
+                    sched.shutdown(wait=False)  # stop new jobs before the channels and pool go away
                 app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
                 try:
                     if tg.updater.running:

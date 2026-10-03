@@ -2,8 +2,7 @@
 
 The app is Android only (Flutter, package `com.jarvis.jarvis_app`, Android 14+). iPhone is not supported.
 
-**Implemented:** Telegram chat, Calendar, Tasks, Gmail, Pixel voice app.
-**Not built yet:** memory/notes/web research (sub-project 4), morning brief and proactive alerts (sub-project 5).
+**Implemented:** Telegram chat, Calendar, Tasks, Gmail, memory/notes/web research, Pixel voice app, morning brief and proactive alerts. All sub-projects built.
 
 Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
 
@@ -62,11 +61,11 @@ Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
 
 - Not tested on a real device yet: wake word, screen wake, assistant long-press, Kotlin services, echo cancellation. Expect some bugs.
 - A spoken "yes" never sends an email. Say "send it", then tap Confirm on the card. This is on purpose.
-- Web research and the morning brief don't exist yet.
+- The morning brief arrives as a push at the configured time (default 07:30 on weekdays) and plays when tapped.
 - The laptop must stay awake with the server and tunnel running whenever you use the app.
 - Server-only voice check without the phone:
   `python -m jarvis.voice.client wss://<host>/voice <token> question.wav` (16 kHz mono WAV).
 
 ## Full manual test table
 
-See `ACCEPTANCE.md` rows 1-38.
+See `ACCEPTANCE.md` rows 1-56.

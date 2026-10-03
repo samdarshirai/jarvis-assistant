@@ -406,3 +406,42 @@ async def test_oversized_card_is_offered_with_working_buttons():
     assert len(card) < 4096 and "reply_markup" in kw
     await ch.on_button(button_update(chat(), ids(c)[0]), None)
     assert calls == [{"summary": "x" * 20000}]  # the real args still run in full
+
+
+async def test_undo_tap_removes_the_event_without_touching_the_graph():
+    ch = pending_channel([])
+    ch.undo = AsyncMock(return_value=True)
+    ch.graph = SimpleNamespace(ainvoke=AsyncMock(), aget_state=AsyncMock())
+    c = chat()
+    await ch.on_button(button_update(c, "undo:abc123"), None)
+    ch.undo.assert_awaited_once_with("abc123")
+    ch.graph.ainvoke.assert_not_called()
+    ch.graph.aget_state.assert_not_called()
+    assert sent(c) == [("Removed it from your calendar.", {})]
+
+
+async def test_undo_for_an_unknown_event_or_without_a_handler_is_already_handled():
+    ch = pending_channel([])
+    ch.undo = AsyncMock(return_value=False)
+    c = chat()
+    await ch.on_button(button_update(c, "undo:zzz"), None)
+    assert sent(c) == [("Already handled.", {})]
+    ch.undo = None
+    c = chat()
+    await ch.on_button(button_update(c, "undo:zzz"), None)
+    assert sent(c) == [("Already handled.", {})]
+
+
+async def test_undo_failure_gets_a_fixed_message():
+    ch = pending_channel([])
+    ch.undo = AsyncMock(side_effect=RuntimeError("google down"))
+    c = chat()
+    await ch.on_button(button_update(c, "undo:abc"), None)
+    assert sent(c) == [("Could not remove it. Please check your calendar.", {})]
+
+
+async def test_non_owner_undo_tap_is_dropped():
+    ch = pending_channel([])
+    ch.undo = AsyncMock(return_value=True)
+    await ch.on_button(button_update(chat(), "undo:abc", chat_id=99), None)
+    ch.undo.assert_not_called()

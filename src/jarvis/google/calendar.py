@@ -1,6 +1,8 @@
 from datetime import datetime
 from typing import Any, Callable
 
+from googleapiclient.errors import HttpError
+
 
 def _slim(e: dict) -> dict:
     s, en = e.get("start", {}), e.get("end", {})
@@ -11,6 +13,23 @@ def _slim(e: dict) -> dict:
         "start": s.get("dateTime") or s.get("date"),
         "end": en.get("dateTime") or en.get("date"),
         "location": e.get("location"),
+    }
+
+
+def _proactive(e: dict) -> dict:
+    s, en = e.get("start", {}), e.get("end", {})
+    me = next((a for a in e.get("attendees", []) if a.get("self")), {})
+    private = (e.get("extendedProperties") or {}).get("private") or {}
+    return {
+        "id": e["id"],
+        "summary": e.get("summary") or "",
+        "start": s.get("dateTime") or s.get("date"),
+        "end": en.get("dateTime") or en.get("date"),
+        "location": e.get("location"),
+        "all_day": "dateTime" not in s,
+        "declined": me.get("responseStatus") == "declined",
+        "busy": e.get("transparency", "opaque") != "transparent",
+        "source_message": private.get("jarvisMsgId"),
     }
 
 
@@ -36,6 +55,29 @@ class CalendarClient:
             calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(), q=query,
             singleEvents=True, orderBy="startTime", maxResults=limit).execute()
         return [_slim(e) for e in resp.get("items", [])]
+
+    def list_for_proactive(self, start: datetime, end: datetime) -> list[dict]:
+        """Events with the flags the scheduled jobs need (all-day, declined, busy, which email created it)."""
+        resp = self._svc().events().list(
+            calendarId="primary", timeMin=start.isoformat(), timeMax=end.isoformat(),
+            singleEvents=True, orderBy="startTime", maxResults=100).execute()
+        return [_proactive(e) for e in resp.get("items", []) if e.get("status") != "cancelled"]
+
+    def create_auto_event(self, event_id, summary, start, end, location, reminder_minutes, message_id, description) -> dict | None:
+        """Insert with a caller-chosen id so a retry cannot duplicate: 409 means an earlier attempt already created it."""
+        body = {"id": event_id, "summary": summary, "description": description,
+                "start": self._when(start), "end": self._when(end),
+                "reminders": {"useDefault": False,
+                              "overrides": [{"method": "popup", "minutes": m} for m in reminder_minutes]},
+                "extendedProperties": {"private": {"jarvisMsgId": message_id}}}
+        if location:
+            body["location"] = location
+        try:
+            return _slim(self._svc().events().insert(calendarId="primary", body=body).execute())
+        except HttpError as e:
+            if e.resp.status == 409:
+                return None
+            raise
 
     def create_event(self, summary, start, end, recurrence: list[str] | None = None) -> dict:
         body = {"summary": summary, "start": self._when(start), "end": self._when(end)}

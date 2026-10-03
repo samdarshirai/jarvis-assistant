@@ -50,6 +50,8 @@ def mock_lifespan_deps(monkeypatch):
     monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
+    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool: MagicMock())
+    monkeypatch.setattr("jarvis.main.start_proactive", lambda *a, **k: MagicMock())
 
     # Mock AsyncPostgresSaver
     mock_saver = AsyncMock()
@@ -106,6 +108,8 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
     monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
+    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool: MagicMock())
+    monkeypatch.setattr("jarvis.main.start_proactive", lambda *a, **k: MagicMock())
 
     # Make build_graph raise
     def mock_build_graph(*args, **kwargs):
@@ -340,3 +344,32 @@ def test_cached_service_reuses_then_rebuilds_after_ttl():
     assert get() == get() == 1
     now[0] = 11
     assert get() == 2
+
+
+@pytest.mark.asyncio
+async def test_lifespan_starts_the_scheduler_after_polling_and_stops_it_first(mock_lifespan_deps):
+    call_order = mock_lifespan_deps["call_order"]
+    monkeypatch = mock_lifespan_deps["monkeypatch"]
+    fake_tg_app = AsyncMock()
+    fake_tg_app.updater = AsyncMock()
+    fake_tg_app.updater.running = True
+    fake_tg_app.running = True
+    fake_tg_app.updater.stop = AsyncMock(side_effect=lambda: call_order.append("stop_updater"))
+    fake_tg_app.updater.start_polling = AsyncMock(side_effect=lambda: call_order.append("start_polling"))
+    sched = MagicMock()
+    sched.shutdown = MagicMock(side_effect=lambda wait=True: call_order.append(f"scheduler_shutdown(wait={wait})"))
+
+    def start(*args, **kwargs):
+        call_order.append("scheduler_start")
+        return sched
+
+    monkeypatch.setattr("jarvis.main.start_proactive", start)
+    monkeypatch.setattr("jarvis.main.build_graph", lambda *a, **k: MagicMock())
+    channel = MagicMock()
+    channel.build = MagicMock(return_value=fake_tg_app)
+    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *a, **kw: channel)
+
+    async with lifespan(FastAPI()):
+        pass
+
+    assert call_order == ["start_polling", "scheduler_start", "scheduler_shutdown(wait=False)", "stop_updater"]

@@ -98,3 +98,64 @@ class FakeTTS:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+
+
+class FakeProactiveStore:
+    """In-memory twin of ProactiveStore (same methods) for job tests."""
+
+    def __init__(self):
+        self.mail: dict[str, tuple] = {}
+        self.alerts: set[str] = set()
+        self.autos: dict[str, str] = {}
+        self.state: dict[str, str] = {}
+
+    def mail_seen(self, message_id):
+        return message_id in self.mail
+
+    def record_mail(self, message_id, outcome, event_id=None):
+        self.mail.setdefault(message_id, (outcome, event_id))
+
+    def claim_alert(self, key):
+        if key in self.alerts:
+            return False
+        self.alerts.add(key)
+        return True
+
+    def add_auto_event(self, event_id, message_id):
+        self.autos.setdefault(event_id, message_id)
+
+    def is_auto_event(self, event_id):
+        return event_id in self.autos
+
+    def remove_auto_event(self, event_id):
+        return self.autos.pop(event_id, None) is not None
+
+    def auto_events_last_day(self):
+        return len(self.autos)
+
+    def get_state(self, key):
+        return self.state.get(key)
+
+    def set_state(self, key, value):
+        self.state[key] = value
+
+    def purge(self, days=90):
+        pass
+
+
+class FakeNotifier:
+    """Records what the jobs would have sent: (kind, text, undo_event_id)."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    async def telegram(self, text, undo_event_id=None):
+        self.calls.append(("telegram", text, undo_event_id))
+
+    async def push(self, text):
+        self.calls.append(("push", text, None))
+        return 1
+
+    async def both(self, text):
+        await self.telegram(text)
+        await self.push(text)
