@@ -35,38 +35,42 @@ void main() {
 
   testWidgets('shows every section with its data', (t) async {
     await _loaded(t, alarm: DateTime(2026, 10, 6, 6, 30));
-    expect(find.text('Good morning'), findsOneWidget);
+    expect(find.text('Good morning,'), findsOneWidget);
     expect(find.text('Monday, 5 October'), findsOneWidget);
     expect(find.text('Morning brief'), findsOneWidget);
     expect(find.textContaining('09:00 Standup'), findsOneWidget);
+    expect(find.text('Schedule'), findsOneWidget);
+    expect(find.text('Inbox'), findsOneWidget);
+    expect(find.text('2 left'), findsOneWidget);
     expect(find.text('Standup'), findsOneWidget);
     expect(find.text('09:00'), findsOneWidget);
     expect(find.text('All day'), findsOneWidget);
     expect(find.text('Pay rent'), findsOneWidget);
     expect(find.text('Overdue'), findsOneWidget);
-    expect(find.text('5+ unread'), findsOneWidget);
+    expect(find.text('5+'), findsOneWidget);
     expect(find.text('Boss'), findsOneWidget);
     expect(find.text('Contract'), findsOneWidget);
     expect(find.text('Gym plan'), findsOneWidget);
-    expect(find.text('06:30 · Tomorrow'), findsOneWidget);
+    expect(find.text('06:30'), findsOneWidget);
+    expect(find.text('Tomorrow'), findsOneWidget);
     expect(find.text('Offline'), findsNothing);
   });
 
   testWidgets('a null section says Unavailable and the others still render', (t) async {
     await _loaded(t, data: const DashboardData(tasks: [TaskItem(title: 'Pay rent', overdue: false)]));
     expect(find.text('Pay rent'), findsOneWidget);
-    expect(find.text('Unavailable'), findsNWidgets(4)); // brief, events, mail, notes
+    expect(find.text('Unavailable'), findsNWidgets(3)); // events, mail, notes (brief pill hidden)
   });
 
   testWidgets('empty lists and no alarm show friendly text', (t) async {
     await _loaded(t, data: const DashboardData(events: [], tasks: [], unread: UnreadMail(count: 0, more: false, items: []), notes: [], brief: 'x'));
-    for (final s in ['No events today', 'No pending tasks', 'No unread email', 'No notes yet', 'No alarm set']) {
+    for (final s in ['Free all day', 'Nothing pending.', 'Inbox zero. Nothing unread.', 'No notes yet', 'No alarm set']) {
       expect(find.text(s), findsOneWidget);
     }
   });
 
   testWidgets('a long mail subject and event title do not overflow a narrow phone', (t) async {
-    t.view.physicalSize = const Size(360 * 3, 640 * 3);
+    t.view.physicalSize = const Size(320 * 3, 640 * 3);
     t.view.devicePixelRatio = 3;
     addTearDown(t.view.reset);
     final long = 'x' * 300;
@@ -128,7 +132,7 @@ void main() {
     await _loaded(t,
         data: DashboardData.fromJson({...sampleJson, 'reauth': true}), onPlay: (s) => played = s);
     expect(find.textContaining('Google needs re-consent'), findsOneWidget);
-    await t.tap(find.text('Play'));
+    await t.tap(find.byTooltip('Play'));
     expect(played, 'Calendar today: 09:00 Standup.');
   });
 }
