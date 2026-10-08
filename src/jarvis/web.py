@@ -54,6 +54,19 @@ class WebSearch:
                             for x in items][:limit]}
 
 
+class DdgSearch:
+    """Keyless, free search via DuckDuckGo. ponytail: scrapes DDG, can be rate-limited; switch to Tavily/SearXNG if flaky."""
+
+    def search(self, query: str, limit: int = 5) -> dict:
+        from ddgs import DDGS
+        try:
+            items = DDGS(timeout=TIMEOUT).text(query, max_results=limit)
+        except Exception:
+            raise SearchError("Web search failed.") from None
+        return {"results": [{"title": x.get("title", ""), "url": x.get("href", ""), "snippet": x.get("body", "")}
+                            for x in items][:limit]}
+
+
 class _Text(HTMLParser):
     SKIP = {"script", "style", "noscript", "template", "svg"}
     BREAK = {"p", "br", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "section", "article"}

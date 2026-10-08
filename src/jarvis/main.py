@@ -30,7 +30,7 @@ from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.research_tools import register_research_tools
 from jarvis.tools.task_tools import register_task_tools
-from jarvis.web import WebSearch
+from jarvis.web import WebSearch, DdgSearch
 from jarvis.voice.devices import Devices
 from jarvis.voice.stt import DeepgramSTT
 from jarvis.voice.tts import CartesiaTTS
@@ -63,7 +63,7 @@ def build_registry(svc, tz: str, pool=None, tavily_key: str = "") -> Registry:
     if pool is not None:
         register_memory_tools(registry, MemoryStore(pool))
         register_note_tools(registry, NoteStore(pool))
-    register_research_tools(registry, WebSearch(tavily_key) if tavily_key else None)
+    register_research_tools(registry, WebSearch(tavily_key) if tavily_key else DdgSearch())
     return registry
 
 
