@@ -1,0 +1,8 @@
+.git
+.venv
+.env
+client_secret.json
+tests
+docs
+jarvis_app
+**/__pycache__

@@ -1,0 +1,5 @@
+{$DOMAIN} {
+	@public path /voice /health
+	reverse_proxy @public app:8000
+	respond 404
+}
