@@ -92,31 +92,34 @@ class DashboardSections extends StatelessWidget {
     );
   }
 
+  Widget _section<T>(BuildContext context, List<T>? items, String empty, Widget Function(T) row) => items == null
+      ? _unavailable(context)
+      : items.isEmpty
+          ? _muted(context, empty)
+          : Column(children: [
+              for (final i in items) Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: row(i)),
+            ]);
+
   Widget _calendar(BuildContext context, List<EventItem>? events) => GlassCard(
         title: 'Calendar',
         icon: Icons.event,
         accent: accentCal,
-        child: events == null
-            ? _unavailable(context)
-            : events.isEmpty
-                ? _muted(context, 'No events today')
-                : Column(children: [
-                    for (final e in events)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          SizedBox(
-                              width: 64,
-                              child: Text(e.allDay || e.start == null ? 'All day' : hhmm(e.start!),
-                                  style: const TextStyle(fontWeight: FontWeight.w600, color: accentCal))),
-                          Expanded(
-                              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            _one(e.summary),
-                            if (e.location != null) _one(e.location!, style: const TextStyle(color: mutedText, fontSize: 12)),
-                          ])),
-                        ]),
-                      ),
-                  ]),
+        child: _section<EventItem>(
+          context,
+          events,
+          'No events today',
+          (e) => Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            SizedBox(
+                width: 64,
+                child: Text(e.allDay || e.start == null ? 'All day' : hhmm(e.start!),
+                    style: const TextStyle(fontWeight: FontWeight.w600, color: accentCal))),
+            Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              _one(e.summary),
+              if (e.location != null) _one(e.location!, style: const TextStyle(color: mutedText, fontSize: 12)),
+            ])),
+          ]),
+        ),
       );
 
   Widget _tasks(BuildContext context, List<TaskItem>? tasks) => GlassCard(
@@ -124,23 +127,18 @@ class DashboardSections extends StatelessWidget {
         icon: Icons.check_circle_outline,
         accent: accentTasks,
         trailing: tasks == null || tasks.isEmpty ? null : Text('${tasks.length}', style: const TextStyle(color: accentTasks)),
-        child: tasks == null
-            ? _unavailable(context)
-            : tasks.isEmpty
-                ? _muted(context, 'No pending tasks')
-                : Column(children: [
-                    for (final t in tasks)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Row(children: [
-                          Expanded(child: _one(t.title)),
-                          if (t.overdue)
-                            const Text('Overdue', style: TextStyle(color: Colors.redAccent, fontSize: 12))
-                          else if (t.due != null)
-                            Text(t.due!, style: const TextStyle(color: mutedText, fontSize: 12)),
-                        ]),
-                      ),
-                  ]),
+        child: _section<TaskItem>(
+          context,
+          tasks,
+          'No pending tasks',
+          (t) => Row(children: [
+            Expanded(child: _one(t.title)),
+            if (t.overdue)
+              const Text('Overdue', style: TextStyle(color: Colors.redAccent, fontSize: 12))
+            else if (t.due != null)
+              Flexible(child: _one(t.due!, style: const TextStyle(color: mutedText, fontSize: 12))),
+          ]),
+        ),
       );
 
   Widget _mail(BuildContext context, UnreadMail? m) => GlassCard(
@@ -148,34 +146,22 @@ class DashboardSections extends StatelessWidget {
         icon: Icons.mail_outline,
         accent: accentMail,
         trailing: m == null || m.count == 0 ? null : Text('${m.count}${m.more ? '+' : ''} unread', style: const TextStyle(color: accentMail)),
-        child: m == null
-            ? _unavailable(context)
-            : m.items.isEmpty
-                ? _muted(context, 'No unread email')
-                : Column(children: [
-                    for (final i in m.items)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 4),
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          _one(i.sender, style: const TextStyle(fontWeight: FontWeight.w600)),
-                          _one(i.subject, style: const TextStyle(color: mutedText)),
-                        ]),
-                      ),
-                  ]),
+        child: _section<MailItem>(
+          context,
+          m?.items,
+          'No unread email',
+          (i) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            _one(i.sender, style: const TextStyle(fontWeight: FontWeight.w600)),
+            _one(i.subject, style: const TextStyle(color: mutedText)),
+          ]),
+        ),
       );
 
   Widget _notes(BuildContext context, List<NoteItem>? notes) => GlassCard(
         title: 'Notes',
         icon: Icons.sticky_note_2_outlined,
         accent: accentNotes,
-        child: notes == null
-            ? _unavailable(context)
-            : notes.isEmpty
-                ? _muted(context, 'No notes yet')
-                : Column(children: [
-                    for (final n in notes)
-                      Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [Expanded(child: _one(n.title))])),
-                  ]),
+        child: _section<NoteItem>(context, notes, 'No notes yet', (n) => _one(n.title)),
       );
 
   Widget _alarm(BuildContext context, DateTime n) {

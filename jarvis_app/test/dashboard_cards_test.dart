@@ -55,7 +55,7 @@ void main() {
   testWidgets('a null section says Unavailable and the others still render', (t) async {
     await _loaded(t, data: const DashboardData(tasks: [TaskItem(title: 'Pay rent', overdue: false)]));
     expect(find.text('Pay rent'), findsOneWidget);
-    expect(find.text('Unavailable'), findsAtLeastNWidgets(3)); // events, mail, notes (+ brief)
+    expect(find.text('Unavailable'), findsNWidgets(4)); // brief, events, mail, notes
   });
 
   testWidgets('empty lists and no alarm show friendly text', (t) async {
@@ -73,9 +73,23 @@ void main() {
     await _loaded(t, data: DashboardData.fromJson({
       'events': [{'summary': long, 'start': '2026-10-05T09:00:00', 'location': long}],
       'unread': {'count': 1, 'more': false, 'items': [{'from': long, 'subject': long}]},
+      'tasks': [{'title': long, 'due': long}],
+      'notes': [{'title': long}],
       'brief': long,
     }));
     expect(t.takeException(), isNull);
+  });
+
+  testWidgets('an event without a title renders (no title)', (t) async {
+    await _loaded(t, data: DashboardData.fromJson({'events': [{'start': '2026-10-05T09:00:00'}]}));
+    expect(find.text('(no title)'), findsOneWidget);
+  });
+
+  testWidgets('all-day and start-less events both render All day', (t) async {
+    await _loaded(t, data: DashboardData.fromJson({
+      'events': [{'summary': 'A', 'start': '2026-10-05', 'all_day': true}, {'summary': 'B'}],
+    }));
+    expect(find.text('All day'), findsNWidgets(2));
   });
 
   testWidgets('offline with cached data keeps the cards and shows the chip', (t) async {
