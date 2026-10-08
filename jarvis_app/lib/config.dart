@@ -11,5 +11,6 @@ class Config {
   }
 
   Uri get voiceUri => _uri('/voice', ws: true);
+  Uri apiUri(String path, [Map<String, String>? query]) => _uri(path, ws: false).replace(queryParameters: query);
   Uri get dashboardUri => _uri('/dashboard', ws: false);
 }
