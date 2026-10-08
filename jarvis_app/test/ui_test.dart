@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jarvis_app/dashboard.dart';
 import 'package:jarvis_app/protocol.dart';
 import 'package:jarvis_app/ui.dart';
 
+import 'dash_fixture.dart';
 import 'session_rig.dart';
 
 void main() {
@@ -34,5 +36,51 @@ void main() {
     expect(find.text('What Jarvis can do'), findsOneWidget);
     expect(find.text('Calendar'), findsOneWidget);
     expect(find.text('List events'), findsOneWidget);
+  });
+
+  testWidgets('home shows the dashboard above the voice bar and the orb starts a session', (t) async {
+    final r = Rig();
+    final d = DashboardController(fetch: () async => sampleDashboard());
+    await d.refresh();
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, dashboard: d)));
+    expect(find.text('Standup'), findsOneWidget);
+    expect(find.text('Say "Hey Jarvis"'), findsOneWidget);
+    await t.tap(find.byTooltip('Talk'));
+    await t.pump();
+    expect(r.started, 1);
+    expect(find.byTooltip('Stop'), findsOneWidget);
+    r.c.stop();
+    await t.pump();
+  });
+
+  testWidgets('Play on the brief card speaks the brief text through the session', (t) async {
+    final r = Rig();
+    final d = DashboardController(fetch: () async => sampleDashboard());
+    await d.refresh();
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, dashboard: d)));
+    await t.tap(find.text('Play'));
+    await t.pump();
+    await t.pump();
+    expect(r.socket.sent.where((e) => e.$1 == 'speak').single.$2, {'text': 'Calendar today: 09:00 Standup.'});
+    r.c.stop();
+    await t.pump();
+  });
+
+  testWidgets('small phone with all sections, long text and an open confirm card does not overflow', (t) async {
+    t.view.physicalSize = const Size(360 * 3, 640 * 3);
+    t.view.devicePixelRatio = 3;
+    addTearDown(t.view.reset);
+    final r = Rig();
+    final d = DashboardController(fetch: () async => sampleDashboard(), alarm: () async => DateTime(2026, 10, 6, 6, 30));
+    await d.refresh();
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, dashboard: d)));
+    await r.c.start();
+    r.socket.ctrl.add(ConfirmCardEvent(interruptId: 'i', summary: 'Create ${'Gym ' * 80}', tapOnly: false, afterUntrusted: true));
+    r.socket.ctrl.add(TranscriptEvent('user', 'word ' * 120, true));
+    await t.pump();
+    expect(t.takeException(), isNull);
+    expect(find.text('Confirm'), findsOneWidget);
+    r.c.stop();
+    await t.pump();
   });
 }
