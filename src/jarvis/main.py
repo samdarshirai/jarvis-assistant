@@ -4,13 +4,15 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, Request, WebSocket
+from fastapi.responses import JSONResponse
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from jarvis.agent.graph import build_graph
 from jarvis.audit import Audit
 from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
+from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
 from jarvis.google.auth import PgTokenStore, build_service
 from jarvis.google.calendar import CalendarClient
@@ -105,6 +107,7 @@ async def lifespan(app: FastAPI):
                 CartesiaTTS(s.cartesia_api_key, s.cartesia_voice_id) if s.cartesia_api_key and s.cartesia_voice_id else None,
                 lock=lock)
             app.state.voice = voice
+            app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool), s.timezone)
             tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
                                  lock=lock, undo=undo).build(s.telegram_bot_token)
             try:
@@ -130,6 +133,7 @@ async def lifespan(app: FastAPI):
                 if sched is not None:
                     sched.shutdown(wait=False)  # stop new jobs before the channels and pool go away
                 app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
+                app.state.dashboard = None
                 try:
                     if tg.updater.running:
                         await tg.updater.stop()
@@ -162,6 +166,15 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     @app.get("/health")
     def health():
         return {"ok": True}
+
+    @app.get("/dashboard")
+    async def dashboard(request: Request):
+        svc = getattr(app.state, "dashboard", None)
+        if svc is None:  # lifespan has not built it yet
+            return JSONResponse({"error": "unavailable"}, status_code=503)
+        if not await svc.authorized(request.headers.get("authorization", "")):
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await svc.payload()
 
     @app.websocket("/voice")
     async def voice(ws: WebSocket):

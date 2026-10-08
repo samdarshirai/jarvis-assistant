@@ -373,3 +373,34 @@ async def test_lifespan_starts_the_scheduler_after_polling_and_stops_it_first(mo
         pass
 
     assert call_order == ["start_polling", "scheduler_start", "scheduler_shutdown(wait=False)", "stop_updater"]
+
+
+class _Dash:
+    def __init__(self, ok=True):
+        self.ok, self.seen = ok, None
+
+    async def authorized(self, header):
+        self.seen = header
+        return self.ok
+
+    async def payload(self):
+        return {"events": [], "reauth": False}
+
+
+def test_dashboard_is_503_until_the_service_is_built():
+    assert TestClient(create_app(with_lifespan=False)).get("/dashboard").status_code == 503
+
+
+def test_dashboard_rejects_a_bad_token():
+    app = create_app(with_lifespan=False)
+    app.state.dashboard = _Dash(ok=False)
+    assert TestClient(app).get("/dashboard", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert TestClient(app).get("/dashboard").status_code == 401
+
+
+def test_dashboard_returns_the_payload_for_a_paired_device():
+    app = create_app(with_lifespan=False)
+    dash = app.state.dashboard = _Dash()
+    r = TestClient(app).get("/dashboard", headers={"Authorization": "Bearer good"})
+    assert r.status_code == 200 and r.json() == {"events": [], "reauth": False}
+    assert dash.seen == "Bearer good"
