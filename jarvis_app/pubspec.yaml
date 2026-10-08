@@ -46,7 +46,7 @@ dependencies:
   flutter_tts: ^4.2.5
   permission_handler: ^13.0.2
   flutter_sound: ^9.30.0
-  sherpa_onnx: ^1.13.8
+  flutter_onnxruntime: ^1.9.0
   path_provider: ^2.1.6
 
 dev_dependencies:
@@ -73,7 +73,7 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/kws/
+    - assets/oww/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

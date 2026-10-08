@@ -44,7 +44,7 @@ Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
 
 ## C. Build and install the app
 
-10. Wake word: nothing to do. The model and "Hey Jarvis" keyword are bundled in `jarvis_app/assets/kws/`.
+10. Wake word: nothing to do. The openWakeWord `hey_jarvis` models are bundled in `jarvis_app/assets/oww/`.
 11. Firebase push: only needed for the push copy of the morning brief and "time to leave" alerts (tap to play). Without it
     both still arrive on Telegram. To enable it, set `JARVIS_FCM_CREDENTIALS_PATH` to the Firebase service-account JSON and put
     `google-services.json` in `jarvis_app/android/app/` before building.

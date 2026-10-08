@@ -1,6 +1,6 @@
 # Jarvis Voice App
 
-A Flutter Android app for voice-first access to your calendar, email, tasks, and more. Detects "Hey Jarvis" on device with sherpa-onnx keyword spotting, streams audio to the Jarvis backend via WebSocket (`/voice`), plays the spoken reply, and runs phone actions (alarms, timers, navigation, message compose) as Android intents. The backend handles speech-to-text (Deepgram), text-to-speech (Cartesia), and runs the agent graph.
+A Flutter Android app for voice-first access to your calendar, email, tasks, and more. Detects "Hey Jarvis" on device with openWakeWord keyword spotting, streams audio to the Jarvis backend via WebSocket (`/voice`), plays the spoken reply, and runs phone actions (alarms, timers, navigation, message compose) as Android intents. The backend handles speech-to-text (Deepgram), text-to-speech (Cartesia), and runs the agent graph.
 
 ## Setup
 
