@@ -68,6 +68,7 @@ class SessionController extends ChangeNotifier {
   StreamSubscription<ServerEvent>? _events;
   StreamSubscription<Uint8List>? _micSub;
   Timer? _timer;
+  DateTime _playEnd = DateTime.fromMillisecondsSinceEpoch(0); // when buffered Jarvis audio finishes playing
   bool _ending = false;
   int _gen = 0; // bumped by every teardown so an in-flight start() can tell it was cancelled
   Future<void> _actionsChain = Future.value();
@@ -164,6 +165,7 @@ class SessionController extends ChangeNotifier {
 
   void _bargeIn() {
     player.flush();
+    _playEnd = DateTime.fromMillisecondsSinceEpoch(0);
     _socket?.sendJson('cancel');
     _set(Phase.listening);
     _arm();
@@ -176,7 +178,7 @@ class SessionController extends ChangeNotifier {
         if (map[state] != null) _set(map[state]!);
       case TranscriptEvent(:final role, :final text):
         if (role == 'user') {
-          if (phase == Phase.speaking) player.flush(); // the user spoke over Jarvis: drop the buffered audio
+          if (phase == Phase.speaking) { player.flush(); _playEnd = DateTime.fromMillisecondsSinceEpoch(0); } // the user spoke over Jarvis: drop the buffered audio
           userText = text;
         } else {
           jarvisText = text;
@@ -191,6 +193,9 @@ class SessionController extends ChangeNotifier {
         error = message;
         notifyListeners();
       case AudioEvent(:final pcm):
+        final now = DateTime.now();
+        final start = _playEnd.isAfter(now) ? _playEnd : now;
+        _playEnd = start.add(Duration(microseconds: pcm.length * 1000000 ~/ 32000)); // 16 kHz mono pcm16
         player.play(pcm);
     }
     _arm();
@@ -214,7 +219,9 @@ class SessionController extends ChangeNotifier {
   void _arm() {
     _timer?.cancel();
     if (phase == Phase.listening) {
-      _timer = Timer(card != null ? confirmWait : silence, _end);
+      // Server flips to listening once audio is sent, not played: count silence from when playback ends.
+      final left = _playEnd.difference(DateTime.now());
+      _timer = Timer((card != null ? confirmWait : silence) + (left.isNegative ? Duration.zero : left), _end);
     }
   }
 
