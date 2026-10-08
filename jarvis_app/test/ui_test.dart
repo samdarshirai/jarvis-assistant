@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jarvis_app/config.dart';
 import 'package:jarvis_app/dashboard.dart';
 import 'package:jarvis_app/protocol.dart';
+import 'package:jarvis_app/theme.dart';
 import 'package:jarvis_app/ui.dart';
 
 import 'dash_fixture.dart';
@@ -82,5 +84,16 @@ void main() {
     expect(find.text('Confirm'), findsOneWidget);
     r.c.stop();
     await t.pump();
+  });
+
+  testWidgets('pairing screen is on the glass background and still saves', (t) async {
+    Config? saved;
+    await t.pumpWidget(MaterialApp(theme: jarvisTheme(), home: PairingScreen(onSaved: (c) => saved = c)));
+    expect(find.byType(GlassBackground), findsOneWidget);
+    await t.enterText(find.byType(TextField).first, ' https://x.test ');
+    await t.enterText(find.byType(TextField).last, ' tok ');
+    await t.tap(find.text('Pair'));
+    expect(saved?.url, 'https://x.test');
+    expect(saved?.token, 'tok');
   });
 }

@@ -155,17 +155,23 @@ class _PairingScreenState extends State<PairingScreen> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(children: [
-              TextField(controller: _url, decoration: const InputDecoration(labelText: 'Backend URL (https://…)')),
-              TextField(controller: _token, decoration: const InputDecoration(labelText: 'Device token'), obscureText: true),
-              const SizedBox(height: 16),
-              FilledButton(
-                  onPressed: () => widget.onSaved(Config(_url.text.trim(), _token.text.trim())),
-                  child: const Text('Pair')),
-            ]),
+        body: GlassBackground(
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(children: [
+                Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text('Pair Jarvis', style: Theme.of(context).textTheme.headlineMedium)),
+                const SizedBox(height: 16),
+                TextField(controller: _url, decoration: const InputDecoration(labelText: 'Backend URL (https://…)')),
+                TextField(controller: _token, decoration: const InputDecoration(labelText: 'Device token'), obscureText: true),
+                const SizedBox(height: 16),
+                FilledButton(
+                    onPressed: () => widget.onSaved(Config(_url.text.trim(), _token.text.trim())),
+                    child: const Text('Pair')),
+              ]),
+            ),
           ),
         ),
       );

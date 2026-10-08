@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'theme.dart';
+
 // User-facing list of everything Jarvis can do. Update when adding a tool in src/jarvis/tools/ or a proactive job.
 const capabilities = <(String, List<String>)>[
   ('Calendar', ['List events', 'Find free slots', 'Create, update, delete events (asks to confirm)']),
@@ -22,14 +24,23 @@ class CapabilitiesScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Scaffold(
+        extendBodyBehindAppBar: true,
         appBar: AppBar(title: const Text('What Jarvis can do')),
-        body: ListView(children: [
-          for (final (title, items) in capabilities)
-            ExpansionTile(
-              initiallyExpanded: true,
-              title: Text(title),
-              children: [for (final i in items) ListTile(dense: true, title: Text(i))],
-            ),
-        ]),
+        body: GlassBackground(
+          child: ListView(
+            padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 16, 24),
+            children: [
+              for (final (title, items) in capabilities) ...[
+                GlassCard(
+                  title: title,
+                  icon: Icons.bolt,
+                  accent: accentBrief,
+                  child: Column(children: [for (final i in items) Align(alignment: Alignment.centerLeft, child: Text(i))]),
+                ),
+                const SizedBox(height: 12),
+              ],
+            ],
+          ),
+        ),
       );
 }
