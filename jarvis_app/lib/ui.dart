@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'capabilities.dart';
 import 'config.dart';
 import 'session.dart';
 
@@ -22,6 +23,13 @@ class SessionScreen extends StatelessWidget {
         builder: (context, _) {
           final c = controller.card;
           return Scaffold(
+            appBar: AppBar(actions: [
+              IconButton(
+                icon: const Icon(Icons.info_outline),
+                tooltip: 'What Jarvis can do',
+                onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CapabilitiesScreen())),
+              ),
+            ]),
             body: SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(24),

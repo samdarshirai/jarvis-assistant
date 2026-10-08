@@ -16,6 +16,8 @@ A single-user personal AI assistant (owner: Samdarshi) managing Google Calendar,
 
 Specs and plans (all committed): `docs/superpowers/specs/2026-10-01-jarvis-agent-core-design.md`, `...-02-jarvis-gmail-design.md`, `...-02-jarvis-voice-design.md`; plans in `docs/superpowers/plans/` with the same names. `ACCEPTANCE.md` is the manual acceptance table (rows 1-65) and all setup steps.
 
+User-facing list of capabilities (shown in the app via the info icon): `jarvis_app/lib/capabilities.dart`. Update it when adding a tool or proactive job.
+
 ## Stack and layout
 Python 3.11+ (host 3.14), FastAPI, LangGraph (+ Postgres checkpointer), langchain-openai against OpenRouter (`data_collection: "deny"`, `require_parameters: true`), python-telegram-bot 22 long-polling, Postgres 16 (audit log, encrypted Google OAuth token, `devices`, checkpointer), Google API client, Fernet, pydantic-settings, pytest + pytest-asyncio. Voice: Deepgram STT, Cartesia TTS over WebSocket, FCM push via HTTP v1 (httpx). App: Flutter, Android only, package `com.jarvis.jarvis_app`.
 

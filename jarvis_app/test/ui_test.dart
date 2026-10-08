@@ -25,4 +25,14 @@ void main() {
     r.c.stop(); // cancel the silence timer so the test ends cleanly
     await t.pump();
   });
+
+  testWidgets('info icon opens the capabilities list', (t) async {
+    final r = Rig();
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c)));
+    await t.tap(find.byIcon(Icons.info_outline));
+    await t.pumpAndSettle();
+    expect(find.text('What Jarvis can do'), findsOneWidget);
+    expect(find.text('Calendar'), findsOneWidget);
+    expect(find.text('List events'), findsOneWidget);
+  });
 }
