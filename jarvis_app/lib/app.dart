@@ -2,11 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'alarm.dart';
 import 'audio.dart';
 import 'config.dart';
+import 'dashboard.dart';
 import 'phone.dart';
 import 'session.dart';
 import 'store.dart';
+import 'theme.dart';
 import 'ui.dart';
 import 'ws_socket.dart';
 
@@ -41,24 +44,28 @@ class AppHost {
 }
 
 class JarvisApp extends StatefulWidget {
-  const JarvisApp({super.key, this.onSessionEnded, this.onSessionStarted, this.fcmToken, this.store = const ConfigStore()});
+  const JarvisApp({super.key, this.onSessionEnded, this.onSessionStarted, this.fcmToken, this.store = const ConfigStore(), this.dashboardFetch, this.alarm});
   final VoidCallback? onSessionEnded;
   final VoidCallback? onSessionStarted;
   final Future<String?> Function()? fcmToken;
   final ConfigStore store;
+  final Future<DashboardData> Function(Config)? dashboardFetch;
+  final Future<DateTime?> Function()? alarm;
   @override
   State<JarvisApp> createState() => _JarvisAppState();
 }
 
-class _JarvisAppState extends State<JarvisApp> {
+class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   ConfigStore get _store => widget.store;
   Config? _config;
   bool _loaded = false;
   SessionController? _controller;
+  DashboardController? _dashboard;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _store.load().catchError((Object _) => null).then((c) {
       if (!mounted) return;
       setState(() {
@@ -70,14 +77,26 @@ class _JarvisAppState extends State<JarvisApp> {
 
   @override
   void dispose() {
-    _controller?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _controller?.dispose(); // before the dashboard: its onEnded refreshes it
+    _dashboard?.dispose();
     if (AppHost.controller == _controller) AppHost.attach(null);
     super.dispose();
   }
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _dashboard?.refresh();
+  }
+
   void _bind(Config? c) {
     _config = c;
-    _controller?.dispose();
+    _controller?.dispose(); // before the dashboard: its onEnded refreshes it
+    _dashboard?.dispose();
+    _dashboard = c == null
+        ? null
+        : (DashboardController(fetch: () => (widget.dashboardFetch ?? fetchDashboard)(c), alarm: widget.alarm ?? nextAlarm)
+          ..refresh());
     _controller = c == null
         ? null
         : SessionController(
@@ -87,7 +106,10 @@ class _JarvisAppState extends State<JarvisApp> {
             phone: AndroidPhoneActions(),
             speaker: TtsSpeaker(),
             fcmToken: widget.fcmToken,
-            onEnded: widget.onSessionEnded,
+            onEnded: () {
+              widget.onSessionEnded?.call();
+              _dashboard?.refresh(); // a spoken "add task" should show up
+            },
             onStarted: widget.onSessionStarted,
           );
     // unpaired: no controller yet, but keep any pending cold-start request until pairing creates one
@@ -101,7 +123,7 @@ class _JarvisAppState extends State<JarvisApp> {
   @override
   Widget build(BuildContext context) => MaterialApp(
         title: 'Jarvis',
-        theme: ThemeData(colorSchemeSeed: Colors.indigo, useMaterial3: true),
+        theme: jarvisTheme(),
         home: !_loaded
             ? const Scaffold(body: Center(child: CircularProgressIndicator()))
             : _config == null
@@ -112,6 +134,6 @@ class _JarvisAppState extends State<JarvisApp> {
                     if (!mounted) return;
                     setState(() => _bind(c));
                   })
-                : SessionScreen(controller: _controller!),
+                : SessionScreen(controller: _controller!, dashboard: _dashboard),
       );
 }

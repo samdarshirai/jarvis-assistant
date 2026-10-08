@@ -131,3 +131,8 @@ async def test_brief_still_goes_out_when_google_needs_reconsent_then_raises_for_
         await run_brief(Cal(exc=ReauthRequired("x")), Tasks(exc=ReauthRequired("x")), Gmail(exc=ReauthRequired("x")),
                         LLM(exc=RuntimeError("down")), n, MemoryAudit(), TZ, NOW)
     assert [c[0] for c in n.calls] == ["telegram", "push"] and "unavailable" in n.calls[0][1]
+
+
+def test_render_facts_mail_label_is_overridable():
+    text = render_facts({"events": [], "overdue": [], "mail": MAIL}, TZ, mail_label="Unread email")
+    assert "Unread email: boss@corp.com: Contract" in text and "Important" not in text

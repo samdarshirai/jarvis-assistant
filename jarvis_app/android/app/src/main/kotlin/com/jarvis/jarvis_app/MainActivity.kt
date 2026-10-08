@@ -1,5 +1,7 @@
 package com.jarvis.jarvis_app
 
+import android.app.AlarmManager
+import android.content.Context
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -18,6 +20,12 @@ class MainActivity : FlutterActivity() {
                     result.success(started)
                 } else result.notImplemented()
             }
+        }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "jarvis/alarm").setMethodCallHandler { call, result ->
+            if (call.method == "next") {
+                val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                result.success(am.nextAlarmClock?.triggerTime)
+            } else result.notImplemented()
         }
     }
 

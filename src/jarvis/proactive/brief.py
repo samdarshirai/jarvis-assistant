@@ -48,7 +48,7 @@ def _time(s: str, tz: str) -> str:
     return "all day" if len(s) == 10 else parse_dt(s, tz).astimezone(ZoneInfo(tz)).strftime("%H:%M")
 
 
-def render_facts(facts: dict, tz: str) -> str:
+def render_facts(facts: dict, tz: str, mail_label: str = "Important unread email") -> str:
     lines = []
     ev = facts["events"]
     if ev is None:
@@ -63,11 +63,11 @@ def render_facts(facts: dict, tz: str) -> str:
                  "Overdue tasks: " + ("; ".join(_c(t["title"]) for t in od) if od else "none") + ".")
     mail = facts["mail"]
     if mail is None:
-        lines.append("Important unread email: unavailable.")
+        lines.append(f"{mail_label}: unavailable.")
     elif mail:
-        lines.append("Important unread email: " + "; ".join(f"{_c(m['from'], 40)}: {_c(m['subject'])}" for m in mail) + ".")
+        lines.append(f"{mail_label}: " + "; ".join(f"{_c(m['from'], 40)}: {_c(m['subject'])}" for m in mail) + ".")
     else:
-        lines.append("Important unread email: none.")
+        lines.append(f"{mail_label}: none.")
     return "\n".join(lines)
 
 
