@@ -1,19 +1,15 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show debugPrint;
-import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
-import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import 'app.dart';
+import 'oww.dart';
 
-const _kwsFiles = ['encoder.onnx', 'decoder.onnx', 'joiner.onnx', 'tokens.txt', 'keywords.txt'];
 const _wakeKey = 'wake';
 
 bool wakeIsFresh(int? savedMillis, DateTime now) {
@@ -25,67 +21,42 @@ bool wakeIsFresh(int? savedMillis, DateTime now) {
 @pragma('vm:entry-point')
 void startCallback() => FlutterForegroundTask.setTaskHandler(WakeTaskHandler());
 
-/// Runs sherpa-onnx keyword spotting in the foreground service so the wake word works with the screen off (FR-14).
+/// Runs openWakeWord "hey_jarvis" in the foreground service so the wake word works with the screen off (FR-14).
 class WakeTaskHandler extends TaskHandler {
   final _rec = AudioRecorder();
-  sherpa.KeywordSpotter? _kws;
-  sherpa.OnlineStream? _stream;
+  final _ort = OrtInfer();
+  Oww? _oww;
   StreamSubscription<Uint8List>? _sub;
   bool _listening = false;
   int _chunks = 0;
-
-  /// The native library reads model files from disk, so copy the bundled assets out once.
-  Future<sherpa.KeywordSpotter> _spotter() async {
-    final dir = Directory('${(await getApplicationSupportDirectory()).path}/kws')..createSync(recursive: true);
-    for (final f in _kwsFiles) {
-      final out = File('${dir.path}/$f');
-      if (!out.existsSync()) await out.writeAsBytes((await rootBundle.load('assets/kws/$f')).buffer.asUint8List());
-    }
-    sherpa.initBindings();
-    return sherpa.KeywordSpotter(sherpa.KeywordSpotterConfig(
-      model: sherpa.OnlineModelConfig(
-        transducer: sherpa.OnlineTransducerModelConfig(
-            encoder: '${dir.path}/encoder.onnx', decoder: '${dir.path}/decoder.onnx', joiner: '${dir.path}/joiner.onnx'),
-        tokens: '${dir.path}/tokens.txt',
-        debug: false,
-      ),
-      keywordsFile: '${dir.path}/keywords.txt',
-      keywordsThreshold: 0.15, // lower = fewer false accepts, higher = fewer misses; tune on the phone
-      keywordsScore: 1.0,
-    ));
-  }
+  double _peak = 0;
 
   /// Never throws: a missing model file or mic permission must not leave an unhandled error and a notification that lies.
   Future<void> _listen() async {
-    if (_listening) return; // resume can arrive while the spotter already runs (e.g. after a manual Talk session)
+    if (_listening) return; // resume can arrive while the detector already runs (e.g. after a manual Talk session)
     try {
-      final kws = _kws ??= await _spotter();
-      final stream = _stream = kws.createStream();
+      await _ort.load();
+      final oww = _oww = Oww(_ort.call);
       final pcm = await _rec.startStream(const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1));
       _listening = true;
       _sub = pcm.listen((bytes) {
         if (!_listening) return;
         final pcm16 = ByteData.sublistView(bytes); // asInt16List throws when the chunk starts at an odd offset
-        final f32 = Float32List(bytes.lengthInBytes ~/ 2);
-        for (var i = 0; i < f32.length; i++) {
-          f32[i] = pcm16.getInt16(i * 2, Endian.little) / 32768.0;
+        final samples = Float32List(bytes.lengthInBytes ~/ 2); // int16-scaled: openWakeWord does not normalise to +-1
+        for (var i = 0; i < samples.length; i++) {
+          samples[i] = pcm16.getInt16(i * 2, Endian.little).toDouble();
+          _peak = math.max(_peak, samples[i].abs() / 32768.0);
         }
-        if (++_chunks % 20 == 0) { // TEMP debug: audio level reaching the spotter
-          var peak = 0.0;
-          for (final v in f32) { peak = math.max(peak, v.abs()); }
-          debugPrint('wake: chunks=$_chunks len=${f32.length} peak=${peak.toStringAsFixed(3)}');
+        if (++_chunks % 20 == 0) { // TEMP debug: loudest sample reaching the detector since the last line
+          debugPrint('wake: chunks=$_chunks peak=${_peak.toStringAsFixed(3)}');
+          _peak = 0;
         }
-        stream.acceptWaveform(samples: f32, sampleRate: 16000);
-        while (kws.isReady(stream)) {
-          kws.decode(stream);
-          final r = kws.getResult(stream).keyword;
-          if (r.isNotEmpty) {
-            debugPrint('wake: DETECTED $r');
-            kws.reset(stream);
+        oww.feed(samples).then((hit) {
+          if (hit && _listening && identical(oww, _oww)) {
+            debugPrint('wake: DETECTED hey_jarvis');
             _onWake();
-            return;
           }
-        }
+        }, onError: (Object e) => debugPrint('wake: detector error $e'));
       });
     } catch (e) {
       await FlutterForegroundTask.updateService(
@@ -100,8 +71,7 @@ class WakeTaskHandler extends TaskHandler {
       await _sub?.cancel();
       await _rec.stop(); // any session (wake, Talk, assistant, push) takes the microphone
     } catch (_) {}
-    _stream?.free();
-    _stream = null;
+    _oww = null; // late results from the old detector are ignored
   }
 
   Future<void> _onWake() async {
@@ -131,7 +101,7 @@ class WakeTaskHandler extends TaskHandler {
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     await _pause();
-    _kws?.free();
+    await _ort.close();
     await _rec.dispose();
   }
   @override
