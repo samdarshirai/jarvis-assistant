@@ -77,7 +77,7 @@ async def test_payload_shapes_every_section():
     assert (start.hour, start.minute) == (0, 0) and (end - start).days == 1 and start.date() == NOW.date()
     assert [(t["title"], t["overdue"]) for t in p["tasks"]] == [("Pay rent", True), ("Due today", False), ("No date", False)]
     assert p["unread"] == {"count": 5, "more": True, "items": [{"from": f"p{i}@x.com", "subject": f"S{i}"} for i in range(5)]}
-    assert gmail.call == ("is:unread in:inbox", 6)
+    assert gmail.call == ("is:unread in:inbox newer_than:7d", 6)
     assert p["notes"] == NOTES and p["reauth"] is False
     assert "09:00 Standup" in p["brief"] and "Overdue tasks: Pay rent." in p["brief"] and "Unread email:" in p["brief"]
 

@@ -23,7 +23,7 @@ New `src/jarvis/dashboard.py`, route `GET /dashboard` wired in `create_app` (`sr
 - Response JSON:
   - `events`: today's events (`CalendarClient.list_events`, local day, same shape as the brief).
   - `tasks`: pending tasks (`TasksClient.list_tasks`), each with `due` and an `overdue` flag.
-  - `unread`: `{count, items: [{from, subject}]}` top 5 from `GmailClient.search_emails("is:unread in:inbox", ...)`. `count` is at most 5 and `more` is true when a 6th unread message exists (the app shows "5+").
+  - `unread`: `{count, items: [{from, subject}]}` top 5 from `GmailClient.search_emails("is:unread in:inbox newer_than:7d", ...)` (unread from the last 7 days only). `count` is at most 5 and `more` is true when a 6th unread message exists (the app shows "5+").
   - `notes`: 5 most recent (`NoteStore.recent`): id, title, updated_at (no body preview).
   - `brief`: text built by `brief.render_facts` from the same gathered facts. No LLM call, so refresh is free. Speaking the real LLM brief stays on the existing tap path.
   - `reauth`: true if any Google source raised `ReauthRequired`.

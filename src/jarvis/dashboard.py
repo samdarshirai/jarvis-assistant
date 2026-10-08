@@ -43,7 +43,7 @@ class DashboardService:
         events, all_tasks, mail, notes = await asyncio.gather(
             get(self.calendar.list_events, day, day + timedelta(days=1)),
             get(self.tasks.list_tasks),
-            get(self.gmail.search_emails, "is:unread in:inbox", UNREAD_SHOWN + 1),
+            get(self.gmail.search_emails, "is:unread in:inbox newer_than:7d", UNREAD_SHOWN + 1),
             get(self.notes.recent, NOTES_SHOWN))
 
         today = now.date().isoformat()
