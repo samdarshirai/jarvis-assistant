@@ -103,21 +103,28 @@ class VoiceBar extends StatelessWidget {
                             if (c.afterUntrusted)
                               const Text('⚠ Proposed after reading third-party content (email or web) — check recipient and text.'),
                             Text(c.summary),
-                            const SizedBox(height: 12),
-                            Row(children: [
-                              FilledButton(onPressed: () => controller.confirm(true), child: const Text('Confirm')),
-                              const SizedBox(width: 12),
-                              OutlinedButton(onPressed: () => controller.confirm(false), child: const Text('Cancel')),
-                            ]),
                           ],
                           const SizedBox(height: 12),
                         ]),
                       ),
                     ),
+                  if (c != null) // outside the scroll area so a long summary can't push it off screen
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(children: [
+                        FilledButton(onPressed: () => controller.confirm(true), child: const Text('Confirm')),
+                        const SizedBox(width: 12),
+                        OutlinedButton(onPressed: () => controller.confirm(false), child: const Text('Cancel')),
+                      ]),
+                    ),
                   Row(children: [
                     Tooltip(
                       message: inactive ? 'Talk' : 'Stop',
-                      child: GestureDetector(
+                      child: Semantics(
+                        button: true,
+                        label: inactive ? 'Talk' : 'Stop',
+                        excludeSemantics: true,
+                        child: GestureDetector(
                         onTap: inactive ? () => controller.start() : controller.stop,
                         child: AnimatedContainer(
                           duration: const Duration(milliseconds: 250),
@@ -130,6 +137,7 @@ class VoiceBar extends StatelessWidget {
                           ),
                           child: Icon(inactive ? Icons.mic : Icons.stop, color: Colors.white),
                         ),
+                      ),
                       ),
                     ),
                     const SizedBox(width: 16),

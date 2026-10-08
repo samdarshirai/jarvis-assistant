@@ -41,16 +41,20 @@ void main() {
   });
 
   testWidgets('home shows the dashboard above the voice bar and the orb starts a session', (t) async {
+    final sem = t.ensureSemantics();
     final r = Rig();
     final d = DashboardController(fetch: () async => sampleDashboard());
     await d.refresh();
     await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, dashboard: d)));
+    expect(t.getSemantics(find.bySemanticsLabel('Talk')).flagsCollection.isButton, isTrue);
     expect(find.text('Standup'), findsOneWidget);
     expect(find.text('Say "Hey Jarvis"'), findsOneWidget);
     await t.tap(find.byTooltip('Talk'));
     await t.pump();
     expect(r.started, 1);
     expect(find.byTooltip('Stop'), findsOneWidget);
+    sem.dispose();
+    expect(t.getSemantics(find.bySemanticsLabel('Stop')).flagsCollection.isButton, isTrue);
     r.c.stop();
     await t.pump();
   });
@@ -82,6 +86,11 @@ void main() {
     await t.pump();
     expect(t.takeException(), isNull);
     expect(find.text('Confirm'), findsOneWidget);
+    for (final f in [find.byTooltip('Stop'), find.text('Confirm')]) {
+      final rect = t.getRect(f);
+      expect(rect.top, greaterThanOrEqualTo(0));
+      expect(rect.bottom, lessThanOrEqualTo(640));
+    }
     r.c.stop();
     await t.pump();
   });

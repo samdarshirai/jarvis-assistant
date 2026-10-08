@@ -1,4 +1,3 @@
-
 class Config {
   const Config(this.url, this.token);
   final String url, token;

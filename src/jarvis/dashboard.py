@@ -55,7 +55,7 @@ class DashboardService:
                 {"summary": e.get("summary") or "(no title)", "start": e["start"], "end": e["end"],
                  "location": e.get("location"), "all_day": len(e["start"] or "") == 10} for e in events],
             "tasks": None if all_tasks is None else [
-                {"title": t["title"], "due": t["due"], "overdue": bool(t["due"] and t["due"] < today)}
+                {"title": t["title"] or "(no title)", "due": t["due"], "overdue": bool(t["due"] and t["due"] < today)}
                 for t in sorted(all_tasks, key=lambda t: (t["due"] is None, t["due"] or ""))][:MAX_TASKS],
             "unread": None if mail is None else {
                 "count": len(shown), "more": len(mail) > UNREAD_SHOWN,

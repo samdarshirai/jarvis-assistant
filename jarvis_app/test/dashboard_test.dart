@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jarvis_app/config.dart';
 import 'package:jarvis_app/dashboard.dart';
@@ -86,6 +88,21 @@ void main() {
       });
       await Future.wait([c.refresh(), c.refresh()]);
       expect(calls, 1);
+    });
+
+    test('a stalled fetch times out, goes offline and a later refresh retries', () async {
+      var calls = 0;
+      final c = DashboardController(
+          fetch: () {
+            calls++;
+            return Completer<DashboardData>().future;
+          },
+          timeout: const Duration(milliseconds: 50));
+      await c.refresh();
+      expect(c.loading, isFalse);
+      expect(c.offline, isTrue);
+      await c.refresh();
+      expect(calls, 2);
     });
 
     test('a refresh finishing after dispose does not throw', () async {

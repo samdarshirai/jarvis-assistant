@@ -115,3 +115,8 @@ async def test_authorized_needs_a_known_bearer_token():
     assert await s.authorized("bearer good") is True
     for bad in ("Bearer nope", "Bearer ", "good", ""):
         assert await s.authorized(bad) is False
+
+
+async def test_task_with_no_title_gets_placeholder():
+    p = await svc(tasks=Tasks([{"id": "x", "title": None, "due": None, "status": "needsAction"}])).payload(NOW)
+    assert p["tasks"][0]["title"] == "(no title)"

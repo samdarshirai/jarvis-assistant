@@ -101,10 +101,10 @@ Future<DashboardData> fetchDashboard(Config c) async {
     req.headers.set('Authorization', 'Bearer ${c.token}');
     final res = await req.close().timeout(const Duration(seconds: 20));
     if (res.statusCode != 200) {
-      await res.drain<void>();
+      await res.drain<void>().timeout(const Duration(seconds: 20));
       throw HttpException('dashboard HTTP ${res.statusCode}');
     }
-    final j = jsonDecode(await res.transform(utf8.decoder).join());
+    final j = jsonDecode(await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 20)));
     if (j is! Map<String, dynamic>) throw const FormatException('dashboard body');
     return DashboardData.fromJson(j);
   } finally {
@@ -113,7 +113,8 @@ Future<DashboardData> fetchDashboard(Config c) async {
 }
 
 class DashboardController extends ChangeNotifier {
-  DashboardController({required this.fetch, this.alarm});
+  DashboardController({required this.fetch, this.alarm, this.timeout = const Duration(seconds: 30)});
+  final Duration timeout;
   final Future<DashboardData> Function() fetch;
   final Future<DateTime?> Function()? alarm;
 
@@ -138,7 +139,7 @@ class DashboardController extends ChangeNotifier {
     loading = true;
     notifyListeners();
     try {
-      data = await fetch();
+      data = await fetch().timeout(timeout);
       offline = false;
     } catch (_) {
       offline = true;

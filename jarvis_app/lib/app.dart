@@ -78,8 +78,8 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _controller?.dispose(); // before the dashboard: its onEnded refreshes it
     _dashboard?.dispose();
-    _controller?.dispose();
     if (AppHost.controller == _controller) AppHost.attach(null);
     super.dispose();
   }
@@ -91,12 +91,12 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
 
   void _bind(Config? c) {
     _config = c;
+    _controller?.dispose(); // before the dashboard: its onEnded refreshes it
     _dashboard?.dispose();
     _dashboard = c == null
         ? null
         : (DashboardController(fetch: () => (widget.dashboardFetch ?? fetchDashboard)(c), alarm: widget.alarm ?? nextAlarm)
           ..refresh());
-    _controller?.dispose();
     _controller = c == null
         ? null
         : SessionController(
