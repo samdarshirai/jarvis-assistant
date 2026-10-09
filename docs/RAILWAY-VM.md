@@ -1,4 +1,4 @@
-# Run Jarvis backend on a throwaway Railway VM (Dockerfile + Neon)
+# Run Jarvis backend on a throwaway Railway VM (Dockerfile + Railway Postgres)
 
 For repeatable deploys (push to git = redeploy) use `docs/DEPLOY-RAILWAY.md` instead. This VM is a 60 min test sandbox.
 
@@ -52,7 +52,7 @@ cat > /app/.env <<'EOF'
 JARVIS_OPENROUTER_API_KEY=
 JARVIS_MODELS_FAST=
 JARVIS_MODELS_STRONG=
-JARVIS_DATABASE_URL=postgresql://USER:PASS@ep-xxx.REGION.aws.neon.tech/neondb?sslmode=require
+JARVIS_DATABASE_URL=postgresql://USER:PASS@HOST:PORT/railway   # Railway Postgres, Variables tab: DATABASE_PUBLIC_URL
 JARVIS_TELEGRAM_BOT_TOKEN=
 JARVIS_TELEGRAM_OWNER_CHAT_ID=
 JARVIS_FERNET_KEY=
@@ -62,7 +62,6 @@ EOF
 nano /app/.env    # fill in the values, save with Ctrl+O, exit with Ctrl+X
 ```
 Notes:
-- Use the Neon **direct** host (no `-pooler` in the hostname) if you can.
 - Generate the Fernet key: `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 - `client_secret.json` is not on the VM. Google features fail until you copy it
   (**MAC**: `scp /Users/ronalisenapati/Ronali/jarvis/client_secret.json railway.new:/app/secrets/`).
@@ -93,5 +92,5 @@ uvicorn jarvis.main:app --host 0.0.0.0 --port $PORT
 
 - Wrong machine: prompt says `ronalisenapati@Mac` means you are on the Mac, not the VM.
 - `Permission denied (publickey)`: `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519`, then reconnect.
-- Neon connection errors: check `?sslmode=require`, and try the direct (non-pooler) host.
+- DB connection errors: from the VM use the Postgres service `DATABASE_PUBLIC_URL`; the `railway.internal` host only resolves inside Railway services.
 - `PORT` empty in the VM shell: compose falls back to 8000; run `echo $PORT` to check which port the preview URL serves.

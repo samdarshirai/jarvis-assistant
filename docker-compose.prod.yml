@@ -3,7 +3,7 @@ services:
   app:
     build: .
     restart: unless-stopped
-    env_file: .env  # JARVIS_DATABASE_URL = Neon URL (…?sslmode=require)
+    env_file: .env  # JARVIS_DATABASE_URL = Railway Postgres URL
     ports: ["${PORT:-8000}:8000"]  # Railway VM preview URL; unused behind caddy
     # optional FCM key: put it in ./secrets/fcm.json and set JARVIS_FCM_CREDENTIALS_PATH=/secrets/fcm.json in .env
     volumes: ["./secrets:/secrets:ro"]

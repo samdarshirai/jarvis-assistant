@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS proactive_state (
 
 def make_pool(url: str) -> ConnectionPool:
     return ConnectionPool(url, min_size=1, max_size=5, open=True,
-                          check=ConnectionPool.check_connection, max_idle=240)  # Neon scale-to-zero drops idle conns
+                          check=ConnectionPool.check_connection, max_idle=240)  # drop stale conns after a DB restart/redeploy
 
 
 def init_schema(pool: ConnectionPool) -> None:
