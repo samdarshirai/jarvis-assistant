@@ -8,6 +8,7 @@ import 'capabilities.dart';
 import 'chat_screen.dart';
 import 'mail_screen.dart';
 import 'notes_screen.dart';
+import 'orb.dart';
 import 'phone.dart';
 import 'tasks_screen.dart';
 import 'config.dart';
@@ -48,13 +49,14 @@ class SessionScreen extends StatelessWidget {
         });
   }
 
-  void _chat(BuildContext context) {
+  void _chat(BuildContext context, {String? initialText}) {
     final a = api;
     if (a == null) return;
     _push(
         context,
         ChatScreen(
             api: a,
+            initialText: initialText,
             onVoice: () {
               Navigator.of(context).pop();
               controller.start();
@@ -74,7 +76,16 @@ class SessionScreen extends StatelessWidget {
               builder: (context, _) {
                 final idle = controller.phase == Phase.idle || controller.phase == Phase.offline;
                 final voice = !idle || controller.card != null || controller.error != null;
-                return voice ? _VoiceView(controller: controller) : _home(context);
+                return voice
+                    ? _VoiceView(
+                        controller: controller,
+                        onKeyboard: api == null
+                            ? null
+                            : (text) {
+                                controller.stop();
+                                _chat(context, initialText: text);
+                              })
+                    : _home(context);
               },
             ),
           ),
@@ -168,8 +179,10 @@ class SessionScreen extends StatelessWidget {
 }
 
 class _VoiceView extends StatelessWidget {
-  const _VoiceView({required this.controller});
+  const _VoiceView({required this.controller, this.onKeyboard});
   final SessionController controller;
+  /// Opens typed chat (optionally sending [text] first); null when the REST api is unavailable.
+  final void Function(String? text)? onKeyboard;
 
   static const _status = {
     Phase.idle: '',
@@ -180,9 +193,54 @@ class _VoiceView extends StatelessWidget {
     Phase.offline: 'Jarvis is offline',
   };
 
+  static const _chips = [
+    (Icons.calendar_month, 'Schedule a meeting', 'Schedule a meeting'),
+    (Icons.mail_outline, 'Write an email', 'Write an email'),
+    (Icons.alarm, 'Set an alarm', 'Set an alarm'),
+    (Icons.edit_note, 'Take a note', 'Take a note'),
+    (Icons.schedule, "What's after lunch?", "What's on my calendar after lunch?"),
+    (Icons.check_box_outlined, 'Add a task', 'Add a task'),
+  ];
+
+  Widget _round(IconData icon, String tip, VoidCallback? onTap) => Tooltip(
+        message: tip,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(shape: BoxShape.circle, color: darkPill.withValues(alpha: 0.5)),
+            child: Icon(icon, color: cream),
+          ),
+        ),
+      );
+
+  Widget _chip((IconData, String, String) c) => GestureDetector(
+        onTap: () => onKeyboard!(c.$3),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(7, 7, 14, 7),
+          decoration: BoxDecoration(
+              color: darkPill.withValues(alpha: 0.35),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.06))),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Container(
+              width: 32,
+              height: 32,
+              decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(11)),
+              child: Icon(c.$1, size: 18, color: amber),
+            ),
+            const SizedBox(width: 9),
+            Text(c.$2, style: const TextStyle(color: cream, fontSize: 14)),
+          ]),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
-    final c = controller.card;
+    final c = controller.card, phase = controller.phase;
+    final speed = switch (phase) { Phase.thinking => 3.0, Phase.speaking => 1.6, _ => 1.0 };
+    final showChips = onKeyboard != null && phase == Phase.listening && controller.userText.isEmpty && c == null;
     return Column(children: [
       Row(children: [
         IconButton(icon: const Icon(Icons.arrow_back, color: cream), tooltip: 'Back', onPressed: controller.stop),
@@ -194,12 +252,13 @@ class _VoiceView extends StatelessWidget {
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 24),
           child: Column(children: [
-            const SizedBox(height: 16),
-            AmberOrb(phase: controller.phase, onTap: controller.stop, size: 140),
-            const SizedBox(height: 24),
-            Text(_status[controller.phase]!,
+            const SizedBox(height: 8),
+            AnimatedOrb(size: 240, speed: speed),
+            const SizedBox(height: 12),
+            Text(_status[phase]!,
                 textAlign: TextAlign.center, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w500, color: cream)),
             const SizedBox(height: 16),
+            if (showChips) Wrap(alignment: WrapAlignment.center, spacing: 8, runSpacing: 8, children: [for (final q in _chips) _chip(q)]),
             if (controller.userText.isNotEmpty)
               Text(controller.userText, textAlign: TextAlign.center, style: const TextStyle(color: cream)),
             if (controller.jarvisText.isNotEmpty)
@@ -216,6 +275,16 @@ class _VoiceView extends StatelessWidget {
             afterUntrusted: c.afterUntrusted,
             onConfirm: () => controller.confirm(true),
             onCancel: () => controller.confirm(false)),
+      Padding(
+        padding: const EdgeInsets.only(bottom: 20, top: 8),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          _round(Icons.keyboard, 'Type instead', onKeyboard == null ? null : () => onKeyboard!(null)),
+          const SizedBox(width: 34),
+          AmberOrb(phase: phase, onTap: controller.stop, size: 80),
+          const SizedBox(width: 34),
+          _round(Icons.close, 'Close', controller.stop),
+        ]),
+      ),
     ]);
   }
 }

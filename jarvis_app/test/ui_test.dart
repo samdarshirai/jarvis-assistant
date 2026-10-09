@@ -123,4 +123,18 @@ void main() {
     await t.pumpAndSettle();
     expect(find.text('Write here…'), findsOneWidget);
   });
+
+  testWidgets('voice view shows quick-start chips and a chip sends its text to chat', (t) async {
+    final r = Rig();
+    final api = FakeApi({});
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, api: api)));
+    await r.c.start();
+    await t.pump();
+    expect(find.text('Write an email'), findsOneWidget);
+    await t.tap(find.text('Write an email'));
+    await t.pump();
+    await t.pump();
+    expect(find.text('Write here…'), findsOneWidget);
+    expect(find.text('Write an email'), findsWidgets); // sent as a user bubble
+  });
 }

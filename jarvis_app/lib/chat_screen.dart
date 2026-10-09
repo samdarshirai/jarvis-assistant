@@ -22,7 +22,8 @@ class _Card {
 
 /// Text chat with Jarvis: POST /chat, confirm cards inline, phone actions handed back to the caller.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.api, required this.onVoice, required this.runPhoneActions});
+  const ChatScreen({super.key, required this.api, required this.onVoice, required this.runPhoneActions, this.initialText});
+  final String? initialText; // sent as the first message (voice quick-start chips)
   final ApiClient api;
   final VoidCallback onVoice;
   final Future<void> Function(List<Map<String, dynamic>> actions) runPhoneActions;
@@ -36,6 +37,16 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scroll = ScrollController();
   final _msgs = <_Msg>[];
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final t = widget.initialText;
+    if (t != null && t.trim().isNotEmpty) {
+      _text.text = t;
+      WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _send() : null);
+    }
+  }
 
   @override
   void dispose() {
