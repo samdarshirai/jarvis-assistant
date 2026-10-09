@@ -98,3 +98,22 @@ def test_refresh_success_resaves_token(key, monkeypatch):
     assert creds.info.get("refreshed") is True
     decrypted = json.loads(auth.Fernet(key).decrypt(store.d["google"]))
     assert decrypted.get("refreshed") is True
+
+
+def test_get_retries_dead_socket_but_post_does_not():
+    from unittest.mock import MagicMock
+    from googleapiclient.http import HttpRequest
+    from jarvis.google.auth import _RetryingGet
+
+    def run(method):
+        http = MagicMock()
+        http.request.side_effect = [BrokenPipeError(32, "Broken pipe"),
+                                    (MagicMock(status=200), b"{}")]
+        req = _RetryingGet(http, lambda r, c: {}, "https://x.test/", method=method)
+        try:
+            req.execute(); return http.request.call_count
+        except BrokenPipeError:
+            return http.request.call_count
+
+    assert run("GET") == 2
+    assert run("POST") == 1

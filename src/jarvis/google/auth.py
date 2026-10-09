@@ -6,6 +6,7 @@ from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.http import HttpRequest
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -65,8 +66,16 @@ def load_credentials(store: TokenStore, key: str):
     return creds
 
 
+class _RetryingGet(HttpRequest):
+    """Idle keep-alive sockets die (BrokenPipe/ECONNRESET); retry reads on a fresh connection. Writes never retry (could double-send)."""
+
+    def execute(self, http=None, num_retries=0):
+        return super().execute(http, num_retries or (2 if self.method == "GET" else 0))
+
+
 def build_service(name: str, version: str, store: TokenStore, key: str):
-    return build(name, version, credentials=load_credentials(store, key), cache_discovery=False)
+    return build(name, version, credentials=load_credentials(store, key), cache_discovery=False,
+                 requestBuilder=_RetryingGet)
 
 
 def main() -> None:
