@@ -28,7 +28,7 @@ def mock_lifespan_deps(monkeypatch):
         tavily_api_key="",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
-        deepgram_api_key="", cartesia_api_key="", cartesia_voice_id="", fcm_credentials_path="",
+        deepgram_api_key="", fcm_credentials_path="",
     )
 
     # Patch all dependencies to minimal no-ops
@@ -87,7 +87,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
         tavily_api_key="",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
-        deepgram_api_key="", cartesia_api_key="", cartesia_voice_id="", fcm_credentials_path="",
+        deepgram_api_key="", fcm_credentials_path="",
     )
 
     # Patch all dependencies to minimal no-ops

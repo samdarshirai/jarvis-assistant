@@ -42,7 +42,7 @@ from jarvis.tools.task_tools import register_task_tools
 from jarvis.web import WebSearch, DdgSearch
 from jarvis.voice.devices import Devices
 from jarvis.voice.stt import DeepgramSTT
-from jarvis.voice.tts import CartesiaTTS
+from jarvis.voice.tts import DeepgramTTS
 from jarvis.voice.ws import VoiceService
 
 log = logging.getLogger(__name__)
@@ -111,7 +111,7 @@ async def lifespan(app: FastAPI):
             voice = VoiceService(
                 graph, devices,
                 DeepgramSTT(s.deepgram_api_key) if s.deepgram_api_key else None,
-                CartesiaTTS(s.cartesia_api_key, s.cartesia_voice_id) if s.cartesia_api_key and s.cartesia_voice_id else None,
+                DeepgramTTS(s.deepgram_api_key) if s.deepgram_api_key else None,
                 lock=lock)
             app.state.voice = voice
             app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool), s.timezone, weather_city=s.weather_city, store=proactive_store)

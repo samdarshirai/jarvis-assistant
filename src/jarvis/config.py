@@ -17,8 +17,6 @@ class Settings(BaseSettings):
     google_client_secrets: str = "client_secret.json"
     timezone: str = "Europe/Berlin"
     deepgram_api_key: str = ""
-    cartesia_api_key: str = ""
-    cartesia_voice_id: str = ""
     fcm_credentials_path: str = ""  # Firebase service-account JSON file path, or the JSON content itself; kept outside the repo
     tavily_api_key: str = ""  # optional: web search for the research domain; empty = web_search says it is not configured
     weather_city: str = ""  # city for the brief's weather line and umbrella/jacket advice; empty = no weather

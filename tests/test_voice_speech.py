@@ -1,9 +1,6 @@
-import base64
-
-import pytest
 
 from jarvis.voice.stt import SttEvent, parse_deepgram
-from jarvis.voice.tts import parse_cartesia, split_sentences
+from jarvis.voice.tts import split_sentences
 
 
 def results(text, is_final=False, speech_final=False):
@@ -41,11 +38,3 @@ def test_split_sentences():
     assert split_sentences("Hi. How can I help?  Fine!") == ["Hi.", "How can I help?", "Fine!"]
     assert split_sentences("no punctuation") == ["no punctuation"]
     assert split_sentences("   ") == []
-
-
-def test_parse_cartesia():
-    assert parse_cartesia({"type": "chunk", "data": base64.b64encode(b"\x01\x02").decode()}) == b"\x01\x02"
-    assert parse_cartesia({"type": "done"}) == "done"
-    assert parse_cartesia({"type": "timestamps"}) is None
-    with pytest.raises(RuntimeError):
-        parse_cartesia({"type": "error", "error": "bad voice"})

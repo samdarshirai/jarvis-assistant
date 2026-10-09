@@ -22,7 +22,7 @@ Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
      ```
      python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
      ```
-   - `JARVIS_DEEPGRAM_API_KEY`, `JARVIS_CARTESIA_API_KEY`, `JARVIS_CARTESIA_VOICE_ID`
+   - `JARVIS_DEEPGRAM_API_KEY` (covers STT and TTS)
      (turn off data retention/training in both dashboards)
    - Optional proactive settings (defaults shown): `JARVIS_BRIEF_ENABLED=true`, `JARVIS_BRIEF_TIME=07:30` (weekdays, local time),
      `JARVIS_LEAVE_LEAD_MINUTES=30`, `JARVIS_MAIL_POLL_MINUTES=5`, `JARVIS_AUTO_EVENT_CAP=5` (events added from email per 24 h)
