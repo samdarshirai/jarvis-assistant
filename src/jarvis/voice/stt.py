@@ -5,7 +5,7 @@ from typing import AsyncIterator, Literal, Protocol
 import websockets
 
 DEEPGRAM_URL = ("wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=16000&channels=1"
-                "&interim_results=true&endpointing=300&utterance_end_ms=1000&smart_format=true")
+                "&model=nova-3&language=en-IN&keyterm=Jarvis&interim_results=true&endpointing=300&utterance_end_ms=1000&smart_format=true")
 
 
 @dataclass(frozen=True)
