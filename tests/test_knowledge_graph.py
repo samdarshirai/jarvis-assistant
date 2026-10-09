@@ -172,3 +172,8 @@ async def test_note_card_after_a_web_read_in_an_earlier_step_is_flagged_untruste
     out = await g.ainvoke(hello("research robot vacuums and save a note"), CFG)
     payload = out["__interrupt__"][0].value
     assert payload["actions"][0]["tool"] == "create_note" and payload["after_untrusted"] is True
+
+
+def test_gmail_prompt_polishes_drafts():
+    p = DOMAINS["gmail"].prompt
+    assert "polish" in p and "never add facts" in p

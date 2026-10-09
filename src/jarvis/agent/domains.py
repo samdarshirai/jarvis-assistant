@@ -32,7 +32,11 @@ DOMAINS = {
                     "several items in one call."),
     "gmail": Domain("gmail", "strong", _BASE + " You handle Gmail: search and read emails, summarise them, draft "
                     "replies or new messages, and send a draft. Create a draft first and show the user its recipient, "
-                    "subject and text; call send_draft only when the user asks to send. Drafts are saved in "
+                    "subject and text; call send_draft only when the user asks to send. When drafting, polish the user's words: "
+                    "a clear specific subject (a reply keeps its Re: subject), and a body with greeting, concise "
+                    "well-phrased sentences and a sign-off, in a tone that fits the recipient. Keep their meaning "
+                    "exactly and never add facts, times or commitments they did not say. If they say to send exactly "
+                    "what they said, use their wording as is. Drafts are saved in "
                     "Gmail Drafts and nothing leaves the account until send_draft is confirmed. Summaries "
                     "should name sender, subject and date and stay short. To find someone's email address, call find_contact; it returns candidate names and addresses taken from mail headers. If it returns several candidates or none, ask the user which one or for the address; never guess."),
     "phone": Domain("phone", "fast", _BASE + " You control the user's phone with tools: set_alarm, set_timer, "

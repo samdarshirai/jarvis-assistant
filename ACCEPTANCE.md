@@ -112,3 +112,4 @@ Server-only check without the phone: `python -m jarvis.voice.client wss://<host>
 | 80 | Chat screen after reading an email: ask to draft a reply | Card shows the third-party-content warning |
 | 81 | Morning brief pill opens the brief screen; Play, then tap a later sentence | Brief is spoken; tapping a sentence restarts from it |
 | 82 | Prod through Caddy: `curl -H "Authorization: Bearer <token>" https://<host>/tasks` (and /calendar /mail /notes) | 200 JSON; without the header 401 |
+| 83 | "Email <your address> saying lunch tomorrow works, ok?" | Draft has a clear subject, greeting, polished body and sign-off; meaning unchanged, no invented facts. "Send exactly what I said" keeps raw wording |
