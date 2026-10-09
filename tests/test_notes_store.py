@@ -83,3 +83,8 @@ def test_search_never_raises_on_odd_queries(store, q):
     store.create("Note", "some text with 50% and ünï")
     assert isinstance(store.search(q), list)
     assert store.get(store.recent()[0]["id"]) is not None  # table still there
+
+
+def test_recent_has_a_120_char_snippet(store):
+    store.create("long", "x" * 300)
+    assert store.recent()[0]["snippet"] == "x" * 120

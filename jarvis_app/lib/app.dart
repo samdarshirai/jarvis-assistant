@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'alarm.dart';
+import 'api.dart';
 import 'audio.dart';
 import 'config.dart';
 import 'dashboard.dart';
@@ -134,6 +135,15 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
                     if (!mounted) return;
                     setState(() => _bind(c));
                   })
-                : SessionScreen(controller: _controller!, dashboard: _dashboard),
+                : SessionScreen(
+                    controller: _controller!,
+                    dashboard: _dashboard,
+                    api: ApiClient(_config!),
+                    alarm: widget.alarm ?? nextAlarm,
+                    runPhoneActions: (actions) async {
+                      for (final a in actions) {
+                        await AndroidPhoneActions().run(a);
+                      }
+                    }),
       );
 }

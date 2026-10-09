@@ -1,16 +1,69 @@
 import 'package:flutter/material.dart';
 
+import 'alarms_screen.dart';
+import 'api.dart';
+import 'brief_screen.dart';
+import 'calendar_screen.dart';
 import 'capabilities.dart';
+import 'chat_screen.dart';
+import 'mail_screen.dart';
+import 'notes_screen.dart';
+import 'phone.dart';
+import 'tasks_screen.dart';
 import 'config.dart';
+import 'confirm_card.dart';
 import 'dashboard.dart';
 import 'dashboard_cards.dart';
 import 'session.dart';
 import 'theme.dart';
 
 class SessionScreen extends StatelessWidget {
-  const SessionScreen({super.key, required this.controller, this.dashboard});
+  const SessionScreen({super.key, required this.controller, this.dashboard, this.api, this.alarm, this.runPhoneActions});
   final SessionController controller;
   final DashboardController? dashboard;
+  final ApiClient? api; // null: detail screens are not reachable (tests, unpaired)
+  final Future<DateTime?> Function()? alarm;
+  final Future<void> Function(List<Map<String, dynamic>> actions)? runPhoneActions;
+
+  void _push(BuildContext context, Widget screen) =>
+      Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
+
+  void _open(BuildContext context, HomeTarget t) {
+    final a = api;
+    if (a == null) return;
+    // the voice orb is the "ask Jarvis" path: leave the detail screen, then start a session
+    void ask() {
+      Navigator.of(context).pop();
+      controller.start();
+    }
+
+    _push(
+        context,
+        switch (t) {
+          HomeTarget.calendar => CalendarScreen(api: a, onAskJarvis: ask),
+          HomeTarget.mail => MailScreen(api: a, onReplyByVoice: ask),
+          HomeTarget.notes => NotesScreen(api: a, onAskJarvis: ask),
+          HomeTarget.tasks => TasksScreen(api: a),
+          HomeTarget.alarms => AlarmsScreen(alarm: alarm ?? (() async => dashboard?.nextAlarm), onAskJarvis: ask),
+        });
+  }
+
+  void _chat(BuildContext context) {
+    final a = api;
+    if (a == null) return;
+    _push(
+        context,
+        ChatScreen(
+            api: a,
+            onVoice: () {
+              Navigator.of(context).pop();
+              controller.start();
+            },
+            runPhoneActions: runPhoneActions ?? (_) async {}));
+  }
+
+  void _brief(BuildContext context, String text) => _push(
+      context, BriefScreen(brief: text, speak: (t) => controller.start(speakText: t), stop: controller.stop));
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -39,7 +92,9 @@ class SessionScreen extends StatelessWidget {
                 if (dashboard != null)
                   DashboardSections(
                       controller: dashboard!,
-                      onPlayBrief: (text) => controller.start(speakText: text),
+                      onPlayBrief: (text) => api == null ? controller.start(speakText: text) : _brief(context, text),
+                      onOpen: (t) => _open(context, t),
+                      onOpenEmail: openEmailInGmail,
                       now: DateTime.now),
               ],
             ),
@@ -66,6 +121,24 @@ class SessionScreen extends StatelessWidget {
             const Text('Say "Hey Jarvis"', style: TextStyle(fontSize: 12, color: mutedText)),
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              if (api != null) ...[
+                Tooltip(
+                  message: 'Chat',
+                  child: GestureDetector(
+                    onTap: () => _chat(context),
+                    child: Container(
+                      width: 54,
+                      height: 54,
+                      decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: darkPill.withValues(alpha: 0.6),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.1))),
+                      child: const Icon(Icons.chat_bubble, color: cream),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+              ],
               Tooltip(
                 message: 'What Jarvis can do',
                 child: GestureDetector(
@@ -113,7 +186,9 @@ class _VoiceView extends StatelessWidget {
     return Column(children: [
       Row(children: [
         IconButton(icon: const Icon(Icons.arrow_back, color: cream), tooltip: 'Back', onPressed: controller.stop),
-        const Text('Talk with Jarvis', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: cream)),
+        const Expanded(
+            child: Text('Talk with Jarvis',
+                overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: cream))),
       ]),
       Expanded(
         child: SingleChildScrollView(
@@ -135,63 +210,14 @@ class _VoiceView extends StatelessWidget {
           ]),
         ),
       ),
-      if (c != null) _confirm(context, c),
+      if (c != null)
+        ConfirmCard(
+            summary: c.summary,
+            afterUntrusted: c.afterUntrusted,
+            onConfirm: () => controller.confirm(true),
+            onCancel: () => controller.confirm(false)),
     ]);
   }
-
-  Widget _confirm(BuildContext context, dynamic c) => Container(
-        margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        padding: const EdgeInsets.all(16),
-        decoration: BoxDecoration(color: darkPill, borderRadius: BorderRadius.circular(28)),
-        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          const Text('Needs your OK', style: TextStyle(fontSize: 12, color: mutedText)),
-          const SizedBox(height: 8),
-          ConstrainedBox(
-            constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(context).height * 0.25),
-            child: SingleChildScrollView(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(color: const Color(0xFF1F1917), borderRadius: BorderRadius.circular(20)),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(c.summary as String, style: const TextStyle(color: cream)),
-                  if (c.afterUntrusted as bool) ...[
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                          color: amber.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(12)),
-                      child: const Text(
-                          '⚠ Proposed after reading third-party content (email or web) — check recipient and text.',
-                          style: TextStyle(color: amberLight, fontSize: 13)),
-                    ),
-                  ],
-                ]),
-              ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Row(children: [
-            Expanded(
-              child: TextButton(
-                style: TextButton.styleFrom(
-                    backgroundColor: const Color(0xFF1F1917), foregroundColor: danger, minimumSize: const Size(0, 48)),
-                onPressed: () => controller.confirm(false),
-                child: const Text('Cancel'),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: FilledButton(
-                style: FilledButton.styleFrom(
-                    backgroundColor: amber, foregroundColor: amberInk, minimumSize: const Size(0, 48)),
-                onPressed: () => controller.confirm(true),
-                child: const Text('Confirm'),
-              ),
-            ),
-          ]),
-        ]),
-      );
 }
 
 class PairingScreen extends StatefulWidget {

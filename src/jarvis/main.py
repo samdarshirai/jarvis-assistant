@@ -4,11 +4,17 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
+from datetime import date
+from typing import Annotated, Literal
+
 from fastapi import FastAPI, Request, WebSocket
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, StringConstraints
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from jarvis.agent.graph import build_graph
+from jarvis.appapi import AppService
 from jarvis.audit import Audit
 from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
@@ -24,6 +30,7 @@ from jarvis.notes import NoteStore
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
 from jarvis.proactive.store import ProactiveStore
+from jarvis.timeutil import now_local
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
 from jarvis.tools.memory_tools import register_memory_tools
@@ -108,6 +115,8 @@ async def lifespan(app: FastAPI):
                 lock=lock)
             app.state.voice = voice
             app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool), s.timezone)
+            app.state.app_api = app_api = AppService(devices, calendar, tasks_client, gmail, NoteStore(pool), graph,
+                                                     lock, audit, s.timezone)
             tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
                                  lock=lock, undo=undo).build(s.telegram_bot_token)
             try:
@@ -134,6 +143,7 @@ async def lifespan(app: FastAPI):
                     sched.shutdown(wait=False)  # stop new jobs before the channels and pool go away
                 app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
                 app.state.dashboard = None
+                app.state.app_api = None
                 try:
                     if tg.updater.running:
                         await tg.updater.stop()
@@ -151,13 +161,27 @@ async def lifespan(app: FastAPI):
                 # A graph step an abandoned voice turn left running must finish (audit row + checkpoint) before the
                 # saver and pool close. asyncio.wait does not cancel on timeout, unlike wait_for(gather(...)).
                 try:
-                    pending = set(voice.steps)
+                    pending = set(voice.steps) | set(app_api.steps)
                     if pending:
                         await asyncio.wait(pending, timeout=30)
                 except Exception:
                     log.exception("voice steps did not drain")
     finally:
         pool.close()
+
+
+class TaskIn(BaseModel):
+    title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    due: date | None = None
+
+
+class ChatIn(BaseModel):
+    text: Annotated[str, StringConstraints(min_length=1, max_length=2000)]
+
+
+class ConfirmIn(BaseModel):
+    interrupt_id: str
+    decision: Literal["yes", "no"]
 
 
 def create_app(with_lifespan: bool = True) -> FastAPI:
@@ -175,6 +199,85 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         if not await svc.authorized(request.headers.get("authorization", "")):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return await svc.payload()
+
+    @app.exception_handler(RequestValidationError)
+    async def bad_request(request: Request, exc: RequestValidationError):
+        return JSONResponse({"error": "bad_request"}, status_code=422)
+
+    async def guarded(request: Request):
+        """(service, error response): 503 until the lifespan built it, 401 on a bad device token."""
+        svc = getattr(app.state, "app_api", None)
+        if svc is None:
+            return None, JSONResponse({"error": "unavailable"}, status_code=503)
+        if not await svc.authorized(request.headers.get("authorization", "")):
+            return None, JSONResponse({"error": "unauthorized"}, status_code=401)
+        return svc, None
+
+    def found(body):
+        return JSONResponse({"error": "not_found"}, status_code=404) if body is None else body
+
+    @app.get("/calendar")
+    async def calendar(request: Request, days: int = 7):
+        svc, err = await guarded(request)
+        if err:
+            return err
+        try:
+            start = date.fromisoformat(request.query_params["from"]) if "from" in request.query_params else None
+        except ValueError:
+            return JSONResponse({"error": "bad_request"}, status_code=422)
+        return await svc.calendar_events(start or now_local(svc.tz).date(), days)
+
+    @app.get("/tasks")
+    async def tasks(request: Request):
+        svc, err = await guarded(request)
+        return err or await svc.task_list()
+
+    @app.post("/tasks")
+    async def add_task(request: Request, body: TaskIn):
+        svc, err = await guarded(request)
+        if err:
+            return err
+        task = await svc.create_task(body.title, body.due)
+        return JSONResponse({"error": "unavailable"}, status_code=502) if task is None else {"task": task}
+
+    @app.post("/tasks/{task_id}/complete")
+    async def complete_task(request: Request, task_id: str):
+        svc, err = await guarded(request)
+        if err:
+            return err
+        if not await svc.complete_task(task_id):
+            return JSONResponse({"error": "unavailable"}, status_code=502)
+        return {"ok": True}
+
+    @app.get("/mail")
+    async def mail(request: Request, limit: int = 20):
+        svc, err = await guarded(request)
+        return err or await svc.mail_list(limit)
+
+    @app.get("/mail/{message_id}")
+    async def mail_item(request: Request, message_id: str):
+        svc, err = await guarded(request)
+        return err or found(await svc.mail_item(message_id))
+
+    @app.get("/notes")
+    async def notes(request: Request):
+        svc, err = await guarded(request)
+        return err or await svc.note_list()
+
+    @app.get("/notes/{note_id}")
+    async def note(request: Request, note_id: int):
+        svc, err = await guarded(request)
+        return err or found(await svc.note_item(note_id))
+
+    @app.post("/chat")
+    async def chat(request: Request, body: ChatIn):
+        svc, err = await guarded(request)
+        return err or await svc.chat(body.text)
+
+    @app.post("/chat/confirm")
+    async def chat_confirm(request: Request, body: ConfirmIn):
+        svc, err = await guarded(request)
+        return err or await svc.confirm(body.interrupt_id, body.decision)
 
     @app.websocket("/voice")
     async def voice(ws: WebSocket):

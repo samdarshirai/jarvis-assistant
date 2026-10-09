@@ -7,6 +7,7 @@ import 'package:jarvis_app/theme.dart';
 import 'package:jarvis_app/ui.dart';
 
 import 'dash_fixture.dart';
+import 'mail_screen_test.dart' show FakeApi;
 import 'session_rig.dart';
 
 void main() {
@@ -103,5 +104,23 @@ void main() {
     await t.tap(find.text('Pair'));
     expect(saved?.url, 'https://x.test');
     expect(saved?.token, 'tok');
+  });
+
+  testWidgets('with an api, tapping Inbox opens the mail screen and the chat button opens chat', (t) async {
+    final r = Rig();
+    final d = DashboardController(fetch: () async => sampleDashboard());
+    await d.refresh();
+    final api = FakeApi({
+      '/mail': {'items': [], 'count': 0, 'more': false},
+    });
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, dashboard: d, api: api)));
+    await t.tap(find.text('Inbox'));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('/mail'));
+    await t.pageBack();
+    await t.pumpAndSettle();
+    await t.tap(find.byTooltip('Chat'));
+    await t.pumpAndSettle();
+    expect(find.text('Write here…'), findsOneWidget);
   });
 }

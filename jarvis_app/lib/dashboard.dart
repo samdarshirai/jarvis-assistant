@@ -44,10 +44,11 @@ class TaskItem {
 }
 
 class MailItem {
-  const MailItem({required this.sender, required this.subject});
+  const MailItem({required this.sender, required this.subject, this.id});
   final String sender, subject;
+  final String? id;
   static MailItem from(Map<String, dynamic> j) =>
-      MailItem(sender: senderName(_s(j['from']) ?? ''), subject: _s(j['subject']) ?? '');
+      MailItem(sender: senderName(_s(j['from']) ?? ''), subject: _s(j['subject']) ?? '', id: _s(j['id']));
 }
 
 class UnreadMail {

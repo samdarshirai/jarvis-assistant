@@ -25,10 +25,15 @@ Widget _muted(String t) => Text(t, style: const TextStyle(color: mutedText, font
 Widget _one(String t, {TextStyle? style, int lines = 1}) =>
     Text(t, maxLines: lines, overflow: TextOverflow.ellipsis, style: style);
 
+enum HomeTarget { calendar, mail, notes, tasks, alarms }
+
 class DashboardSections extends StatelessWidget {
-  const DashboardSections({super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now});
+  const DashboardSections(
+      {super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now, this.onOpen, this.onOpenEmail});
   final DashboardController controller;
   final void Function(String text) onPlayBrief;
+  final void Function(HomeTarget target)? onOpen;
+  final void Function(String? messageId)? onOpenEmail;
   final DateTime Function() now;
 
   @override
@@ -157,6 +162,7 @@ class DashboardSections extends StatelessWidget {
 
   Widget _schedule(List<EventItem>? events) => BlushCard(
         title: 'Schedule',
+        onTap: () => onOpen?.call(HomeTarget.calendar),
         child: _list<EventItem>(
           events,
           'Free all day',
@@ -170,6 +176,7 @@ class DashboardSections extends StatelessWidget {
   Widget _inbox(UnreadMail? m) => BlushCard(
         title: 'Inbox',
         dark: true,
+        onTap: () => onOpen?.call(HomeTarget.mail),
         trailing: m == null || m.count == 0
             ? null
             : Container(
@@ -182,17 +189,23 @@ class DashboardSections extends StatelessWidget {
           m?.items,
           'Inbox zero. Nothing unread.',
           dark: true,
-          (i) => _tile(
-            color: Colors.white.withValues(alpha: 0.08),
-            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              _one(i.sender, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
-              _one(i.subject, style: _muteSm),
-            ]),
+          (i) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => onOpenEmail?.call(i.id),
+            child: _tile(
+              color: Colors.white.withValues(alpha: 0.08),
+              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                _one(i.sender, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                _one(i.subject, style: _muteSm),
+              ]),
+            ),
           ),
         ),
       );
 
-  Widget _notes(List<NoteItem>? notes) => Container(
+  Widget _notes(List<NoteItem>? notes) => GestureDetector(
+      onTap: () => onOpen?.call(HomeTarget.notes),
+      child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(gradient: amberGradient, borderRadius: BorderRadius.circular(32)),
@@ -207,10 +220,11 @@ class DashboardSections extends StatelessWidget {
                     lines: 3, style: TextStyle(fontSize: 15, fontWeight: notes.isEmpty ? FontWeight.w400 : FontWeight.w700)),
           ]),
         ),
-      );
+      ));
 
   Widget _tasks(List<TaskItem>? tasks) => BlushCard(
         title: 'Tasks',
+        onTap: () => onOpen?.call(HomeTarget.tasks),
         trailing: tasks == null || tasks.isEmpty
             ? null
             : Text('${tasks.length} left', style: TextStyle(fontSize: 12, color: ink.withValues(alpha: 0.6))),
@@ -242,7 +256,9 @@ class DashboardSections extends StatelessWidget {
 
   Widget _alarm(DateTime n) {
     final at = controller.nextAlarm;
-    return Container(
+    return GestureDetector(
+      onTap: () => onOpen?.call(HomeTarget.alarms),
+      child: Container(
       padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
       decoration: BoxDecoration(
         color: darkPill.withValues(alpha: 0.55),
@@ -265,6 +281,6 @@ class DashboardSections extends StatelessWidget {
                         Flexible(child: _one(dayLabel(at, n), style: _muteSm)),
                       ]))),
       ]),
-    );
+    ));
   }
 }

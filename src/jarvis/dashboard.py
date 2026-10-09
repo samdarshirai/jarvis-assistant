@@ -59,7 +59,7 @@ class DashboardService:
                 for t in sorted(all_tasks, key=lambda t: (t["due"] is None, t["due"] or ""))][:MAX_TASKS],
             "unread": None if mail is None else {
                 "count": len(shown), "more": len(mail) > UNREAD_SHOWN,
-                "items": [{"from": m.get("from") or "", "subject": m.get("subject") or ""} for m in shown]},
+                "items": [{"id": m.get("id"), "from": m.get("from") or "", "subject": m.get("subject") or ""} for m in shown]},
             "notes": notes,
             "brief": brief[:MAX_SPEAK_CHARS],
             "reauth": reauth,

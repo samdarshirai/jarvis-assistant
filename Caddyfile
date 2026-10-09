@@ -1,5 +1,5 @@
 {$DOMAIN} {
-	@public path /voice /health
+	@public path /voice /health /dashboard /calendar /tasks /tasks/* /mail /mail/* /notes /notes/* /chat /chat/*
 	reverse_proxy @public app:8000
 	respond 404
 }
