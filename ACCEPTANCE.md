@@ -95,11 +95,20 @@ Server-only check without the phone: `python -m jarvis.voice.client wss://<host>
 | 63 | "add milk and eggs to my shopping list" (in a chat with no recent email, contact-lookup or web reads in the last 40 messages; if in doubt, send a few unrelated messages first, no restart needed) | Items are added with no Confirm tap, a "Shopping" task list exists in Google Tasks, and `list_tasks` ("what are my tasks") does not show them |
 | 64 | Ask Jarvis to read an email, then in the same chat "add bread to my shopping list" | A Confirm card appears (with the third-party-content warning) before the item is added; cancelling adds nothing |
 | 65 | "I bought the milk" (complete a shopping item) | A Confirm card "Complete shopping item 'Milk'"; the item is completed only after Confirm |
-| 66 | Open the app (paired) | Dark glass home: greeting and date, Morning brief, Calendar, Tasks, Unread email, Notes, Next alarm cards, voice bar at the bottom |
+| 66 | Open the app (paired) | Cocoa/amber home: greeting and date, Morning brief pill, Schedule, Inbox, Notes, Tasks, Next alarm, chat / orb / skills buttons at the bottom |
 | 67 | Compare Calendar / Tasks / Unread email / Notes cards with Google Calendar, Tasks, Gmail and "list my notes" | Same items; unread shows up to 5 with "5+ unread" when more; overdue tasks say Overdue |
 | 68 | Say "Hey Jarvis, add task buy milk", let the session end | The Tasks card shows it without manual refresh; pull-down also refreshes |
 | 69 | Set a 06:30 alarm in the clock app, reopen the app | Next alarm card says "06:30 · Today/Tomorrow"; with no alarm it says "No alarm set" |
 | 70 | Airplane mode, reopen the app | Cards keep the last data and an Offline chip shows; first launch offline shows "Couldn't reach Jarvis" with Retry |
 | 71 | Tap Play on the Morning brief card | A session starts and reads the brief text aloud |
-| 72 | Ask for something that needs confirmation (e.g. "create an event tomorrow at 10") | The voice bar expands with transcript, the Confirm card and the third-party warning when relevant; Confirm and Cancel still work; bar collapses after the session |
+| 72 | Ask for something that needs confirmation (e.g. "create an event tomorrow at 10") | A full voice view shows transcript, the Confirm card and the third-party warning when relevant; Confirm and Cancel still work; Home returns after the session |
 | 73 | Break Google access (revoke the token) then refresh | The affected cards say Unavailable and a re-consent note shows; the rest still load |
+| 74 | Tap Schedule, Inbox, Notes, Tasks, Next alarm on Home | Calendar (week strip, events), Inbox, Notes, Tasks, Alarms screens open with the same data as Google |
+| 75 | Tasks screen: tick a task; type a new one and press Enter | Google Tasks shows it completed / created; an audit row (kind `app`) exists |
+| 76 | Tap an email on Home or in the Inbox screen | Gmail app opens that message (if it lands on the inbox instead, note the Gmail version); with Gmail missing the inbox opens in the browser |
+| 77 | Inbox screen: expand a row | Plain-text body shows; "Reply by voice" starts a session; "Open in Gmail" works |
+| 78 | Chat screen: "what's on my calendar today" | Reply bubble matches the calendar |
+| 79 | Chat screen: "add task buy bread", Confirm / Cancel | Confirm card with Needs your OK; task created only after Confirm; a second tap says "Already handled." |
+| 80 | Chat screen after reading an email: ask to draft a reply | Card shows the third-party-content warning |
+| 81 | Morning brief pill opens the brief screen; Play, then tap a later sentence | Brief is spoken; tapping a sentence restarts from it |
+| 82 | Prod through Caddy: `curl -H "Authorization: Bearer <token>" https://<host>/tasks` (and /calendar /mail /notes) | 200 JSON; without the header 401 |
