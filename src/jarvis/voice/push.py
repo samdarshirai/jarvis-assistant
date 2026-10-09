@@ -12,11 +12,17 @@ log = logging.getLogger(__name__)
 FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 
 
-def fcm_access_token(credentials_path: str) -> tuple[str, str]:
+def fcm_access_token(credentials: str) -> tuple[str, str]:
+    """`credentials` is a service-account file path, or the JSON itself (for hosts without files, e.g. Railway)."""
+    import json
+
     from google.auth.transport.requests import Request
     from google.oauth2 import service_account
 
-    creds = service_account.Credentials.from_service_account_file(credentials_path, scopes=[FCM_SCOPE])
+    if credentials.lstrip().startswith("{"):
+        creds = service_account.Credentials.from_service_account_info(json.loads(credentials), scopes=[FCM_SCOPE])
+    else:
+        creds = service_account.Credentials.from_service_account_file(credentials, scopes=[FCM_SCOPE])
     creds.refresh(Request())
     return creds.project_id, creds.token
 

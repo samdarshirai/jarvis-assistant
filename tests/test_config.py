@@ -49,3 +49,11 @@ def test_brief_time_must_be_hh_mm(bad):
 def test_intervals_must_be_positive(field):
     with pytest.raises(ValidationError):
         make(**{field: 0})
+
+
+def test_database_url_must_be_a_postgres_url():
+    import pytest
+    for bad in ("", '""', "'postgresql://x'"):
+        with pytest.raises(ValueError, match="postgresql://"):
+            make(database_url=bad)
+    assert make(database_url="postgres://x").database_url == "postgres://x"

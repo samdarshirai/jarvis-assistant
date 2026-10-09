@@ -44,8 +44,10 @@ Env var changes in the dashboard trigger a redeploy automatically.
 
 ## FCM push (optional)
 
-`JARVIS_FCM_CREDENTIALS_PATH` is a file path. On Railway add a Volume, upload the service-account JSON
-to it, and set the variable to the mounted path. Skip it if you only use Telegram.
+Firebase console, Project settings, Service accounts, Generate new private key. Open the downloaded JSON,
+copy its whole content, and set it as the Railway variable `JARVIS_FCM_CREDENTIALS_PATH` (a value starting
+with `{` is read as the JSON itself, so no file or volume is needed). Skip it if you only use Telegram.
+The phone app still needs its own Firebase config (`google-services.json`) built in; that part is separate.
 
 ## Other options
 

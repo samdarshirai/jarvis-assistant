@@ -36,3 +36,25 @@ def test_cli_refuses_text_the_speak_frame_would_reject(monkeypatch):
     monkeypatch.setattr("sys.argv", ["push", "x" * (MAX_SPEAK_CHARS + 1)])
     with pytest.raises(SystemExit, match="limit is 2000"):
         push.main()
+
+
+def test_access_token_accepts_inline_json_and_file_path(monkeypatch, tmp_path):
+    from google.oauth2 import service_account
+
+    from jarvis.voice import push
+
+    calls = []
+
+    class Creds:
+        project_id, token = "p", "T"
+
+        def refresh(self, _):
+            pass
+
+    monkeypatch.setattr(service_account.Credentials, "from_service_account_info",
+                        classmethod(lambda cls, info, scopes: calls.append(("info", info)) or Creds()))
+    monkeypatch.setattr(service_account.Credentials, "from_service_account_file",
+                        classmethod(lambda cls, path, scopes: calls.append(("file", path)) or Creds()))
+    assert push.fcm_access_token('  {"project_id": "p"}') == ("p", "T")
+    assert push.fcm_access_token("/secrets/fcm.json") == ("p", "T")
+    assert calls == [("info", {"project_id": "p"}), ("file", "/secrets/fcm.json")]

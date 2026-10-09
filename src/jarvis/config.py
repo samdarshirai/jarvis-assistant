@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     deepgram_api_key: str = ""
     cartesia_api_key: str = ""
     cartesia_voice_id: str = ""
-    fcm_credentials_path: str = ""  # Firebase service-account JSON, kept outside the repo
+    fcm_credentials_path: str = ""  # Firebase service-account JSON file path, or the JSON content itself; kept outside the repo
     tavily_api_key: str = ""  # optional: web search for the research domain; empty = web_search says it is not configured
     weather_city: str = ""  # city for the brief's weather line and umbrella/jacket advice; empty = no weather
     brief_enabled: bool = True
@@ -34,6 +34,13 @@ class Settings(BaseSettings):
         h, sep, m = v.partition(":")
         if not (sep and len(h) == 2 and len(m) == 2 and h.isdigit() and m.isdigit() and int(h) < 24 and int(m) < 60):
             raise ValueError("brief_time must be HH:MM")
+        return v
+
+    @field_validator("database_url")
+    @classmethod
+    def _database_url_is_postgres(cls, v: str) -> str:
+        if not v.startswith(("postgresql://", "postgres://")):
+            raise ValueError("database_url must start with postgresql:// (empty or quoted? check the Railway variable reference)")
         return v
 
     def models(self, tier: str) -> list[str]:
