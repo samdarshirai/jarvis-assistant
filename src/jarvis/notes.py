@@ -50,9 +50,9 @@ class NoteStore:
 
     def recent(self, limit: int = 20) -> list[dict]:
         with self.pool.connection() as conn:
-            rows = conn.execute("SELECT id, title, updated_at FROM notes ORDER BY updated_at DESC, id DESC LIMIT %s",
+            rows = conn.execute("SELECT id, title, updated_at, left(body, 120) FROM notes ORDER BY updated_at DESC, id DESC LIMIT %s",
                                 (limit,)).fetchall()
-        return [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat()} for r in rows]
+        return [{"id": r[0], "title": r[1], "updated_at": r[2].isoformat(), "snippet": r[3]} for r in rows]
 
     def search(self, query: str, limit: int = 5) -> list[dict]:
         q = query.strip()

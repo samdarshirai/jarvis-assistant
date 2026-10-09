@@ -48,3 +48,34 @@ class AndroidPhoneActions implements PhoneActions {
     }
   }
 }
+
+/// Gmail web/app deep link for a message; falls back to the inbox for a missing or unsafe id.
+Uri gmailUri(String? messageId) {
+  final ok = messageId != null && RegExp(r'^[A-Za-z0-9_-]+$').hasMatch(messageId);
+  return Uri.parse('https://mail.google.com/mail/u/0/#inbox${ok ? '/$messageId' : ''}');
+}
+
+Future<void> _launchIntent(Uri uri, {String? package}) => AndroidIntent(
+      action: 'action_view',
+      data: uri.toString(),
+      package: package,
+      flags: const [0x10000000], // FLAG_ACTIVITY_NEW_TASK
+    ).launch();
+
+const _gmailPackage = 'com.google.android.gm';
+
+/// Tries Gmail with the message, then Gmail inbox, then any app on the inbox URL; never throws.
+Future<void> openEmailInGmail(String? messageId,
+    {Future<void> Function(Uri uri, {String? package}) launch = _launchIntent}) async {
+  final attempts = <(Uri, String?)>[
+    (gmailUri(messageId), _gmailPackage),
+    (gmailUri(null), _gmailPackage),
+    (gmailUri(null), null),
+  ];
+  for (final (uri, pkg) in attempts) {
+    try {
+      await launch(uri, package: pkg);
+      return;
+    } catch (_) {}
+  }
+}

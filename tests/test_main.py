@@ -23,6 +23,7 @@ def mock_lifespan_deps(monkeypatch):
     settings = SimpleNamespace(
         database_url="postgresql://test",
         timezone="UTC",
+        weather_city="",
         fernet_key="test",
         tavily_api_key="",
         telegram_owner_chat_id=123,
@@ -81,6 +82,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
     settings = SimpleNamespace(
         database_url="postgresql://test",
         timezone="UTC",
+        weather_city="",
         fernet_key="test",
         tavily_api_key="",
         telegram_owner_chat_id=123,
@@ -383,7 +385,7 @@ class _Dash:
         self.seen = header
         return self.ok
 
-    async def payload(self):
+    async def payload(self, coords=None):
         return {"events": [], "reauth": False}
 
 

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     cartesia_voice_id: str = ""
     fcm_credentials_path: str = ""  # Firebase service-account JSON, kept outside the repo
     tavily_api_key: str = ""  # optional: web search for the research domain; empty = web_search says it is not configured
+    weather_city: str = ""  # city for the brief's weather line and umbrella/jacket advice; empty = no weather
     brief_enabled: bool = True
     brief_time: str = "07:30"  # local HH:MM, weekdays only
     leave_lead_minutes: int = Field(default=30, ge=1)  # "leave now" fires this long before an event with a location

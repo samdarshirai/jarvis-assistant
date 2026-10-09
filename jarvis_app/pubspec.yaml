@@ -48,6 +48,7 @@ dependencies:
   flutter_sound: ^9.30.0
   flutter_onnxruntime: ^1.9.0
   path_provider: ^2.1.6
+  geolocator: ^14.1.1
 
 dev_dependencies:
   flutter_test:
@@ -74,6 +75,21 @@ flutter:
 
   assets:
     - assets/oww/
+
+  fonts:
+    - family: BarlowCondensed
+      fonts:
+        - asset: assets/fonts/BarlowCondensed-ExtraLight.ttf
+          weight: 200
+        - asset: assets/fonts/BarlowCondensed-Bold.ttf
+          weight: 700
+    - family: InstrumentSans
+      fonts:
+        - asset: assets/fonts/InstrumentSans.ttf
+    - family: Unbounded
+      fonts:
+        - asset: assets/fonts/Unbounded.ttf
+          weight: 800
 
   # To add assets to your application, add an assets section, like this:
   # assets:

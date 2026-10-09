@@ -7,6 +7,7 @@ import 'package:jarvis_app/theme.dart';
 import 'package:jarvis_app/ui.dart';
 
 import 'dash_fixture.dart';
+import 'mail_screen_test.dart' show FakeApi;
 import 'session_rig.dart';
 
 void main() {
@@ -30,17 +31,16 @@ void main() {
     await t.pump();
   });
 
-  testWidgets('info icon opens the capabilities list', (t) async {
+  testWidgets('apps button opens the capabilities list', (t) async {
     final r = Rig();
     await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c)));
-    await t.tap(find.byIcon(Icons.info_outline));
+    await t.tap(find.byIcon(Icons.apps));
     await t.pumpAndSettle();
     expect(find.text('What Jarvis can do'), findsOneWidget);
     expect(find.text('Calendar'), findsOneWidget);
-    expect(find.text('List events'), findsOneWidget);
   });
 
-  testWidgets('home shows the dashboard above the voice bar and the orb starts a session', (t) async {
+  testWidgets('home shows the dashboard with the orb and the orb starts a session', (t) async {
     final sem = t.ensureSemantics();
     final r = Rig();
     final d = DashboardController(fetch: () async => sampleDashboard());
@@ -64,7 +64,7 @@ void main() {
     final d = DashboardController(fetch: () async => sampleDashboard());
     await d.refresh();
     await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, dashboard: d)));
-    await t.tap(find.text('Play'));
+    await t.tap(find.byTooltip('Play'));
     await t.pump();
     await t.pump();
     expect(r.socket.sent.where((e) => e.$1 == 'speak').single.$2, {'text': 'Calendar today: 09:00 Standup.'});
@@ -95,14 +95,46 @@ void main() {
     await t.pump();
   });
 
-  testWidgets('pairing screen is on the glass background and still saves', (t) async {
+  testWidgets('pairing screen is on the cocoa background and still saves', (t) async {
     Config? saved;
     await t.pumpWidget(MaterialApp(theme: jarvisTheme(), home: PairingScreen(onSaved: (c) => saved = c)));
-    expect(find.byType(GlassBackground), findsOneWidget);
+    expect(find.byType(CocoaBackground), findsOneWidget);
     await t.enterText(find.byType(TextField).first, ' https://x.test ');
     await t.enterText(find.byType(TextField).last, ' tok ');
     await t.tap(find.text('Pair'));
     expect(saved?.url, 'https://x.test');
     expect(saved?.token, 'tok');
+  });
+
+  testWidgets('with an api, tapping Inbox opens the mail screen and the chat button opens chat', (t) async {
+    final r = Rig();
+    final d = DashboardController(fetch: () async => sampleDashboard());
+    await d.refresh();
+    final api = FakeApi({
+      '/mail': {'items': [], 'count': 0, 'more': false},
+    });
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, dashboard: d, api: api)));
+    await t.tap(find.text('Inbox'));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('/mail'));
+    await t.pageBack();
+    await t.pumpAndSettle();
+    await t.tap(find.byTooltip('Chat'));
+    await t.pumpAndSettle();
+    expect(find.text('Write here…'), findsOneWidget);
+  });
+
+  testWidgets('voice view shows quick-start chips and a chip sends its text to chat', (t) async {
+    final r = Rig();
+    final api = FakeApi({});
+    await t.pumpWidget(MaterialApp(home: SessionScreen(controller: r.c, api: api)));
+    await r.c.start();
+    await t.pump();
+    expect(find.text('Write an email'), findsOneWidget);
+    await t.tap(find.text('Write an email'));
+    await t.pump();
+    await t.pump();
+    expect(find.text('Write here…'), findsOneWidget);
+    expect(find.text('Write an email'), findsWidgets); // sent as a user bubble
   });
 }
