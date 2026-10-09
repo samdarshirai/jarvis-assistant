@@ -18,7 +18,7 @@
         <package android:name="com.whatsapp"/>
     </queries>
     <application
-        android:label="jarvis_app"
+        android:label="Jarvis"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
