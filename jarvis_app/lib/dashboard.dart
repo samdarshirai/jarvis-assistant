@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
 
 import 'config.dart';
 
@@ -95,10 +96,28 @@ class DashboardData {
   }
 }
 
+/// Rough phone position for the weather line (city-level is enough); null when denied, off or slow.
+Future<Position?> _where() async {
+  try {
+    var perm = await Geolocator.checkPermission();
+    if (perm == LocationPermission.denied) perm = await Geolocator.requestPermission();
+    if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) return null;
+    return await Geolocator.getLastKnownPosition() ??
+        await Geolocator.getCurrentPosition(
+            locationSettings: const LocationSettings(accuracy: LocationAccuracy.low, timeLimit: Duration(seconds: 6)));
+  } catch (_) {
+    return null; // the brief just falls back to the server's configured city
+  }
+}
+
 Future<DashboardData> fetchDashboard(Config c) async {
   final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
   try {
-    final req = await client.getUrl(c.dashboardUri);
+    final pos = await _where();
+    final uri = pos == null
+        ? c.dashboardUri
+        : c.dashboardUri.replace(queryParameters: {'lat': '${pos.latitude}', 'lon': '${pos.longitude}'});
+    final req = await client.getUrl(uri);
     req.headers.set('Authorization', 'Bearer ${c.token}');
     final res = await req.close().timeout(const Duration(seconds: 20));
     if (res.statusCode != 200) {

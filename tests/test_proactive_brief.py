@@ -108,7 +108,7 @@ async def test_compose_wraps_facts_as_untrusted_and_neutralises_a_closing_tag():
 async def test_compose_falls_back_to_the_template(llm):
     facts = {"events": EVENTS, "overdue": [TASKS[0]], "mail": []}
     text, used = await compose(llm, facts, TZ)
-    assert not used and text.startswith("Good morning. ") and "Standup" in text and "Overdue tasks: Pay rent." in text
+    assert not used and text.startswith("Good morning. ") and "Standup" in text and "Pay rent" in text
     assert "\n" not in text
 
 
@@ -130,7 +130,7 @@ async def test_brief_still_goes_out_when_google_needs_reconsent_then_raises_for_
     with pytest.raises(ReauthRequired):
         await run_brief(Cal(exc=ReauthRequired("x")), Tasks(exc=ReauthRequired("x")), Gmail(exc=ReauthRequired("x")),
                         LLM(exc=RuntimeError("down")), n, MemoryAudit(), TZ, NOW)
-    assert [c[0] for c in n.calls] == ["telegram", "push"] and "unavailable" in n.calls[0][1]
+    assert [c[0] for c in n.calls] == ["telegram", "push"] and "couldn't reach your calendar" in n.calls[0][1]
 
 
 def test_render_facts_mail_label_is_overridable():

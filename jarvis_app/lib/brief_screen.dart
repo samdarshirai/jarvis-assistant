@@ -32,6 +32,7 @@ class _BriefScreenState extends State<BriefScreen> {
   int _i = 0;
   bool _playing = false;
   Timer? _timer;
+  DateTime _sentStart = DateTime.now();
 
   void _playFrom(int i) {
     _timer?.cancel();
@@ -44,6 +45,7 @@ class _BriefScreenState extends State<BriefScreen> {
   }
 
   void _arm() {
+    _sentStart = DateTime.now();
     _timer = Timer(_est(_s[_i]), () {
       if (_i + 1 >= _s.length) {
         setState(() => _playing = false);
@@ -52,6 +54,18 @@ class _BriefScreenState extends State<BriefScreen> {
         _arm();
       }
     });
+  }
+
+  // ponytail: position is estimated like the progress bar; lands on a sentence start, not mid-sentence
+  void _back10() {
+    if (_s.isEmpty) return;
+    final inSent = _playing ? DateTime.now().difference(_sentStart) : Duration.zero;
+    final target = _span(0, _i) + inSent - const Duration(seconds: 10);
+    var k = 0;
+    while (k < _s.length - 1 && _span(0, k + 1) <= target) {
+      k++;
+    }
+    _playFrom(target <= Duration.zero ? 0 : k);
   }
 
   void _pause() {
@@ -63,7 +77,7 @@ class _BriefScreenState extends State<BriefScreen> {
   @override
   void dispose() {
     _timer?.cancel();
-    if (_playing) widget.stop();
+    widget.stop(); // end the speak session even after playback finished, else back lands on the voice view
     super.dispose();
   }
 
@@ -109,15 +123,25 @@ class _BriefScreenState extends State<BriefScreen> {
                   Text(_mmss(total), style: const TextStyle(color: mutedText)),
                 ]),
                 const SizedBox(height: 8),
-                GestureDetector(
-                  onTap: _s.isEmpty ? null : (_playing ? _pause : () => _playFrom(_i)),
-                  child: Container(
-                    width: 64,
-                    height: 64,
-                    decoration: const BoxDecoration(shape: BoxShape.circle, gradient: amberGradient),
-                    child: Icon(_playing ? Icons.pause : Icons.play_arrow, color: amberInk, size: 32),
+                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  IconButton(
+                      iconSize: 36,
+                      color: cream,
+                      tooltip: 'Back 10 seconds',
+                      onPressed: _s.isEmpty ? null : _back10,
+                      icon: const Icon(Icons.replay_10)),
+                  const SizedBox(width: 20),
+                  GestureDetector(
+                    onTap: _s.isEmpty ? null : (_playing ? _pause : () => _playFrom(_i)),
+                    child: Container(
+                      width: 64,
+                      height: 64,
+                      decoration: const BoxDecoration(shape: BoxShape.circle, gradient: amberGradient),
+                      child: Icon(_playing ? Icons.pause : Icons.play_arrow, color: amberInk, size: 32),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 56), // balances the replay button so play stays centred
+                ]),
               ]),
             ),
           ]),

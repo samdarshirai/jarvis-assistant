@@ -114,7 +114,7 @@ async def lifespan(app: FastAPI):
                 CartesiaTTS(s.cartesia_api_key, s.cartesia_voice_id) if s.cartesia_api_key and s.cartesia_voice_id else None,
                 lock=lock)
             app.state.voice = voice
-            app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool), s.timezone)
+            app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool), s.timezone, weather_city=s.weather_city, store=proactive_store)
             app.state.app_api = app_api = AppService(devices, calendar, tasks_client, gmail, NoteStore(pool), graph,
                                                      lock, audit, s.timezone)
             tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
@@ -198,7 +198,12 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
             return JSONResponse({"error": "unavailable"}, status_code=503)
         if not await svc.authorized(request.headers.get("authorization", "")):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
-        return await svc.payload()
+        try:
+            lat, lon = float(request.query_params["lat"]), float(request.query_params["lon"])
+            coords = (lat, lon) if -90 <= lat <= 90 and -180 <= lon <= 180 else None
+        except (KeyError, ValueError):
+            coords = None
+        return await svc.payload(coords=coords)
 
     @app.exception_handler(RequestValidationError)
     async def bad_request(request: Request, exc: RequestValidationError):

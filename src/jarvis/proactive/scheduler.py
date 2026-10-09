@@ -7,6 +7,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 
 from jarvis.google.auth import ReauthRequired
 from jarvis.proactive.alerts import sweep
+from jarvis import weather
 from jarvis.proactive.brief import run_brief
 from jarvis.proactive.mailwatch import MailWatch
 from jarvis.proactive.notify import make_notifier
@@ -54,7 +55,8 @@ def start_proactive(s, store, calendar, tasks, gmail, llm, audit, bot, devices) 
     notifier = make_notifier(bot, s.telegram_owner_chat_id, s.fcm_credentials_path, devices)
     watch = MailWatch(gmail, calendar, store, notifier, llm, audit, s.timezone, s.auto_event_cap)
     raw = {
-        "brief": lambda: run_brief(calendar, tasks, gmail, llm, notifier, audit, s.timezone),
+        "brief": lambda: run_brief(calendar, tasks, gmail, llm, notifier, audit, s.timezone, weather_city=s.weather_city,
+                           location=lambda: weather.load_coords(store)),
         "mail": lambda: watch.run_once(),
         "sweep": lambda: sweep(calendar, store, notifier, s.timezone, s.leave_lead_minutes),
     }

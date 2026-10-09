@@ -79,7 +79,7 @@ async def test_payload_shapes_every_section():
     assert p["unread"] == {"count": 5, "more": True, "items": [{"id": f"m{i}", "from": f"p{i}@x.com", "subject": f"S{i}"} for i in range(5)]}
     assert gmail.call == ("is:unread in:inbox newer_than:7d", 6)
     assert p["notes"] == NOTES and p["reauth"] is False
-    assert "09:00 Standup" in p["brief"] and "Overdue tasks: Pay rent." in p["brief"] and "Unread email:" in p["brief"]
+    assert "at 09:00, Standup" in p["brief"] and "Pay rent" in p["brief"] and "unread" in p["brief"]
 
 
 async def test_unread_without_more_and_missing_headers():
@@ -90,13 +90,13 @@ async def test_unread_without_more_and_missing_headers():
 async def test_empty_everything():
     p = await svc(Cal([]), Tasks([]), Gmail([])).payload(NOW)
     assert p["events"] == [] and p["tasks"] == [] and p["unread"] == {"count": 0, "more": False, "items": []}
-    assert "no events" in p["brief"]
+    assert "calendar is clear" in p["brief"]
 
 
 async def test_a_failing_source_is_null_and_the_rest_survive():
     p = await svc(Cal(exc=RuntimeError("boom"))).payload(NOW)
     assert p["events"] is None and p["tasks"] and p["unread"] and p["notes"]
-    assert "Calendar: unavailable" in p["brief"] and p["reauth"] is False
+    assert "couldn't reach your calendar" in p["brief"] and p["reauth"] is False
 
 
 async def test_reauth_sets_flag_and_nulls_the_source():
