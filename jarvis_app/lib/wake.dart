@@ -77,7 +77,6 @@ class WakeTaskHandler extends TaskHandler {
   Future<void> _onWake() async {
     await _pause();
     await FlutterForegroundTask.saveData(key: _wakeKey, value: DateTime.now().millisecondsSinceEpoch);
-    FlutterForegroundTask.sendDataToMain('wake');
     final n = FlutterLocalNotificationsPlugin();
     await n.initialize(settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
     // Full-screen intent wakes the screen; if Android denies it, this degrades to a heads-up notification.
@@ -90,8 +89,11 @@ class WakeTaskHandler extends TaskHandler {
               importance: Importance.max,
               priority: Priority.high,
               fullScreenIntent: true,
+              timeoutAfter: 15000, // backstop: never linger if a cancel is missed
               category: AndroidNotificationCategory.call)),
     );
+    // After show: main cancels this on session start, and a cancel sent before show would leave it stuck.
+    FlutterForegroundTask.sendDataToMain('wake');
   }
 
   @override

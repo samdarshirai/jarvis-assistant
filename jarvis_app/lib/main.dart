@@ -9,7 +9,7 @@ import 'wake.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   WakeService.init();
-  await [Permission.microphone, Permission.notification, Permission.contacts].request();
+  await [Permission.microphone, Permission.notification, Permission.contacts, Permission.bluetoothConnect].request();
   try {
     await PushBridge.init(); // optional; never blocks startup
   } catch (e) {
