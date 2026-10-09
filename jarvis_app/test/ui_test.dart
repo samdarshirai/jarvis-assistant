@@ -118,7 +118,7 @@ void main() {
     await t.pumpAndSettle();
     expect(api.calls, contains('/mail'));
     await t.pageBack();
-    await t.pumpAndSettle();
+    await t.pump(const Duration(seconds: 1)); // home orb pulses forever, so no pumpAndSettle
     await t.tap(find.byTooltip('Chat'));
     await t.pumpAndSettle();
     expect(find.text('Write here…'), findsOneWidget);

@@ -44,7 +44,7 @@ class SessionScreen extends StatelessWidget {
           HomeTarget.calendar => CalendarScreen(api: a, onAskJarvis: ask),
           HomeTarget.mail => MailScreen(api: a, onReplyByVoice: ask),
           HomeTarget.notes => NotesScreen(api: a, onAskJarvis: ask),
-          HomeTarget.tasks => TasksScreen(api: a),
+          HomeTarget.tasks => TasksScreen(api: a, onAskJarvis: ask),
           HomeTarget.alarms => AlarmsScreen(alarm: alarm ?? (() async => dashboard?.nextAlarm), onAskJarvis: ask),
         });
   }
@@ -92,6 +92,22 @@ class SessionScreen extends StatelessWidget {
         ),
       );
 
+  Widget _sideButton(IconData icon, String tip, VoidCallback onTap) => Tooltip(
+        message: tip,
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: darkPill.withValues(alpha: 0.6),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1))),
+            child: Icon(icon, color: cream),
+          ),
+        ),
+      );
+
   Widget _home(BuildContext context) => Stack(children: [
         Positioned.fill(
           child: RefreshIndicator(
@@ -132,46 +148,12 @@ class SessionScreen extends StatelessWidget {
             const Text('Say "Hey Jarvis"', style: TextStyle(fontSize: 12, color: mutedText)),
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              if (api != null) ...[
-                Tooltip(
-                  message: 'Chat',
-                  child: GestureDetector(
-                    onTap: () => _chat(context),
-                    child: Container(
-                      width: 54,
-                      height: 54,
-                      decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: darkPill.withValues(alpha: 0.6),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.1))),
-                      child: const Icon(Icons.chat_bubble, color: cream),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-              ],
-              Tooltip(
-                message: 'What Jarvis can do',
-                child: GestureDetector(
-                  onTap: () => Navigator.of(context)
-                      .push(MaterialPageRoute(builder: (_) => const CapabilitiesScreen())),
-                  child: Container(
-                    width: 54,
-                    height: 54,
-                    decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: darkPill.withValues(alpha: 0.6),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.1))),
-                    child: const Icon(Icons.apps, color: cream),
-                  ),
-                ),
-              ),
+              api == null ? const SizedBox(width: 54) : _sideButton(Icons.chat_bubble, 'Chat', () => _chat(context)),
               const SizedBox(width: 16),
-              Container(
-                padding: const EdgeInsets.all(3),
-                decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: amber, width: 1.5)),
-                child: AmberOrb(phase: controller.phase, onTap: () => controller.start()),
-              ),
+              OrbButton(onTap: () => controller.start()),
+              const SizedBox(width: 16),
+              _sideButton(Icons.apps, 'What Jarvis can do',
+                  () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CapabilitiesScreen()))),
             ]),
           ]),
         ),
@@ -210,7 +192,7 @@ class _VoiceView extends StatelessWidget {
             width: 52,
             height: 52,
             decoration: BoxDecoration(shape: BoxShape.circle, color: darkPill.withValues(alpha: 0.5)),
-            child: Icon(icon, color: cream),
+            child: Icon(icon, size: 22, color: cream),
           ),
         ),
       );
@@ -242,12 +224,16 @@ class _VoiceView extends StatelessWidget {
     final speed = switch (phase) { Phase.thinking => 3.0, Phase.speaking => 1.6, _ => 1.0 };
     final showChips = onKeyboard != null && phase == Phase.listening && controller.userText.isEmpty && c == null;
     return Column(children: [
-      Row(children: [
-        IconButton(icon: const Icon(Icons.arrow_back, color: cream), tooltip: 'Back', onPressed: controller.stop),
-        const Expanded(
-            child: Text('Talk with Jarvis',
-                overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: cream))),
-      ]),
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+        child: Row(children: [
+          RoundButton(icon: Icons.arrow_back, tooltip: 'Back', onTap: controller.stop),
+          const Expanded(
+              child: Text('Talk with Jarvis',
+                  textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, color: cream))),
+          const SizedBox(width: 46),
+        ]),
+      ),
       Expanded(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -260,10 +246,12 @@ class _VoiceView extends StatelessWidget {
             const SizedBox(height: 16),
             if (showChips) Wrap(alignment: WrapAlignment.center, spacing: 8, runSpacing: 8, children: [for (final q in _chips) _chip(q)]),
             if (controller.userText.isNotEmpty)
-              Text(controller.userText, textAlign: TextAlign.center, style: const TextStyle(color: cream)),
+              Text(controller.userText,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: blush, fontSize: 34, fontWeight: FontWeight.w500, height: 1.22, letterSpacing: -0.5)),
             if (controller.jarvisText.isNotEmpty)
               Text(controller.jarvisText,
-                  textAlign: TextAlign.center, style: const TextStyle(fontWeight: FontWeight.bold, color: cream)),
+                  textAlign: TextAlign.center, style: const TextStyle(fontSize: 18, color: cream, height: 1.4)),
             if (controller.error != null)
               Text(controller.error!, textAlign: TextAlign.center, style: const TextStyle(color: danger)),
           ]),

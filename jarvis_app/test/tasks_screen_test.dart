@@ -45,10 +45,10 @@ Future<FakeApi> _pump(WidgetTester t, Object? tasks, {bool failPost = false}) as
 void main() {
   testWidgets('groups tasks and counts what is left today', (t) async {
     await _pump(t, _tasks);
-    for (final g in ['Overdue', 'Today', 'Upcoming', 'No date']) {
+    for (final g in ['OVERDUE', 'TODAY', 'UPCOMING', 'NO DATE']) {
       expect(find.text(g), findsOneWidget);
     }
-    expect(find.text('Done'), findsNothing);
+    expect(find.text('DONE'), findsNothing);
     expect(find.text('2 left today'), findsOneWidget);
     expect(t.takeException(), isNull);
   });
@@ -58,7 +58,7 @@ void main() {
     await t.tap(find.byKey(const ValueKey('check-2')));
     await t.pumpAndSettle();
     expect(api.posts.single.$1, '/tasks/2/complete');
-    expect(find.text('Done'), findsOneWidget);
+    expect(find.text('DONE'), findsOneWidget);
     expect(find.text('1 left today'), findsOneWidget);
   });
 
@@ -67,7 +67,7 @@ void main() {
     await t.tap(find.byKey(const ValueKey('check-2')));
     await t.pumpAndSettle();
     expect(find.text("Couldn't update"), findsOneWidget);
-    expect(find.text('Done'), findsNothing);
+    expect(find.text('DONE'), findsNothing);
     expect(find.text('2 left today'), findsOneWidget);
   });
 

@@ -65,17 +65,17 @@ class DashboardSections extends StatelessWidget {
               ),
             const SizedBox(height: 16),
             if (d.brief != null) ...[_brief(d.brief!), const SizedBox(height: 14)],
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Expanded(child: _schedule(d.events)),
               const SizedBox(width: 10),
               Expanded(child: _inbox(d.unread)),
-            ]),
+            ])),
             const SizedBox(height: 10),
-            Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            IntrinsicHeight(child: Row(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
               Expanded(child: _notes(d.notes)),
               const SizedBox(width: 10),
               Expanded(child: _tasks(d.tasks)),
-            ]),
+            ])),
             const SizedBox(height: 10),
             _alarm(n),
           ]);
@@ -207,6 +207,7 @@ class DashboardSections extends StatelessWidget {
       onTap: () => onOpen?.call(HomeTarget.notes),
       child: Container(
         width: double.infinity,
+        height: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(gradient: amberGradient, borderRadius: BorderRadius.circular(32)),
         child: DefaultTextStyle.merge(
