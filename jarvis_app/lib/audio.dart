@@ -115,7 +115,12 @@ class TtsSpeaker implements Speaker {
   Future<void> say(String text) async {
     _init ??= _setup();
     await _init;
-    await _tts.speak(text); // Android's own TTS: works with the backend down
+    // Android's own TTS: works with the backend down. speak() returns 1 when queued; right after wake the engine or audio
+    // focus is often not ready and it silently returns 0, so retry instead of dropping the ack.
+    for (var i = 0; i < 3; i++) {
+      if (await _tts.speak(text) == 1) return;
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+    }
   }
 
   Future<void> _setup() async {

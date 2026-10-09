@@ -134,29 +134,18 @@ class SessionController extends ChangeNotifier {
         socket.sendJson('speak', {'text': t});
       }
       _queuedSpeak.clear();
-      // Open the mic while the ack plays (headset/communication-mode setup takes a second or more) but drop its audio
-      // until the ack ends, so the mic never hears the ack and the user's first words are not lost to the startup gap.
-      var muted = true;
-      final opening = mic.start().then((s) {
-        if (gen == _gen) _micSub = s.listen((pcm) {
-          if (!muted) _onMic(pcm);
-        });
-      });
-      opening.ignore(); // an early failure is rethrown below, once the ack is done
+      // Open the mic only after the ack ends: switching to communication mode/source mid-TTS cuts the ack off.
       try {
         await ack;
       } catch (_) {} // TTS failure must not block the session
-      try {
-        await opening;
-      } catch (_) {
-        if (gen != _gen) return;
-        rethrow;
-      }
+      if (gen != _gen) return;
+      final sub = await mic.start();
       if (gen != _gen) {
+        await sub.listen((_) {}).cancel();
         await _quiet(mic.stop);
         return;
       }
-      muted = false;
+      _micSub = sub.listen(_onMic);
       _set(Phase.listening);
       _arm();
     } catch (e) {
