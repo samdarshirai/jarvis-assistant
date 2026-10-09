@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -32,6 +33,15 @@ abstract class PhoneActions {
 abstract class Speaker {
   Future<void> say(String text);
 }
+
+// 300 ms 880 Hz tone, 16 kHz mono pcm16, padded with silence past PcmPlayer's 8192-byte buffer or it never starts playing
+final Uint8List _readyBeep = () {
+  final b = ByteData(8192 * 2);
+  for (var i = 0; i < 4800; i++) {
+    b.setInt16(i * 2, (sin(2 * pi * 880 * i / 16000) * 16000).round(), Endian.little);
+  }
+  return b.buffer.asUint8List();
+}();
 
 class SessionController extends ChangeNotifier {
   SessionController({
@@ -104,8 +114,6 @@ class SessionController extends ChangeNotifier {
     try {
       onStarted?.call();
     } catch (_) {} // a hook failure must not stop the session
-    // audible "I'm listening" cue (phone may be locked); runs during connect, finished before the mic opens
-    final ack = speakText == null ? speaker.say('What can I do for you?') : null;
     VoiceSocket socket;
     try {
       socket = await connect();
@@ -134,17 +142,13 @@ class SessionController extends ChangeNotifier {
         socket.sendJson('speak', {'text': t});
       }
       _queuedSpeak.clear();
-      // Open the mic only after the ack ends: switching to communication mode/source mid-TTS cuts the ack off.
-      try {
-        await ack;
-      } catch (_) {} // TTS failure must not block the session
-      if (gen != _gen) return;
       final sub = await mic.start();
       if (gen != _gen) {
         await sub.listen((_) {}).cancel();
         await _quiet(mic.stop);
         return;
       }
+      if (speakText == null) player.play(_readyBeep); // tell the user the mic is live: words before this were lost
       _micSub = sub.listen(_onMic);
       _set(Phase.listening);
       _arm();

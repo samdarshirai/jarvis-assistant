@@ -11,7 +11,6 @@ import 'session_rig.dart';
 
 const card = ConfirmCardEvent(interruptId: 'i1', summary: 'Create Gym', tapOnly: false, afterUntrusted: false);
 
-const ack = 'What can I do for you?';
 
 void main() {
   test('start sends hello with the fcm token, streams mic audio, and listens', () {
@@ -37,12 +36,12 @@ void main() {
     });
   });
 
-  test('start says the ack before the mic opens; a pushed brief gets none', () {
+  test('start plays the ready beep and says nothing; a pushed brief gets none', () {
     fakeAsync((a) {
       final r = Rig();
       r.c.start();
       a.flushMicrotasks();
-      expect(r.speaker.said, [ack]);
+      expect(r.speaker.said, isEmpty);
       expect(r.c.phase, Phase.listening);
       final p = Rig();
       p.c.start(speakText: 'brief');
@@ -57,7 +56,7 @@ void main() {
       r.c.start();
       a.flushMicrotasks();
       expect(r.c.phase, Phase.offline);
-      expect(r.speaker.said, [ack, 'Jarvis is offline.']);
+      expect(r.speaker.said, ['Jarvis is offline.']);
       expect(r.ended, 1);
       expect(r.mic.ctrl.hasListener, isFalse);
     });
@@ -84,7 +83,7 @@ void main() {
       r.socket.ctrl.add(const StateEvent('speaking'));
       r.socket.ctrl.add(AudioEvent(Uint8List.fromList([1, 2])));
       expect(r.c.phase, Phase.speaking);
-      expect(r.player.played.single, [1, 2]);
+      expect(r.player.played.last, [1, 2]);
       r.socket.ctrl.add(const StateEvent('listening'));
       expect(r.c.phase, Phase.listening);
       expect(r.player.flushes, 0); // a normal end of speech must not cut the buffered tail
@@ -146,7 +145,7 @@ void main() {
       expect(r.socket.types, contains('bye'));
       expect(r.socket.closed && r.mic.stopped, isTrue);
       expect((r.c.phase, r.ended), (Phase.idle, 1));
-      expect(r.speaker.said, [ack]); // our own close is not "connection lost"
+      expect(r.speaker.said, isEmpty); // our own close is not "connection lost"
     });
   });
 
@@ -217,7 +216,7 @@ void main() {
       a.flushMicrotasks();
       r.socket.ctrl.close();
       a.flushMicrotasks();
-      expect(r.speaker.said, [ack, 'Jarvis connection lost.']);
+      expect(r.speaker.said, ['Jarvis connection lost.']);
       expect((r.c.phase, r.ended), (Phase.idle, 1));
     });
   });
