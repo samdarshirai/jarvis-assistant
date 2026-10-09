@@ -81,3 +81,52 @@ class _OrbPainter extends CustomPainter {
   @override
   bool shouldRepaint(_OrbPainter o) => o.t != t || o.speed != speed;
 }
+
+/// Home "tap to speak" button from the design: dark disc, amber border, mini orb, expanding ring pulse.
+class OrbButton extends StatefulWidget {
+  const OrbButton({super.key, required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  State<OrbButton> createState() => _OrbButtonState();
+}
+
+class _OrbButtonState extends State<OrbButton> with SingleTickerProviderStateMixin {
+  late final AnimationController _ring = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400))..repeat();
+
+  @override
+  void dispose() {
+    _ring.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: 'Talk',
+        child: Semantics(
+          button: true,
+          label: 'Talk',
+          excludeSemantics: true,
+          child: GestureDetector(
+            onTap: widget.onTap,
+            child: AnimatedBuilder(
+              animation: _ring,
+              builder: (_, child) => Container(
+                width: 72,
+                height: 72,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: const Color(0xFF140E0C),
+                  border: Border.all(color: amber.withValues(alpha: 0.6), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(color: amber.withValues(alpha: 0.45 * (1 - _ring.value)), spreadRadius: 18 * _ring.value),
+                  ],
+                ),
+                child: child,
+              ),
+              child: const Center(child: AnimatedOrb(size: 58)),
+            ),
+          ),
+        ),
+      );
+}

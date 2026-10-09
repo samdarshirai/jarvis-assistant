@@ -55,6 +55,7 @@ class BlushCard extends StatelessWidget {
         onTap: onTap,
         child: Container(
           width: double.infinity,
+          height: double.infinity,
           padding: const EdgeInsets.fromLTRB(12, 16, 12, 12),
           decoration: BoxDecoration(
             color: dark ? darkPill.withValues(alpha: 0.35) : blush,
@@ -79,15 +80,33 @@ class BlushCard extends StatelessWidget {
 }
 
 /// Amber orb: mic when idle, stop while a session runs; ring pulses while active.
-class AmberOrb extends StatelessWidget {
+class AmberOrb extends StatefulWidget {
   const AmberOrb({super.key, required this.phase, required this.onTap, this.size = 72});
   final Phase phase;
   final VoidCallback onTap;
   final double size;
 
   @override
+  State<AmberOrb> createState() => _AmberOrbState();
+}
+
+class _AmberOrbState extends State<AmberOrb> with SingleTickerProviderStateMixin {
+  late final AnimationController _ring = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
+
+  @override
+  void dispose() {
+    _ring.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final inactive = phase == Phase.idle || phase == Phase.offline;
+    final inactive = widget.phase == Phase.idle || widget.phase == Phase.offline, size = widget.size;
+    if (inactive) {
+      _ring.stop();
+    } else if (!_ring.isAnimating) {
+      _ring.repeat();
+    }
     return Tooltip(
       message: inactive ? 'Talk' : 'Stop',
       child: Semantics(
@@ -95,15 +114,21 @@ class AmberOrb extends StatelessWidget {
         label: inactive ? 'Talk' : 'Stop',
         excludeSemantics: true,
         child: GestureDetector(
-          onTap: onTap,
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 250),
-            width: size,
-            height: size,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              gradient: amberGradient,
-              boxShadow: [BoxShadow(color: amber.withValues(alpha: inactive ? 0.25 : 0.55), blurRadius: inactive ? 12 : 30)],
+          onTap: widget.onTap,
+          child: AnimatedBuilder(
+            animation: _ring,
+            builder: (_, child) => Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: amberGradient,
+                boxShadow: [
+                  BoxShadow(color: amber.withValues(alpha: inactive ? 0.25 : 0.55), blurRadius: inactive ? 12 : 30),
+                  if (!inactive) BoxShadow(color: amber.withValues(alpha: 0.45 * (1 - _ring.value)), spreadRadius: 18 * _ring.value),
+                ],
+              ),
+              child: child,
             ),
             child: Icon(inactive ? Icons.mic : Icons.stop, size: size * 0.45, color: amberInk),
           ),

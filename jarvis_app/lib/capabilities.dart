@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'calendar_screen.dart' show ScreenShell;
 import 'theme.dart';
 
 // User-facing list of everything Jarvis can do. Update when adding a tool in src/jarvis/tools/ or a proactive job.
@@ -35,22 +36,16 @@ class CapabilitiesScreen extends StatelessWidget {
   const CapabilitiesScreen({super.key});
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        extendBodyBehindAppBar: true,
-        appBar: AppBar(
-          title: Text('What Jarvis can do', style: condensed(26, color: cream)),
-          backgroundColor: Colors.transparent,
-        ),
-        body: CocoaBackground(
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(16, MediaQuery.paddingOf(context).top + kToolbarHeight + 8, 16, 24),
-            children: [
-              for (final (title, items) in capabilities) ...[
-                _SkillTile(title: title, items: items),
-                const SizedBox(height: 10),
-              ],
+  Widget build(BuildContext context) => ScreenShell(
+        title: 'What Jarvis can do',
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
+          children: [
+            for (final (title, items) in capabilities) ...[
+              _SkillTile(title: title, items: items),
+              const SizedBox(height: 8),
             ],
-          ),
+          ],
         ),
       );
 }
@@ -62,25 +57,25 @@ class _SkillTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: darkPill.withValues(alpha: 0.35),
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(26),
           border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
         ),
         child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Container(
-            width: 36,
-            height: 36,
-            decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(12)),
-            child: Icon(capabilityIcons[title] ?? Icons.bolt_rounded, size: 20, color: amber),
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(color: amber.withValues(alpha: 0.14), borderRadius: BorderRadius.circular(14)),
+            child: Icon(capabilityIcons[title] ?? Icons.bolt_rounded, size: 21, color: amber),
           ),
-          const SizedBox(width: 12),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(title, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: cream)),
+              Text(title, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: cream)),
               const SizedBox(height: 3),
-              Text(items.join(' · '), style: const TextStyle(fontSize: 12.5, height: 1.35, color: mutedText)),
+              Text(items.join(' · '), style: const TextStyle(fontSize: 13, height: 1.45, color: mutedText)),
             ]),
           ),
         ]),

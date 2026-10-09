@@ -19,8 +19,9 @@ class TaskRow {
 }
 
 class TasksScreen extends StatefulWidget {
-  const TasksScreen({super.key, required this.api, this.now = DateTime.now});
+  const TasksScreen({super.key, required this.api, this.onAskJarvis, this.now = DateTime.now});
   final ApiClient api;
+  final VoidCallback? onAskJarvis;
   final DateTime Function() now;
 
   @override
@@ -105,11 +106,12 @@ class _TasksScreenState extends State<TasksScreen> {
   @override
   Widget build(BuildContext context) => ScreenShell(
         title: 'Tasks',
+        onMic: widget.onAskJarvis,
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _error
                 ? ErrorRetry(onRetry: _load)
-                : Column(children: [Expanded(child: _body()), _input()]),
+                : _body(),
       );
 
   Widget _body() {
@@ -125,53 +127,57 @@ class _TasksScreenState extends State<TasksScreen> {
       ('Done', ts.where((t) => t.done).toList()),
     ];
     final left = groups[0].$2.length + groups[1].$2.length;
-    return ListView(padding: const EdgeInsets.fromLTRB(16, 4, 16, 8), children: [
-      Text('$left left today', style: condensed(36, color: cream)),
-      const SizedBox(height: 12),
+    const orange = Color(0xFFC2410C);
+    return ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 110), children: [
+      Padding(
+        padding: const EdgeInsets.fromLTRB(4, 6, 4, 14),
+        child: Text.rich(TextSpan(children: [
+          TextSpan(text: '$left', style: condensed(48, color: cream)),
+          TextSpan(text: ' left today', style: condensed(40, weight: FontWeight.w200, color: cream)),
+        ])),
+      ),
       Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.fromLTRB(18, 18, 18, 10),
         decoration: BoxDecoration(color: blush, borderRadius: BorderRadius.circular(32)),
-        child: ts.isEmpty
-            ? Text('Nothing pending.', style: TextStyle(color: ink.withValues(alpha: 0.6)))
-            : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                for (final g in groups)
-                  if (g.$2.isNotEmpty) ...[
-                    Padding(
-                        padding: const EdgeInsets.fromLTRB(4, 8, 4, 4),
-                        child: Text(g.$1,
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w700,
-                                color: g.$1 == 'Overdue' ? danger : ink.withValues(alpha: 0.6)))),
-                    for (final t in g.$2) _row(t),
-                  ],
-              ]),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (ts.isEmpty)
+            Padding(
+                padding: const EdgeInsets.only(top: 8, bottom: 12),
+                child: Text('All clear. Nothing pending.', style: condensed(28, weight: FontWeight.w300, color: ink))),
+          for (final g in groups)
+            if (g.$2.isNotEmpty) ...[
+              Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 4),
+                  child: Text(g.$1.toUpperCase(),
+                      style: TextStyle(
+                          fontSize: 12,
+                          letterSpacing: 0.72,
+                          color: g.$1 == 'Overdue' ? orange : ink.withValues(alpha: g.$1 == 'Done' ? 0.4 : 0.55)))),
+              for (final t in g.$2) _row(t, orange),
+            ],
+          _input(),
+        ]),
       ),
     ]);
   }
 
-  Widget _row(TaskRow t) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
+  Widget _row(TaskRow t, Color orange) => Container(
+        decoration: BoxDecoration(border: Border(bottom: BorderSide(color: ink.withValues(alpha: 0.06)))),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         child: Row(children: [
           GestureDetector(
             key: ValueKey('check-${t.id}'),
             behavior: HitTestBehavior.opaque,
             onTap: () => _complete(t),
-            child: Padding(
-              padding: const EdgeInsets.all(6),
-              child: Container(
-                width: 20,
-                height: 20,
-                decoration: BoxDecoration(
-                    color: t.done ? amber : null,
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: t.done ? amber : ink.withValues(alpha: 0.4), width: 1.5)),
-                child: t.done ? const Icon(Icons.check, size: 14, color: amberInk) : null,
-              ),
+            child: Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(color: t.done ? darkPill : const Color(0xFFEBCFC4), borderRadius: BorderRadius.circular(7)),
+              child: t.done ? const Icon(Icons.check, size: 16, color: Colors.white) : null,
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 12),
           Expanded(
               child: Text(t.title,
                   maxLines: 2,
@@ -179,27 +185,37 @@ class _TasksScreenState extends State<TasksScreen> {
                   style: TextStyle(
                       color: ink.withValues(alpha: t.done ? 0.45 : 1),
                       fontSize: 15,
-                      fontWeight: FontWeight.w500,
                       decoration: t.done ? TextDecoration.lineThrough : null))),
+          if (t.due != null) ...[
+            const SizedBox(width: 12),
+            Text(t.due!, style: TextStyle(fontSize: 12, color: t.overdue && !t.done ? orange : ink.withValues(alpha: 0.5))),
+          ],
         ]),
       );
 
   Widget _input() => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
-        child: TextField(
-          controller: _field,
-          maxLength: 200,
-          style: const TextStyle(color: cream),
-          textInputAction: TextInputAction.done,
-          onSubmitted: _add,
-          decoration: InputDecoration(
-            counterText: '',
-            hintText: 'Add a task and press Enter',
-            hintStyle: const TextStyle(color: mutedText),
-            filled: true,
-            fillColor: darkPill.withValues(alpha: 0.45),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(999), borderSide: BorderSide.none),
+        padding: const EdgeInsets.only(top: 6),
+        child: Row(children: [
+          Icon(Icons.add, size: 22, color: ink.withValues(alpha: 0.5)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: TextField(
+              controller: _field,
+              maxLength: 200,
+              style: const TextStyle(color: ink, fontSize: 15),
+              textInputAction: TextInputAction.done,
+              onSubmitted: _add,
+              decoration: InputDecoration(
+                counterText: '',
+                hintText: 'Add a task and press Enter',
+                hintStyle: TextStyle(color: ink.withValues(alpha: 0.4)),
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                filled: false,
+              ),
+            ),
           ),
-        ),
+        ]),
       );
 }

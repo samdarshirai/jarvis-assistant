@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'api.dart';
+import 'calendar_screen.dart' show RoundButton;
 import 'confirm_card.dart';
 import 'theme.dart';
 
@@ -108,17 +109,17 @@ class _ChatScreenState extends State<ChatScreen> {
         body: CocoaBackground(
           child: SafeArea(
             child: Column(children: [
-              Row(children: [
-                IconButton(
-                    icon: const Icon(Icons.arrow_back, color: cream),
-                    tooltip: 'Back',
-                    onPressed: () => Navigator.of(context).maybePop()),
-                const Expanded(
-                  child: Text('Talk with Jarvis',
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600, color: cream)),
-                ),
-              ]),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                child: Row(children: [
+                  RoundButton(icon: Icons.arrow_back, tooltip: 'Back', onTap: () => Navigator.of(context).maybePop()),
+                  const Expanded(
+                    child: Text('Talk with Jarvis',
+                        textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, color: cream)),
+                  ),
+                  const SizedBox(width: 46),
+                ]),
+              ),
               Expanded(
                 child: Container(
                   width: double.infinity,
@@ -129,7 +130,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         width: 40,
                         height: 4,
                         margin: const EdgeInsets.only(top: 10, bottom: 8),
-                        decoration: BoxDecoration(color: const Color(0xFFD9C9C2), borderRadius: BorderRadius.circular(2))),
+                        decoration: BoxDecoration(color: const Color(0xFFE4D6D0), borderRadius: BorderRadius.circular(2))),
                     Expanded(child: _thread()),
                     _input(),
                   ]),
@@ -147,16 +148,19 @@ class _ChatScreenState extends State<ChatScreen> {
           Center(
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              decoration: BoxDecoration(color: _jarvisBubble, borderRadius: BorderRadius.circular(12)),
-              child: const Text('Today', style: TextStyle(fontSize: 12, color: Color(0xFF7A6560))),
+              decoration: BoxDecoration(color: _jarvisBubble, borderRadius: BorderRadius.circular(999)),
+              child: Text('Today', style: TextStyle(fontSize: 12, color: ink.withValues(alpha: 0.7))),
             ),
           ),
           const SizedBox(height: 12),
           if (_msgs.isEmpty)
-            const Padding(
-              padding: EdgeInsets.only(top: 24),
-              child: Text('Type a request, or tap the mic.',
-                  textAlign: TextAlign.center, style: TextStyle(color: Color(0xFF7A6560))),
+            Padding(
+              padding: const EdgeInsets.only(top: 30),
+              child: DefaultTextStyle.merge(
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 14, height: 1.5, color: ink.withValues(alpha: 0.55)),
+                child: const Column(children: [Text('Type a request, or tap the mic.'), Text('Try "set an alarm for 6:30".')]),
+              ),
             ),
           for (final m in _msgs) m.card != null ? _cardView(m.card!) : _bubble(m.text, m.mine),
           if (_busy) _bubble('Thinking…', false),
@@ -167,11 +171,16 @@ class _ChatScreenState extends State<ChatScreen> {
         alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
           margin: const EdgeInsets.only(bottom: 8),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * 0.8),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          constraints: BoxConstraints(maxWidth: MediaQuery.sizeOf(context).width * (mine ? 0.8 : 0.82)),
           decoration: BoxDecoration(
-              color: mine ? _userBubble : _jarvisBubble, borderRadius: BorderRadius.circular(18)),
-          child: Text(text, style: const TextStyle(color: ink)),
+              color: mine ? _userBubble : _jarvisBubble,
+              borderRadius: BorderRadius.only(
+                  topLeft: const Radius.circular(22),
+                  topRight: const Radius.circular(22),
+                  bottomLeft: Radius.circular(mine ? 22 : 6),
+                  bottomRight: Radius.circular(mine ? 6 : 22))),
+          child: Text(text, style: const TextStyle(color: ink, fontSize: 15, height: 1.4)),
         ),
       );
 
@@ -200,12 +209,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _input() => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+        padding: const EdgeInsets.fromLTRB(14, 10, 14, 20),
         child: Row(children: [
           Expanded(
             child: Container(
-              padding: const EdgeInsets.only(left: 16),
-              decoration: BoxDecoration(color: _jarvisBubble, borderRadius: BorderRadius.circular(28)),
+              height: 52,
+              padding: const EdgeInsets.only(left: 16, right: 8),
+              decoration: BoxDecoration(color: _jarvisBubble, borderRadius: BorderRadius.circular(26)),
               child: Row(children: [
                 Expanded(
                   child: TextField(
@@ -216,7 +226,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _send(),
                     decoration: const InputDecoration(
-                        hintText: 'Write here…', border: InputBorder.none, isDense: true, hintStyle: TextStyle(color: Color(0xFF7A6560))),
+                        hintText: 'Write here…', border: InputBorder.none, isDense: true, hintStyle: TextStyle(color: Color(0x661A1110))),
                   ),
                 ),
                 IconButton(
@@ -226,16 +236,16 @@ class _ChatScreenState extends State<ChatScreen> {
               ]),
             ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 10),
           Tooltip(
             message: 'Talk',
             child: GestureDetector(
               onTap: widget.onVoice,
               child: Container(
-                width: 48,
-                height: 48,
+                width: 52,
+                height: 52,
                 decoration: const BoxDecoration(shape: BoxShape.circle, gradient: amberGradient),
-                child: const Icon(Icons.mic, color: amberInk),
+                child: const Icon(Icons.mic, size: 24, color: amberInk),
               ),
             ),
           ),

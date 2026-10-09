@@ -52,8 +52,8 @@ void main() {
     expect(find.text('Now · 10:30'), findsOneWidget);
     expect(find.text('11:00'), findsOneWidget);
     expect(find.text('Standup'), findsOneWidget);
-    expect(find.text('Office · 45m'), findsOneWidget);
-    expect(find.text('Holiday'), findsOneWidget);
+    expect(find.text('Next · Office · 45m'), findsOneWidget);
+    expect(find.text('All day · Holiday'), findsOneWidget);
     expect(t.takeException(), isNull);
   });
 

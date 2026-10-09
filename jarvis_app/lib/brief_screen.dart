@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+import 'calendar_screen.dart' show RoundButton;
+import 'orb.dart';
 import 'theme.dart';
 
 // TTS gives no playback position, so timing is estimated from character count.
@@ -68,6 +70,18 @@ class _BriefScreenState extends State<BriefScreen> {
     _playFrom(target <= Duration.zero ? 0 : k);
   }
 
+  // ponytail: same estimate as _back10; lands on the sentence containing the target time
+  void _fwd10() {
+    if (_s.isEmpty) return;
+    final inSent = _playing ? DateTime.now().difference(_sentStart) : Duration.zero;
+    final target = _span(0, _i) + inSent + const Duration(seconds: 10);
+    var k = 0;
+    while (k < _s.length - 1 && _span(0, k + 1) <= target) {
+      k++;
+    }
+    _playFrom(k);
+  }
+
   void _pause() {
     _timer?.cancel();
     widget.stop();
@@ -87,13 +101,34 @@ class _BriefScreenState extends State<BriefScreen> {
   Widget build(BuildContext context) {
     final total = _est(_s.join(' '));
     final done = _span(0, _i);
+    Widget side(IconData icon, String tip, VoidCallback? onTap) => Tooltip(
+          message: tip,
+          child: GestureDetector(
+            onTap: onTap,
+            child: Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(shape: BoxShape.circle, color: darkPill.withValues(alpha: 0.45)),
+              child: Icon(icon, size: 24, color: cream),
+            ),
+          ),
+        );
     return Scaffold(
-      appBar: AppBar(title: const Text('Morning brief')),
       body: CocoaBackground(
         child: SafeArea(
           child: Column(children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              child: Row(children: [
+                RoundButton(icon: Icons.arrow_back, tooltip: 'Back', onTap: () => Navigator.of(context).maybePop()),
+                const Expanded(
+                    child: Text('Morning brief', textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: cream))),
+                const SizedBox(width: 46),
+              ]),
+            ),
+            Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: AnimatedOrb(size: 130, speed: _playing ? 1.6 : 0.6)),
             Expanded(
-              child: ListView(padding: const EdgeInsets.all(20), children: [
+              child: ListView(padding: const EdgeInsets.fromLTRB(26, 4, 26, 0), children: [
                 for (var k = 0; k < _s.length; k++)
                   GestureDetector(
                     onTap: () {
@@ -101,46 +136,49 @@ class _BriefScreenState extends State<BriefScreen> {
                       _playFrom(k);
                     },
                     child: Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.only(bottom: 14),
                       child: Text(_s[k],
                           style: TextStyle(
                               fontSize: 24,
-                              height: 1.3,
-                              color: k == _i ? blush : (k < _i ? cream.withValues(alpha: 0.5) : cream.withValues(alpha: 0.25)))),
+                              fontWeight: FontWeight.w500,
+                              height: 1.28,
+                              letterSpacing: -0.24,
+                              color: k == _i ? blush : (k < _i ? const Color(0xFFB9A59E) : const Color(0xFFF7EDE8).withValues(alpha: 0.28)))),
                     ),
                   ),
               ]),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+              padding: const EdgeInsets.fromLTRB(26, 16, 26, 24),
               child: Column(children: [
-                LinearProgressIndicator(
-                    value: total.inMilliseconds == 0 ? 0 : done.inMilliseconds / total.inMilliseconds,
-                    color: amber,
-                    backgroundColor: Colors.white12),
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  Text(_mmss(done), style: const TextStyle(color: mutedText)),
-                  Text(_mmss(total), style: const TextStyle(color: mutedText)),
-                ]),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(2),
+                  child: LinearProgressIndicator(
+                      minHeight: 4,
+                      value: total.inMilliseconds == 0 ? 0 : done.inMilliseconds / total.inMilliseconds,
+                      color: amber,
+                      backgroundColor: Colors.white.withValues(alpha: 0.1)),
+                ),
                 const SizedBox(height: 8),
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Text(_mmss(done), style: const TextStyle(fontSize: 12, color: mutedText)),
+                  Text(_mmss(total), style: const TextStyle(fontSize: 12, color: mutedText)),
+                ]),
+                const SizedBox(height: 6),
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                  IconButton(
-                      iconSize: 36,
-                      color: cream,
-                      tooltip: 'Back 10 seconds',
-                      onPressed: _s.isEmpty ? null : _back10,
-                      icon: const Icon(Icons.replay_10)),
-                  const SizedBox(width: 20),
+                  side(Icons.replay_10, 'Back 10 seconds', _s.isEmpty ? null : _back10),
+                  const SizedBox(width: 30),
                   GestureDetector(
                     onTap: _s.isEmpty ? null : (_playing ? _pause : () => _playFrom(_i)),
                     child: Container(
-                      width: 64,
-                      height: 64,
+                      width: 76,
+                      height: 76,
                       decoration: const BoxDecoration(shape: BoxShape.circle, gradient: amberGradient),
-                      child: Icon(_playing ? Icons.pause : Icons.play_arrow, color: amberInk, size: 32),
+                      child: Icon(_playing ? Icons.pause : Icons.play_arrow, color: amberInk, size: 38),
                     ),
                   ),
-                  const SizedBox(width: 56), // balances the replay button so play stays centred
+                  const SizedBox(width: 30),
+                  side(Icons.forward_10, 'Forward 10 seconds', _s.isEmpty ? null : _fwd10),
                 ]),
               ]),
             ),
