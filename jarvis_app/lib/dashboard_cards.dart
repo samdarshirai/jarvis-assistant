@@ -29,11 +29,12 @@ enum HomeTarget { calendar, mail, notes, tasks, alarms }
 
 class DashboardSections extends StatelessWidget {
   const DashboardSections(
-      {super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now, this.onOpen, this.onOpenEmail});
+      {super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now, this.onOpen, this.onOpenEmail, this.onSettings});
   final DashboardController controller;
   final void Function(String text) onPlayBrief;
   final void Function(HomeTarget target)? onOpen;
   final void Function(String? messageId)? onOpenEmail;
+  final VoidCallback? onSettings; // avatar and the re-consent line
   final DateTime Function() now;
 
   @override
@@ -59,9 +60,12 @@ class DashboardSections extends StatelessWidget {
             if (controller.offline)
               const Padding(padding: EdgeInsets.only(top: 8), child: Chip(avatar: Icon(Icons.cloud_off, size: 16), label: Text('Offline'))),
             if (d.reauth)
-              const Padding(
-                padding: EdgeInsets.only(top: 8),
-                child: Text('Google needs re-consent — some sections may be missing.', style: TextStyle(color: amber)),
+              GestureDetector(
+                onTap: onSettings,
+                child: const Padding(
+                  padding: EdgeInsets.only(top: 8),
+                  child: Text('Google needs re-consent — some sections may be missing. Tap to reconnect.', style: TextStyle(color: amber)),
+                ),
               ),
             const SizedBox(height: 16),
             if (d.brief != null) ...[_brief(d.brief!), const SizedBox(height: 14)],
@@ -91,12 +95,18 @@ class DashboardSections extends StatelessWidget {
               child: Text('Your personal assistant',
                   maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: mutedText))),
         ])),
-        Container(
-          width: 42,
-          height: 42,
-          alignment: Alignment.center,
-          decoration: const BoxDecoration(shape: BoxShape.circle, color: darkPill),
-          child: const Text('S', style: TextStyle(color: amber, fontWeight: FontWeight.w700, fontSize: 18)),
+        GestureDetector(
+          onTap: onSettings,
+          child: Tooltip(
+            message: 'Settings',
+            child: Container(
+              width: 42,
+              height: 42,
+              alignment: Alignment.center,
+              decoration: const BoxDecoration(shape: BoxShape.circle, color: darkPill),
+              child: const Text('S', style: TextStyle(color: amber, fontWeight: FontWeight.w700, fontSize: 18)),
+            ),
+          ),
         ),
       ]);
 

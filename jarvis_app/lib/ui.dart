@@ -10,6 +10,7 @@ import 'mail_screen.dart';
 import 'notes_screen.dart';
 import 'orb.dart';
 import 'phone.dart';
+import 'settings_screen.dart';
 import 'tasks_screen.dart';
 import 'config.dart';
 import 'confirm_card.dart';
@@ -62,6 +63,17 @@ class SessionScreen extends StatelessWidget {
               controller.start();
             },
             runPhoneActions: runPhoneActions ?? (_) async {}));
+  }
+
+  void _settings(BuildContext context) {
+    final a = api;
+    if (a == null) return;
+    _push(
+        context,
+        SettingsScreen(
+            startAuth: () async => (await a.post('/google/auth/start'))['url'] as String,
+            open: openInBrowser,
+            onReturn: () => dashboard?.refresh()));
   }
 
   void _brief(BuildContext context, String text) => _push(
@@ -122,6 +134,7 @@ class SessionScreen extends StatelessWidget {
                       onPlayBrief: (text) => api == null ? controller.start(speakText: text) : _brief(context, text),
                       onOpen: (t) => _open(context, t),
                       onOpenEmail: openEmailInGmail,
+                      onSettings: api == null ? null : () => _settings(context),
                       now: DateTime.now),
               ],
             ),

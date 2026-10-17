@@ -62,6 +62,9 @@ Future<void> _launchIntent(Uri uri, {String? package}) => AndroidIntent(
       flags: const [0x10000000], // FLAG_ACTIVITY_NEW_TASK
     ).launch();
 
+/// Opens [uri] in the default browser.
+Future<void> openInBrowser(Uri uri) => _launchIntent(uri);
+
 const _gmailPackage = 'com.google.android.gm';
 
 /// Tries Gmail with the message, then Gmail inbox, then any app on the inbox URL; never throws.
