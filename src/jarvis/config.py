@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     telegram_owner_chat_id: int
     fernet_key: str
     google_client_secrets: str = "client_secret.json"
-    google_web_client_secrets: str = ""  # Web OAuth client JSON for in-app "Reconnect Google"; empty = feature off
+    google_web_client_secrets: str = ""  # Web OAuth client JSON (file path or the JSON itself) for in-app "Reconnect Google"; empty = feature off
     public_base_url: str = ""  # https://<DOMAIN> of this backend; the Google redirect is <this>/google/callback
     timezone: str = "Europe/Berlin"
     deepgram_api_key: str = ""

@@ -1,4 +1,6 @@
 """Browser-based Google consent for the remote backend: the app opens start_url(), Google redirects to /google/callback."""
+import json
+
 from cryptography.fernet import Fernet, InvalidToken
 from google_auth_oauthlib.flow import Flow
 
@@ -20,7 +22,10 @@ def state_ok(key: str, state: str) -> bool:
 
 def _flow(secrets_path: str, redirect_uri: str) -> Flow:
     # No PKCE verifier: start and callback are separate requests, so a verifier held on the Flow would be lost.
-    return Flow.from_client_secrets_file(secrets_path, SCOPES, redirect_uri=redirect_uri, autogenerate_code_verifier=False)
+    kw = dict(redirect_uri=redirect_uri, autogenerate_code_verifier=False)
+    if secrets_path.lstrip().startswith("{"):  # the JSON itself (Railway has no file/volume), like the FCM setting
+        return Flow.from_client_config(json.loads(secrets_path), SCOPES, **kw)
+    return Flow.from_client_secrets_file(secrets_path, SCOPES, **kw)
 
 
 def start_url(secrets_path: str, redirect_uri: str, state: str) -> str:

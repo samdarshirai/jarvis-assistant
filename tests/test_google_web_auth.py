@@ -120,3 +120,8 @@ def test_cached_service_rebuilds_after_new_consent():
     assert get() == get() == 1
     auth.bump_epoch()
     assert get() == 2
+
+
+def test_start_url_accepts_the_client_json_inline(secrets):
+    url = web_auth.start_url(open(secrets).read(), REDIRECT, "s")
+    assert url.startswith("https://accounts.google.com/") and "client_id=cid" in url
