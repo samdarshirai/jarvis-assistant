@@ -66,3 +66,15 @@ async def test_key_never_in_error_message():
         with pytest.raises(LLMCheckError) as e:
             await check(transport)
         assert KEY not in str(e.value) and KEY not in repr(e.value) and KEY not in str(e.value.args)
+
+
+@pytest.mark.asyncio
+async def test_a_dripping_endpoint_cannot_hang_the_check(monkeypatch):
+    import asyncio
+
+    async def hang(req):
+        await asyncio.sleep(3600)  # per-read timeouts never fire on a body that drips
+    monkeypatch.setattr(llm_check, "MODEL_DEADLINE", 0.05)
+    with pytest.raises(LLMCheckError) as e:
+        await check(httpx.MockTransport(hang))
+    assert (e.value.code, e.value.model) == ("unreachable", "good/fast")

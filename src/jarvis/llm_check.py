@@ -1,3 +1,4 @@
+import asyncio
 import socket
 
 import httpx
@@ -5,6 +6,7 @@ import httpx
 from jarvis.llm import BlockedURL, LLMCreds, guarded_http_client, normalize_base_url
 
 TIMEOUT = 20.0
+MODEL_DEADLINE = 30.0  # whole call: httpx's timeout is per read, so a dripping endpoint would otherwise hang the PUT
 
 
 class LLMCheckError(Exception):
@@ -36,13 +38,13 @@ async def test_models(creds: LLMCreds, *, resolve=socket.getaddrinfo, transport=
     async with guarded_http_client(resolve=resolve, transport=transport) as client:
         for model in creds.fast + creds.strong:
             try:
-                r = await client.post(f"{base}/chat/completions", timeout=TIMEOUT,
-                                      headers={"Authorization": f"Bearer {creds.api_key}"},
-                                      json={"model": model, "max_tokens": 1,
-                                            "messages": [{"role": "user", "content": "hi"}]})
+                r = await asyncio.wait_for(client.post(
+                    f"{base}/chat/completions", timeout=TIMEOUT, headers={"Authorization": f"Bearer {creds.api_key}"},
+                    json={"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]}),
+                    MODEL_DEADLINE)
             except BlockedURL:
                 raise LLMCheckError("bad_url", model) from None
-            except httpx.HTTPError:
+            except (httpx.HTTPError, TimeoutError):
                 raise LLMCheckError("unreachable", model) from None
             code = _code(r)
             if code:

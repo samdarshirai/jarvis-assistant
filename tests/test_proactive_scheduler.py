@@ -405,3 +405,21 @@ async def test_sanitized_provider_error_keeps_issue_classification(status, kind)
 
     await tick("mail", WED, job=uses_llm)
     assert n[2].calls[-1] == ("push", ISSUE_TEXT[kind], None)
+
+
+async def test_a_hung_user_is_cut_off_and_the_next_user_still_runs(monkeypatch, caplog):
+    monkeypatch.setattr("jarvis.proactive.scheduler.USER_DEADLINE", 0.05)
+    hung, ok = runtime(user(1)), runtime(user(2))
+    seen = []
+
+    async def job(rt, notifier, llm, tz, now):
+        if rt is hung:
+            await asyncio.sleep(3600)
+        seen.append(rt.user.id)
+
+    tick, n, _ = harness(hung, ok)
+    with caplog.at_level(logging.ERROR):
+        await tick("sweep", WED, job=job)
+    assert seen == [2]
+    assert "TimeoutError" in caplog.text and "user 1" in caplog.text
+    assert hung.audit.records == []

@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 # ponytail: mail watch auto-creates calendar events, and the app has no Undo for them yet (Undo is a Telegram button,
 # the owner's only), so it runs for the owner only; set True once the app can undo an auto-added event.
 FRIEND_MAIL_WATCH = False
+USER_DEADLINE = 120.0  # seconds one user's run of one job may take
 REAUTH_TEXT = "Jarvis needs Google access again. Open the app and sign in."
 ISSUE_TEXT = {
     "google": REAUTH_TEXT,
@@ -89,7 +90,9 @@ async def run_for_users(name: str, job, users, tenants, has_google, notifier_for
             if not await asyncio.to_thread(has_google, user.id):
                 continue  # never connected Google: nothing to watch
             rt = await tenants.get(user.id)
-            await run_user(name, job, rt, notifier_for(user), user.tz, now.astimezone(ZoneInfo(user.tz)))
+            # a hung user (Google or LLM endpoint) is cut off so the rest of the tick still runs; logged as TimeoutError
+            await asyncio.wait_for(run_user(name, job, rt, notifier_for(user), user.tz, now.astimezone(ZoneInfo(user.tz))),
+                                   USER_DEADLINE)
         except Exception as e:
             log.error("proactive %s skipped user %s: %s", name, user.id, type(e).__name__)  # the type only: no secrets
             continue
