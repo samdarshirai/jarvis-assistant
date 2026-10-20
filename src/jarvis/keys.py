@@ -13,6 +13,7 @@ from jarvis.llm import creds_for, normalize_base_url
 from jarvis.llm_check import LLMCheckError, test_models
 from jarvis.tenant import auth_runtime
 from jarvis.users import SecretStore, UserStore, _put_secret
+from jarvis.web import embedded_v4
 
 OPTIONAL = {"deepgram": "deepgram_key", "tavily": "tavily_key"}
 MAX_MODELS = 5  # per tier: each one is a paid test call on every PUT
@@ -35,7 +36,7 @@ def clean_base_url(raw: str) -> str:
         ip = ipaddress.ip_address(host)
     except ValueError:
         ip = None
-    if (not host or host == "localhost" or host.endswith(".localhost") or (ip and not ip.is_global)
+    if (not host or host == "localhost" or host.endswith(".localhost") or (ip and not embedded_v4(ip).is_global)
             or (ip is None and _numeric_label.fullmatch(host.rsplit(".", 1)[-1])) or parts.port == 0):
         raise ValueError("The endpoint must be a public host.")
     netloc = f"[{host}]" if ip and ip.version == 6 else host

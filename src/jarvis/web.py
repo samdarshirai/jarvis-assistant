@@ -101,6 +101,20 @@ def html_text(html: str) -> str:
     return re.sub(r"\s*\n\s*", "\n", text).strip()
 
 
+_V4_IN_V6 = [ipaddress.ip_network(n) for n in ("64:ff9b::/96", "::/96", "::ffff:0:0:0/96")]  # NAT64, IPv4-compatible, SIIT
+
+
+def embedded_v4(ip):
+    """The IPv4 address an IPv6 form carries (mapped, NAT64, IPv4-compatible, SIIT), else ip itself: the address
+    a translator would really reach is the one that has to be global."""
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped:
+            return ip.ipv4_mapped
+        if any(ip in n for n in _V4_IN_V6):
+            return ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+    return ip
+
+
 def _check_url(url: str, resolve) -> tuple:
     """Validate url; return (parts, ip) where ip is a checked global address to pin the connection to."""
     if any(ord(c) <= 32 or ord(c) == 127 for c in url):
@@ -118,10 +132,7 @@ def _check_url(url: str, resolve) -> tuple:
         infos = resolve(host, port or (443 if parts.scheme == "https" else 80), type=socket.SOCK_STREAM)
         ips = []
         for info in infos:
-            ip = ipaddress.ip_address(info[4][0].split("%")[0])
-            if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped:
-                ip = ip.ipv4_mapped
-            ips.append(ip)
+            ips.append(embedded_v4(ipaddress.ip_address(info[4][0].split("%")[0])))
     except (socket.gaierror, UnicodeError):
         raise FetchError("Could not find that site.") from None
     except ValueError:
