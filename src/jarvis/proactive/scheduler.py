@@ -38,6 +38,8 @@ class WatchedLLM(BaseCallbackHandler):
 
     def on_llm_error(self, error, **kwargs):
         r = getattr(error, "response", None)  # openai's APIStatusError carries the provider's httpx response
+        if not isinstance(r, httpx.Response) and getattr(error, "status_code", None) in (401, 402, 403):
+            r = httpx.Response(error.status_code)  # sanitized provider failures retain only the status
         code = llm_error_code(r) if isinstance(r, httpx.Response) else None
         if code in ISSUE_TEXT:
             self.issue = code
@@ -54,8 +56,8 @@ async def _notice(rt, notifier, kind: str, day: str) -> None:
     try:
         if await asyncio.to_thread(rt.proactive.claim_alert, f"issue:{kind}:{day}"):
             await notifier.both(ISSUE_TEXT[kind])
-    except Exception:
-        log.exception("could not send the %s notice", kind)
+    except Exception as e:
+        log.error("could not send the %s notice: %s", kind, type(e).__name__)
 
 
 async def run_user(name: str, job, rt, notifier, tz: str, now: datetime) -> None:
@@ -67,11 +69,11 @@ async def run_user(name: str, job, rt, notifier, tz: str, now: datetime) -> None
     except ReauthRequired:
         issue = "google"
     except Exception as e:
-        log.exception("proactive job %s failed for user %s", name, rt.user.id)
+        log.error("proactive job %s failed for user %s: %s", name, rt.user.id, type(e).__name__)
         try:
-            await asyncio.to_thread(rt.audit.record, "proactive", f"{name}_error", result={"error": str(e)[:200]})
-        except Exception:
-            log.exception("could not audit the failure")
+            await asyncio.to_thread(rt.audit.record, "proactive", f"{name}_error", result={"error": type(e).__name__})
+        except Exception as audit_error:
+            log.error("could not audit the failure: %s", type(audit_error).__name__)
     for kind in filter(None, (issue, llm and llm.issue)):
         await _notice(rt, notifier, kind, now.date().isoformat())
 
@@ -84,10 +86,10 @@ async def run_for_users(name: str, job, users, tenants, has_google, notifier_for
             if not await asyncio.to_thread(has_google, user.id):
                 continue  # never connected Google: nothing to watch
             rt = await tenants.get(user.id)
+            await run_user(name, job, rt, notifier_for(user), user.tz, now.astimezone(ZoneInfo(user.tz)))
         except Exception as e:
             log.error("proactive %s skipped user %s: %s", name, user.id, type(e).__name__)  # the type only: no secrets
             continue
-        await run_user(name, job, rt, notifier_for(user), user.tz, now.astimezone(ZoneInfo(user.tz)))
 
 
 def per_user_jobs(s) -> dict:
@@ -98,6 +100,8 @@ def per_user_jobs(s) -> dict:
         await sweep(rt.calendar, rt.proactive, notifier, tz, s.leave_lead_minutes, now)
 
     async def brief(rt, notifier, llm, tz, now):
+        if llm is None:  # don't consume today's claim before the user sets their own key
+            return
         state = lambda key: asyncio.to_thread(rt.proactive.get_state, key)  # noqa: E731
         try:
             due = brief_due(now, await state("brief_time") or s.brief_time)
@@ -132,7 +136,9 @@ def start_proactive(s, tenants, users, bot, devices) -> AsyncIOScheduler:
         return make_notifier(bot, s.telegram_owner_chat_id, s.fcm_credentials_path, devices, user.id, user.is_owner)
 
     def each(name, job):
-        return lambda: run_for_users(name, job, users, tenants, has_google, notifier_for)
+        async def run():
+            await run_for_users(name, job, users, tenants, has_google, notifier_for)
+        return run
 
     sched = build_scheduler(s, {name: each(name, job) for name, job in per_user_jobs(s).items()})
     sched.start()

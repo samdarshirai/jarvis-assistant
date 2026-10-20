@@ -1,3 +1,5 @@
+import asyncio
+import inspect
 import logging
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -5,9 +7,12 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import openai
+import pytest
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 from langchain_core.messages import AIMessage, HumanMessage
 
 from jarvis.google.auth import ReauthRequired
+from jarvis.llm import LLMCreds, LLMProvider
 from jarvis.proactive.scheduler import ISSUE_TEXT, REAUTH_TEXT, brief_due, build_scheduler, per_user_jobs, run_for_users, start_proactive
 from jarvis.proactive.notify import make_notifier
 from jarvis.proactive.store import ProactiveStore
@@ -75,7 +80,8 @@ async def test_each_user_gets_own_brief_in_own_timezone(monkeypatch):
     weather_calls = []
     monkeypatch.setattr("jarvis.proactive.brief.weather.fetch",
                         lambda city, tz, now, coords=None: weather_calls.append((city, tz, coords)) or None)
-    berlin, ny = runtime(user(1, owner=True)), runtime(user(2, tz="America/New_York"))
+    berlin = runtime(user(1, owner=True), llm=FakeProvider({"fast": [AIMessage("Good morning. Berlin.")]}))
+    ny = runtime(user(2, tz="America/New_York"), llm=FakeProvider({"fast": [AIMessage("Good morning. New York.")]}))
     ny.proactive.set_state("brief_time", "08:00")
     ny.proactive.set_state("weather_city", "Boston")
     ny.proactive.set_state("last_location", "42.3600,-71.0600")
@@ -92,34 +98,61 @@ async def test_each_user_gets_own_brief_in_own_timezone(monkeypatch):
 
 async def test_brief_once_per_day_and_survives_restart_within_window():
     store = FakeProactiveStore()  # stands in for the user's Postgres rows, which outlive a restart
-    rt = runtime(user(1), store=store)
+    rt = runtime(user(1), store=store, llm=FakeProvider({"fast": [AIMessage("Good morning.")]}))
     tick, n, _ = harness(rt)
     await tick("brief", WED.replace(hour=5, minute=35))
     await tick("brief", WED.replace(hour=5, minute=50))
     assert len(n[1].calls) == 2  # one brief: telegram + push
 
-    tick2, n2, _ = harness(runtime(user(1), store=store))  # restart, same day, still in the window
+    tick2, n2, _ = harness(runtime(user(1), store=store, llm=FakeProvider({"fast": [AIMessage("Good morning.")]})))  # restart, same day, still in the window
     await tick2("brief", WED.replace(hour=6, minute=0))
     assert n2[1].calls == []
 
-    late = runtime(user(1), store=FakeProactiveStore())  # restarted before the brief went out: still sent in the window
+    late = runtime(user(1), store=FakeProactiveStore(), llm=FakeProvider({"fast": [AIMessage("Good morning.")]}))  # restarted before the brief went out: still sent in the window
     tick3, n3, _ = harness(late)
     await tick3("brief", WED.replace(hour=6, minute=25))
     await tick3("brief", WED.replace(hour=6, minute=35))  # past the hour: never a late duplicate
     assert len(n3[1].calls) == 2
 
 
-async def test_user_without_llm_key_skipped_no_operator_fallback():
+async def test_brief_claim_survives_recreated_postgres_store(pool, uids):
+    uid, _ = uids
+    first = runtime(user(uid), llm=FakeProvider({"fast": [AIMessage("Good morning.")]}),
+                    store=ProactiveStore(pool, uid))
+    tick, n, _ = harness(first)
+    await tick("brief", WED.replace(hour=5, minute=35))
+    assert len(n[uid].calls) == 2
+    restarted = runtime(user(uid), llm=FakeProvider({"fast": [AIMessage("Good morning.")]}),
+                        store=ProactiveStore(pool, uid))
+    tick2, n2, _ = harness(restarted)
+    await tick2("brief", WED.replace(hour=6, minute=0))
+    assert n2[uid].calls == []
+
+
+@pytest.mark.parametrize("cursor", [None, "1700000000"])
+async def test_user_without_llm_key_skipped_no_operator_fallback(cursor):
     store = FakeProactiveStore()
-    store.set_state("mail_cursor", "1700000000")
+    if cursor:
+        store.set_state("mail_cursor", cursor)
+    store.get_state = MagicMock(wraps=store.get_state)
+    store.claim_alert = MagicMock(wraps=store.claim_alert)
     rt = runtime(user(2), llm=None, store=store)
     tick, n, _ = harness(rt)
     s = settings()  # the operator's env key is set and must never be used for this user
     await tick("mail", WED.replace(hour=5, minute=40), s=s)
-    rt.gmail.search_emails.assert_not_called()
     await tick("brief", WED.replace(hour=5, minute=40), s=s)
-    assert rt.audit.records[-1]["name"] == "brief" and rt.audit.records[-1]["result"]["llm"] is False
-    assert n[2].calls[1][1].startswith("Good morning.")
+    rt.gmail.search_emails.assert_not_called()
+    rt.calendar.list_events.assert_not_called()
+    rt.tasks.list_tasks.assert_not_called()
+    store.get_state.assert_not_called()
+    store.claim_alert.assert_not_called()
+    assert store.state == ({"mail_cursor": cursor} if cursor else {})
+    assert n[2].calls == [] and rt.audit.records == []
+
+    # Adding a key inside today's window can still claim and send today's brief.
+    rt.llm = FakeProvider({"fast": [AIMessage("Good morning.")]})
+    await tick("brief", WED.replace(hour=5, minute=45), s=s)
+    assert store.alerts == {"brief:2026-10-21"} and len(n[2].calls) == 2
 
 
 async def test_one_user_failing_does_not_stop_others(caplog):
@@ -140,6 +173,37 @@ async def test_one_user_failing_does_not_stop_others(caplog):
     assert seen == [2, 3]
     assert broken.audit.records[0]["name"] == "sweep_error"
     assert "UnknownUser" in caplog.text
+
+
+@pytest.mark.parametrize("failure", ["timezone", "notifier", "google", "runtime"])
+async def test_setup_failure_skips_only_that_user_with_safe_log(failure, caplog):
+    secret = "sk-setup-sentinel"
+    bad = runtime(user(1, tz=secret if failure == "timezone" else "Europe/Berlin"))
+    good = runtime(user(2))
+    tenants = FakeTenants({2: good} if failure == "runtime" else {1: bad, 2: good})
+    seen = []
+
+    def has_google(uid):
+        if uid == 1 and failure == "google":
+            raise RuntimeError(secret)
+        return True
+
+    def notifier_for(u):
+        if u.id == 1 and failure == "notifier":
+            raise RuntimeError(secret)
+        return FakeNotifier()
+
+    async def job(rt, notifier, llm, tz, now):
+        seen.append(rt.user.id)
+
+    with caplog.at_level(logging.ERROR):
+        await run_for_users("sweep", job, FakeUsers([bad.user, good.user]), tenants, has_google, notifier_for, WED)
+    assert seen == [2]
+    assert secret not in caplog.text and "Traceback" not in caplog.text
+    assert len(caplog.records) == 1 and caplog.records[0].exc_info is None
+    expected = {"timezone": "ZoneInfoNotFoundError", "notifier": "RuntimeError", "google": "RuntimeError",
+                "runtime": "UnknownUser"}[failure]
+    assert expected in caplog.text
 
 
 async def test_friend_notice_is_push_only(monkeypatch):
@@ -212,7 +276,7 @@ async def test_mail_state_isolated_between_users(pool, uids):
     await tick("mail", WED)
     assert store_a.mail_seen("m1") and not store_b.mail_seen("m1")
     assert store_a.get_state("mail_cursor") != "1700000000"
-    assert store_b.get_state("mail_cursor") == str(int(WED.timestamp()))  # B's first run only sets its own cursor
+    assert store_b.get_state("mail_cursor") is None  # no key: no cursor initialization or source reads
 
 
 async def test_start_proactive_builds_and_starts_the_jobs():
@@ -222,3 +286,93 @@ async def test_start_proactive_builds_and_starts_the_jobs():
         assert sched.running and {j.id for j in sched.get_jobs()} == {"brief", "mail", "sweep"}
     finally:
         sched.shutdown(wait=False)
+
+
+async def test_registered_mail_job_executes_through_apscheduler_executor():
+    users = FakeUsers([])
+    users.enabled = MagicMock(wraps=users.enabled)
+    completed = asyncio.get_running_loop().create_future()
+    sched = start_proactive(settings(), FakeTenants({}), users, SimpleNamespace(send_message=AsyncMock()),
+                            SimpleNamespace(fcm_tokens=lambda uid: []))
+
+    def on_job(event):
+        if event.job_id == "mail" and not completed.done():
+            completed.set_result(event)
+
+    sched.add_listener(on_job, EVENT_JOB_EXECUTED | EVENT_JOB_ERROR)
+    try:
+        sched.modify_job("mail", next_run_time=datetime.now(timezone.utc))
+        event = await asyncio.wait_for(completed, timeout=3)
+        if inspect.iscoroutine(getattr(event, "retval", None)):
+            event.retval.close()  # regression must not leave the old unawaited coroutine behind
+        users.enabled.assert_called_once_with()
+        assert getattr(event, "exception", None) is None
+        assert not inspect.isawaitable(event.retval)
+    finally:
+        sched.shutdown(wait=False)
+
+
+@pytest.mark.parametrize("name", ["mail", "brief"])
+@pytest.mark.parametrize("status,kind", [(401, "rejected_key"), (402, "out_of_credit")])
+async def test_real_provider_key_echo_never_reaches_proactive_logs_or_audit(name, status, kind, caplog):
+    secret = "sk-provider-echo-sentinel"
+    audit = MemoryAudit()
+    provider = LLMProvider(LLMCreds("https://provider.example/v1", secret, ["fast"], ["strong"]), audit)
+    await provider.http.aclose()
+    provider.http = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(status, json={"error": {"message": f"key {secret} rejected"}})))
+    store = FakeProactiveStore()
+    store.set_state("mail_cursor", "1000")
+    gmail = MagicMock(search_emails=MagicMock(return_value=[{"id": "m1", "from": "airline", "subject": "Flight booking", "snippet": ""}]),
+                      read_email=MagicMock(return_value={"from": "airline", "subject": "Flight booking", "body": "Flight"}))
+    rt = runtime(user(2), llm=provider, store=store, gmail=gmail)
+    rt.audit = audit
+    tick, n, _ = harness(rt)
+    try:
+        with caplog.at_level(logging.ERROR):
+            await tick(name, WED.replace(hour=5, minute=40))
+        assert secret not in caplog.text and secret not in str(audit.records)
+        assert all(record.exc_info is None for record in caplog.records)
+        assert "Traceback" not in caplog.text
+        assert n[2].calls[-1] == ("push", ISSUE_TEXT[kind], None)
+        assert store.alerts >= {f"issue:{kind}:2026-10-21"}
+        if name == "mail":
+            error = next(r for r in audit.records if r["name"] == "mail_error")
+            assert set(error["result"]) == {"error"}
+            assert error["result"]["error"].isidentifier() and error["result"]["error"].endswith("Error")
+        else:
+            assert any(r["name"] == "brief" for r in audit.records)
+    finally:
+        await provider.aclose()
+
+
+@pytest.mark.parametrize("sink", ["job", "audit", "notice"])
+async def test_outer_job_and_failure_helpers_log_only_exception_types(sink, caplog):
+    secret = "sk-job-echo-sentinel"
+    rt = runtime(user(2))
+    tick, n, _ = harness(rt)
+    if sink == "audit":
+        rt.audit.record = MagicMock(side_effect=ValueError(secret))
+    if sink == "notice":
+        n[2].both = AsyncMock(side_effect=ValueError(secret))
+    job = AsyncMock(side_effect=ReauthRequired(secret) if sink == "notice" else RuntimeError(secret))
+    with caplog.at_level(logging.ERROR):
+        await tick("sweep", WED, job=job)
+    assert secret not in caplog.text and secret not in str(rt.audit.records)
+    assert caplog.records and all(r.exc_info is None for r in caplog.records)
+    assert "Traceback" not in caplog.text
+    if sink == "job":
+        assert rt.audit.records[0]["result"] == {"error": "RuntimeError"}
+
+
+@pytest.mark.parametrize("status,kind", [(401, "rejected_key"), (403, "rejected_key"), (402, "out_of_credit")])
+async def test_sanitized_provider_error_keeps_issue_classification(status, kind):
+    error = RuntimeError("LLM request failed")
+    error.status_code = status  # Task 8 preserves status without an unsafe provider response body
+    tick, n, _ = harness(runtime(user(2), llm=FakeProvider({"fast": [error]})))
+
+    async def uses_llm(rt, notifier, llm, tz, now):
+        await llm.get("fast").ainvoke([HumanMessage("hi")])
+
+    await tick("mail", WED, job=uses_llm)
+    assert n[2].calls[-1] == ("push", ISSUE_TEXT[kind], None)

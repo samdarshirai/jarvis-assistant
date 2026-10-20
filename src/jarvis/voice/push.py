@@ -39,7 +39,7 @@ def send_push(project_id: str, access_token: str, tokens: list[str], text: str, 
         if r.is_success:
             sent += 1
         else:
-            log.warning("fcm push failed: %s %s", r.status_code, r.text[:200])
+            log.warning("fcm push failed: %s", r.status_code)
     return sent
 
 

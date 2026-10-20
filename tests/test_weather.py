@@ -22,3 +22,16 @@ def test_coords_roundtrip():
     assert load_coords(s) is None
     save_coords(s, 52.52, 13.405)
     assert load_coords(s) == (52.52, 13.405)
+
+
+def test_weather_failure_logs_only_type(monkeypatch, caplog):
+    from datetime import datetime, timezone
+    from jarvis.weather import fetch
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("sk-weather-sentinel")
+
+    monkeypatch.setattr("jarvis.weather.httpx.get", fail)
+    assert fetch("", "UTC", datetime.now(timezone.utc), (52.52, 13.405)) is None
+    assert "RuntimeError" in caplog.text and "sk-weather-sentinel" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

@@ -115,12 +115,12 @@ class MailWatch:
         self.tz, self.cap = tz, cap
 
     async def run_once(self, now: datetime | None = None) -> None:
+        if self.llm is None:  # no key: don't read or initialize the cursor until onboarding is complete
+            return
         now = now or now_local(self.tz)
         cursor = await asyncio.to_thread(self.store.get_state, "mail_cursor")
         if cursor is None:  # first run: start from now, never backfill old mail
             await asyncio.to_thread(self.store.set_state, "mail_cursor", str(int(now.timestamp())))
-            return
-        if self.llm is None:  # no LLM key yet: leave the cursor so this mail is handled once a key is set
             return
         # ponytail: at most 20 messages per poll (Gmail list cap used by search_emails); busier inboxes lose the oldest
         mails = await asyncio.to_thread(self.gmail.search_emails, f"in:inbox after:{cursor}", 20)
@@ -133,9 +133,9 @@ class MailWatch:
                 raise
             except Exception as e:
                 # ponytail: a failed message is recorded as "error" and not retried (no endless LLM spend on a poison mail)
-                log.exception("mail watch failed on one message")
+                log.error("mail watch failed on one message: %s", type(e).__name__)
                 await asyncio.to_thread(self.store.record_mail, m["id"], "error")
-                await self._audit("mail_error", {"message_id": m["id"]}, {"error": str(e)[:200]})
+                await self._audit("mail_error", {"message_id": m["id"]}, {"error": type(e).__name__})
         await asyncio.to_thread(self.store.set_state, "mail_cursor", str(int(now.timestamp()) - 60))  # 60 s overlap; mail_seen dedupes
 
     async def _handle(self, m: dict, now: datetime) -> None:
@@ -161,7 +161,7 @@ class MailWatch:
         if await asyncio.to_thread(self.store.auto_events_last_day) >= self.cap:
             await record("capped")
             if await asyncio.to_thread(self.store.claim_alert, f"cap:{now.date().isoformat()}"):
-                await self.notifier.telegram(f"Auto-add limit ({self.cap} per day) reached; not added: {x.title}. "
+                await self.notifier.both(f"Auto-add limit ({self.cap} per day) reached; not added: {x.title}. "
                                              "Ask me to add it if you want it.")
             return
         subject = _clean(full.get("subject") or "", MAX_TITLE)
@@ -175,17 +175,17 @@ class MailWatch:
         except ReauthRequired:
             raise
         except Exception as e:  # the insert may have committed before the error: keep the whitelist, leave a trail
-            await self._audit("mail_error", {"message_id": mid, "event_id": event_id}, {"error": str(e)[:200]})
+            await self._audit("mail_error", {"message_id": mid, "event_id": event_id}, {"error": type(e).__name__})
             try:
                 await asyncio.to_thread(self.calendar.get_event, event_id)
             except HttpError as he:
                 if he.resp.status in (404, 410):  # the write did not happen: Undo must not be whitelisted
                     await asyncio.to_thread(self.store.remove_auto_event, event_id)
                 else:
-                    log.exception("could not check whether the timed-out insert committed")
+                    log.error("could not check whether the timed-out insert committed: %s", type(he).__name__)
                 raise e
-            except Exception:
-                log.exception("could not check whether the timed-out insert committed")
+            except Exception as lookup_error:
+                log.error("could not check whether the timed-out insert committed: %s", type(lookup_error).__name__)
                 raise e
             await self._created(m, full, x, event_id, record)  # Google committed it: treat as created
             return
@@ -209,9 +209,9 @@ class MailWatch:
         when = x.start.astimezone(ZoneInfo(self.tz)).strftime("%a %d %b %H:%M")
         text = f"Added to your calendar: {x.title}\n{when}" + (f"\n{x.location}" if x.location else "") + f"\nFrom email: {subject}"
         try:
-            await self.notifier.telegram(text, undo_event_id=event_id)
-        except Exception:
-            log.exception("could not send the added-event notice")
+            await self.notifier.both(text, undo_event_id=event_id)
+        except Exception as e:
+            log.error("could not send the added-event notice: %s", type(e).__name__)
 
     async def _extract(self, full: dict, now: datetime):
         text = f"From: {full.get('from')}\nSubject: {full.get('subject')}\n\n{full.get('body')}"

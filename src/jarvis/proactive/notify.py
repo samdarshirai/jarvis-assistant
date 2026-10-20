@@ -27,12 +27,13 @@ class Notifier:
     async def push(self, text: str) -> int:
         return await self._send_push(text[:MAX_SPEAK_CHARS])
 
-    async def both(self, text: str) -> None:
-        for send in (self.telegram, self.push):
+    async def both(self, text: str, undo_event_id: str | None = None) -> None:
+        """Push to the user's phones, and Telegram (with the Undo button) for the owner."""
+        for send in (lambda: self.telegram(text, undo_event_id), lambda: self.push(text)):
             try:
-                await send(text)
-            except Exception:
-                log.exception("proactive delivery failed")
+                await send()
+            except Exception as e:
+                log.error("proactive delivery failed: %s", type(e).__name__)
 
 
 def make_notifier(bot, chat_id: int, fcm_credentials_path: str, devices, user_id: int, telegram: bool) -> Notifier:

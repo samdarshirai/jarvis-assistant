@@ -31,8 +31,8 @@ async def gather(calendar, tasks, gmail, tz: str, now: datetime, weather_city: s
             return await asyncio.to_thread(fn, *args)
         except ReauthRequired:
             reauth = True
-        except Exception:
-            log.exception("brief source failed")
+        except Exception as e:
+            log.error("brief source failed: %s", type(e).__name__)
         return None
 
     events = await get(calendar.list_events, day, day + timedelta(days=1))
@@ -118,8 +118,8 @@ async def compose(llm, facts: dict, tz: str) -> tuple[str, bool]:
         out = msg.content.strip() if isinstance(msg.content, str) else ""
         if out:
             return out, True
-    except Exception:
-        log.exception("brief LLM failed; sending the plain list")
+    except Exception as e:
+        log.error("brief LLM failed; sending the plain list: %s", type(e).__name__)
     return speak_facts(facts, tz), False
 
 

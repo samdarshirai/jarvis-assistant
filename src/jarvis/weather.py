@@ -54,6 +54,6 @@ def fetch(city: str, tz: str, now: datetime, coords: tuple[float, float] | None 
         tip = advice(hi, rain, now.month, southern=lat < 0)
         where = "where you are" if coords else f"in {city}"
         return f"Today {where} it's between {lo} and {hi} degrees" + (f", and {tip}." if tip else ".")
-    except Exception:
-        log.exception("weather lookup failed")
+    except Exception as e:
+        log.error("weather lookup failed: %s", type(e).__name__)
         return None

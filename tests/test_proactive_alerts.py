@@ -77,7 +77,8 @@ async def test_sweep_alerts_once_across_repeated_sweeps_and_asks_for_48_hours():
     await sweep(cal, store, n, TZ, 30, now=NOW)
     await sweep(cal, store, n, TZ, 30, now=NOW + timedelta(minutes=5))
     kinds = [(k, t.split(":")[0]) for k, t, _ in n.calls]
-    assert kinds == [("telegram", "Calendar conflict"), ("telegram", "Time to leave"), ("push", "Time to leave")]
+    assert kinds == [("telegram", "Calendar conflict"), ("push", "Calendar conflict"),
+                     ("telegram", "Time to leave"), ("push", "Time to leave")]
     assert cal.windows[0] == (NOW, NOW + timedelta(hours=48))
 
 
