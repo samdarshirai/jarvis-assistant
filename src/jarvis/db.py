@@ -119,8 +119,12 @@ def init_schema(pool: ConnectionPool) -> None:
     which stays NULL until users.ensure_owner adopts the rows and calls finish_user_columns."""
     with pool.connection() as conn:  # one transaction: committed on exit
         conn.execute(SCHEMA)
+        have = {r[0] for r in conn.execute(  # ALTER locks ACCESS EXCLUSIVE even as a no-op: only run it when needed
+            "SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema()"
+            " AND column_name = 'user_id'").fetchall()}
         for t in DATA_TABLES:
-            conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+            if t not in have:
+                conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
         finish_user_columns(conn)
 
 

@@ -181,6 +181,32 @@ def test_ensure_owner_adopts_legacy_rows(scratch):
     assert SecretStore(scratch, KEY).all(uid) == {"llm_key": "sk-or-secret", "model_fast": "a/x", "model_strong": "b/y"}
 
 
+def test_init_schema_on_an_upgraded_database_runs_no_add_column(pool):
+    # ALTER TABLE takes ACCESS EXCLUSIVE even when IF NOT EXISTS makes it a no-op: every start and CLI run would queue
+    seen = []
+
+    class Recording:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=None):
+            seen.append(sql)
+            return self.conn.execute(sql, params)
+
+    class Pool:
+        def connection(self):
+            from contextlib import contextmanager
+
+            @contextmanager
+            def cm():
+                with pool.connection() as c:
+                    yield Recording(c)
+            return cm()
+
+    init_schema(Pool())
+    assert seen and not [s for s in seen if s.startswith("ALTER TABLE")]
+
+
 def test_ensure_owner_is_idempotent(pool):
     assert ensure_owner(pool, settings()) is None  # empty database, no owner email: nothing to adopt, nobody created
     assert UserStore(pool).list() == []
