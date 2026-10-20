@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -9,10 +10,10 @@ from telegram import Update
 from telegram.error import TelegramError
 
 from jarvis.agent.graph import build_graph
-from jarvis.channels.telegram import FAIL_TEXT, TelegramChannel, format_confirmation
+from jarvis.channels.telegram import FAIL_TEXT, NEEDS_LLM_TEXT, TelegramChannel, format_confirmation
 from jarvis.tenant import thread_config
 from jarvis.tools.registry import Registry, Tool
-from tests.fakes import FakeProvider, MemoryAudit
+from tests.fakes import FakeProvider, FakeTenants, MemoryAudit
 
 OWNER = 42
 
@@ -42,7 +43,18 @@ def make_channel(scripts, calls, extra=()):
     for t in extra:
         reg.add(t)
     g = build_graph(FakeProvider(scripts), reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
-    return TelegramChannel(g, OWNER, user_id=1)
+    return owner_channel(g)
+
+
+def owner_channel(graph, uid=1):
+    tenants = FakeTenants()
+    tenants.add(uid, graph)
+    return TelegramChannel(tenants, uid, OWNER)
+
+
+def rt(ch):
+    """The owner's runtime the channel resolves on each update."""
+    return ch.tenants.runtimes[ch.owner_id]
 
 
 def ids(c, n=-1):
@@ -106,12 +118,39 @@ async def test_graph_failure_sends_fixed_message():
     graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(interrupts=())),
                             ainvoke=AsyncMock(side_effect=RuntimeError("all models down")))
     c = chat()
-    await TelegramChannel(graph, OWNER, user_id=1).on_text(text_update(c), None)
+    await owner_channel(graph).on_text(text_update(c), None)
     assert sent(c) == [(FAIL_TEXT, {})]
 
 
+async def test_telegram_uses_owner_thread_and_lock():
+    ch = make_channel({"fast": [AIMessage("chat"), AIMessage("Hello!")]}, [])
+    g = rt(ch).graph
+    ch = owner_channel(g, uid=7)  # the owner is user 7, not 1
+    lock = ch.tenants.lock(7)
+    await lock.acquire()
+    c = chat()
+    t = asyncio.create_task(ch.on_text(text_update(c, "hi"), None))
+    await asyncio.sleep(0.05)
+    assert not t.done() and sent(c) == []  # waits for the owner's per-user lock
+    lock.release()
+    await t
+    assert sent(c) == [("Hello!", {})]
+    assert [m.content for m in (await g.aget_state(thread_config(7))).values["messages"]] == ["hi", "Hello!"]
+    assert (await g.aget_state(thread_config(1))).values == {}
+
+
+async def test_telegram_without_llm_key_asks_for_one():
+    ch = owner_channel(None)
+    c = chat()
+    await ch.on_text(text_update(c, "hi"), None)
+    assert sent(c) == [(NEEDS_LLM_TEXT, {})]
+    c = chat()
+    await ch.on_button(button_update(c, "yes:abc"), None)
+    assert sent(c) == [(NEEDS_LLM_TEXT, {})]
+
+
 def test_owner_filter_rejects_strangers():
-    ch = TelegramChannel(None, OWNER, user_id=1)
+    ch = TelegramChannel(FakeTenants(), 1, OWNER)
 
     def upd(chat_id):
         return Update.de_json({"update_id": 1, "message": {"message_id": 1, "date": 0,
@@ -138,9 +177,9 @@ async def test_non_owner_button_dropped_and_logged(caplog):
     ch = pending_channel(calls)
     c0 = chat()
     await ch.on_text(text_update(c0), None)
-    real = ch.graph
+    real = rt(ch).graph
     spy = SimpleNamespace(ainvoke=AsyncMock(), aget_state=real.aget_state)
-    ch.graph = spy
+    rt(ch).graph = spy
     c = chat()
     with caplog.at_level("WARNING"):
         await ch.on_button(button_update(c, ids(c0)[0], chat_id=99), None)
@@ -154,7 +193,7 @@ async def test_failed_resume_reprompts_and_retry_works():
     ch = pending_channel(calls)
     c0 = chat()
     await ch.on_text(text_update(c0), None)
-    real = ch.graph
+    real = rt(ch).graph
     boom = {"on": True}
 
     async def ainvoke(inp, cfg):
@@ -163,7 +202,7 @@ async def test_failed_resume_reprompts_and_retry_works():
             raise RuntimeError("down")
         return await real.ainvoke(inp, cfg)
 
-    ch.graph = SimpleNamespace(ainvoke=ainvoke, aget_state=real.aget_state)
+    rt(ch).graph = SimpleNamespace(ainvoke=ainvoke, aget_state=real.aget_state)
     c = chat()
     yes, _ = ids(c0)
     await ch.on_button(button_update(c, yes), None)
@@ -187,7 +226,7 @@ async def test_edit_markup_error_does_not_block_action():
 
 
 def test_build_registers_handlers_without_network():
-    app = TelegramChannel(None, OWNER, user_id=1).build("123:abc")
+    app = TelegramChannel(FakeTenants(), 1, OWNER).build("123:abc")
     assert len(app.handlers[0]) == 2 and len(app.handlers[1]) == 1
 
 
@@ -249,12 +288,12 @@ async def test_legacy_bare_callback_data_is_already_handled():
         await ch.on_button(button_update(c, data), None)
         assert sent(c) == [("Already handled.", {})]
     assert calls == []
-    assert (await ch.graph.aget_state(thread_config(1))).interrupts  # still waiting for a real answer
+    assert (await rt(ch).graph.aget_state(thread_config(1))).interrupts  # still waiting for a real answer
 
 
 async def test_empty_reply_sends_fallback():
     ch = make_channel({"fast": [AIMessage("chat"), AIMessage("calendar")], "strong": []}, [])
-    ch.graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(interrupts=())),
+    rt(ch).graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(interrupts=())),
                                ainvoke=AsyncMock(return_value={"messages": []}))
     c = chat()
     await ch.on_text(text_update(c), None)
@@ -262,7 +301,7 @@ async def test_empty_reply_sends_fallback():
 
 
 def test_text_handler_ignores_edited_messages():
-    app = TelegramChannel(None, OWNER, user_id=1).build("123:abc")
+    app = TelegramChannel(FakeTenants(), 1, OWNER).build("123:abc")
     h = app.handlers[0][0]
 
     def upd(key):
@@ -345,7 +384,7 @@ async def test_phone_action_without_a_voice_client_tells_the_user_it_was_not_run
 async def test_pending_card_from_another_channel_is_reoffered_with_working_buttons():
     calls = []
     ch = pending_channel(calls)
-    out = await ch.graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(1))  # e.g. proposed by voice
+    out = await rt(ch).graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(1))  # e.g. proposed by voice
     iid = out["__interrupt__"][0].id
     c = chat()
     await ch.on_text(text_update(c, "hello?"), None)
@@ -412,12 +451,12 @@ async def test_oversized_card_is_offered_with_working_buttons():
 async def test_undo_tap_removes_the_event_without_touching_the_graph():
     ch = pending_channel([])
     ch.undo = AsyncMock(return_value=True)
-    ch.graph = SimpleNamespace(ainvoke=AsyncMock(), aget_state=AsyncMock())
+    rt(ch).graph = SimpleNamespace(ainvoke=AsyncMock(), aget_state=AsyncMock())
     c = chat()
     await ch.on_button(button_update(c, "undo:abc123"), None)
     ch.undo.assert_awaited_once_with("abc123")
-    ch.graph.ainvoke.assert_not_called()
-    ch.graph.aget_state.assert_not_called()
+    rt(ch).graph.ainvoke.assert_not_called()
+    rt(ch).graph.aget_state.assert_not_called()
     assert sent(c) == [("Removed it from your calendar.", {})]
 
 

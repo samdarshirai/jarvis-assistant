@@ -28,8 +28,6 @@ from jarvis.tenant import Tenants
 from jarvis.timeutil import now_local
 from jarvis.users import UserStore, ensure_owner
 from jarvis.voice.devices import Devices
-from jarvis.voice.stt import DeepgramSTT
-from jarvis.voice.tts import DeepgramTTS
 from jarvis.voice.ws import VoiceService
 
 log = logging.getLogger(__name__)
@@ -57,14 +55,12 @@ async def lifespan(app: FastAPI):
                 owner = await tenants.get(owner_id)
 
                 async def undo(event_id: str) -> bool:
-                    return await undo_event(owner.calendar, owner.proactive, owner.audit, event_id)
+                    rt = await tenants.get(owner_id)  # current runtime: the owner may have reconnected Google
+                    return await undo_event(rt.calendar, rt.proactive, rt.audit, event_id)
 
-                # One per-user lock for every channel on the owner's thread: "read pending -> decide -> ainvoke" is one step.
-                voice = VoiceService(
-                    owner.graph, devices,
-                    DeepgramSTT(s.deepgram_api_key) if s.deepgram_api_key else None,
-                    DeepgramTTS(s.deepgram_api_key) if s.deepgram_api_key else None,
-                    lock=owner.lock, user_id=owner_id)
+                # Each user's voice session runs on their runtime and their Deepgram key; tenants.lock(uid) is shared by
+                # every channel on that user's thread: "read pending -> decide -> ainvoke" is one step.
+                voice = VoiceService(tenants, devices)
                 app.state.voice = voice
                 app.state.tenants, app.state.owner_id = tenants, owner_id
                 if s.google_web_client_secrets and s.public_base_url:
@@ -77,8 +73,8 @@ async def lifespan(app: FastAPI):
                                                        owner.tz, weather_city=s.weather_city, store=owner.proactive)
                 app.state.app_api = app_api = AppService(devices, owner.calendar, owner.tasks, owner.gmail, owner.notes,
                                                          owner.graph, owner.lock, owner.audit, owner.tz, user_id=owner_id)
-                tg = TelegramChannel(owner.graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
-                                     lock=owner.lock, undo=undo, user_id=owner_id).build(s.telegram_bot_token)
+                tg = TelegramChannel(tenants, owner_id, s.telegram_owner_chat_id,
+                                     deliver_actions=partial(voice.deliver, owner_id), undo=undo).build(s.telegram_bot_token)
                 try:
                     await tg.initialize()
                 except Exception:

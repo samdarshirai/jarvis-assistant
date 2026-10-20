@@ -161,7 +161,7 @@ def test_failed_turn_reports_error_and_reoffers_pending_card():
             raise RuntimeError("boom")
 
     h = build(chat_scripts("x"), stt_script=[FINAL("hello")])
-    h.svc.graph = StubGraph()
+    h.rt.graph = StubGraph()
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         read(ws)
         ping(ws)

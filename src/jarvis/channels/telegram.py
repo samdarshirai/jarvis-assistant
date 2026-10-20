@@ -18,6 +18,7 @@ EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you ar
 PENDING_TEXT = "Let's sort out the pending action first, confirm or cancel it."
 RAW_CAP, CARD_MAX = 1500, 4000
 HANDLED_TEXT = "Already handled."
+NEEDS_LLM_TEXT = "Set your LLM key in the app Settings."
 UNDO_DONE_TEXT = "Removed it from your calendar."
 UNDO_FAILED_TEXT = "Could not remove it. Please check your calendar."
 PHONE_OFFLINE_TEXT = "Phone action not run: the Jarvis voice app is not connected."
@@ -56,15 +57,24 @@ def format_confirmation(payload: dict) -> str:
 
 
 class TelegramChannel:
-    def __init__(self, graph, owner_chat_id: int, deliver_actions=None, lock: asyncio.Lock | None = None, undo=None,
-                 *, user_id: int):
-        self.deliver_actions = deliver_actions
+    def __init__(self, tenants, owner_user_id: int, owner_chat_id: int, deliver_actions=None, undo=None):
+        self.deliver_actions = deliver_actions  # async (actions) -> bool; the owner's live voice session
         self.undo = undo  # async (event_id) -> bool; removes an event Jarvis auto-created from email
-        self.graph = graph
-        self.cfg = thread_config(user_id)  # Telegram is the owner's channel
+        self.tenants, self.owner_id = tenants, owner_user_id  # Telegram is the owner's channel
+        self.cfg = thread_config(owner_user_id)
         self.owner = owner_chat_id
         self.owner_filter = filters.Chat(chat_id=owner_chat_id)
-        self.lock = lock or asyncio.Lock()  # shared with voice: one graph step at a time on the thread
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        return self.tenants.lock(self.owner_id)  # shared with voice and the app: one graph step at a time on the thread
+
+    async def _graph(self, chat):
+        """The owner's graph, resolved per update (it changes with their LLM key); None after telling them to set one."""
+        graph = (await self.tenants.get(self.owner_id)).graph
+        if graph is None:
+            await chat.send_message(NEEDS_LLM_TEXT)
+        return graph
 
     def build(self, token: str) -> Application:
         app = Application.builder().token(token).build()
@@ -77,10 +87,10 @@ class TelegramChannel:
         chat = update.effective_chat
         log.warning("dropped message from non-owner chat %s", chat.id if chat else None)
 
-    async def _invoke(self, graph_input):
+    async def _invoke(self, graph, graph_input):
         """Run the graph (the caller holds the lock). None means the run failed."""
         try:
-            return await self.graph.ainvoke(graph_input, self.cfg)
+            return await graph.ainvoke(graph_input, self.cfg)
         except Exception:
             log.exception("graph run failed")
             return None
@@ -88,11 +98,11 @@ class TelegramChannel:
     async def _offer(self, chat, it) -> None:
         await chat.send_message(format_confirmation(it.value), reply_markup=keyboard(it.id))
 
-    async def _reply(self, chat, result) -> None:
+    async def _reply(self, chat, graph, result) -> None:
         if result is None:
             await chat.send_message(FAIL_TEXT)
             try:  # buttons may be gone; re-offer a still-pending confirmation so the owner is not locked out
-                state = await self.graph.aget_state(self.cfg)
+                state = await graph.aget_state(self.cfg)
                 if state.interrupts:
                     await self._offer(chat, state.interrupts[0])
             except Exception:
@@ -111,14 +121,17 @@ class TelegramChannel:
 
     async def on_text(self, update, context):
         chat = update.effective_chat
+        graph = await self._graph(chat)
+        if graph is None:
+            return
         async with self.lock:  # read pending -> decide -> run is one step; replies are sent after release
-            pending = (await self.graph.aget_state(self.cfg)).interrupts
-            result = None if pending else await self._invoke({"messages": [HumanMessage(update.message.text)]})
+            pending = (await graph.aget_state(self.cfg)).interrupts
+            result = None if pending else await self._invoke(graph, {"messages": [HumanMessage(update.message.text)]})
         if pending:
             await chat.send_message(PENDING_TEXT)
             await self._offer(chat, pending[0])  # its buttons may only exist elsewhere (voice): show them here
             return
-        await self._reply(chat, result)
+        await self._reply(chat, graph, result)
 
     async def _undo(self, chat, event_id: str) -> None:
         try:
@@ -144,11 +157,14 @@ class TelegramChannel:
         if action == "undo":  # a calendar undo, not a graph confirmation: no lock, no graph step
             await self._undo(chat, iid)
             return
+        graph = await self._graph(chat)
+        if graph is None:
+            return
         async with self.lock:
-            interrupts = (await self.graph.aget_state(self.cfg)).interrupts
+            interrupts = (await graph.aget_state(self.cfg)).interrupts
             stale = action not in ("yes", "no") or not interrupts or interrupts[0].id != iid
-            result = None if stale else await self._invoke(Command(resume=action == "yes"))
+            result = None if stale else await self._invoke(graph, Command(resume=action == "yes"))
         if stale:
             await chat.send_message(HANDLED_TEXT)
             return
-        await self._reply(chat, result)
+        await self._reply(chat, graph, result)

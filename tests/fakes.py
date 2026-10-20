@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
@@ -98,6 +99,29 @@ class FakeTTS:
         except asyncio.CancelledError:
             self.cancelled = True
             raise
+
+
+class FakeTenants:
+    """Tenants twin: get(uid) returns a minimal runtime (user, secrets, graph, lock); lock(uid) is that runtime's lock."""
+
+    def __init__(self):
+        self.runtimes: dict[int, SimpleNamespace] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
+
+    def add(self, uid, graph, secrets=None, disabled=False):
+        rt = SimpleNamespace(user=SimpleNamespace(id=uid, disabled=disabled), secrets=dict(secrets or {}),
+                             graph=graph, lock=self.lock(uid))
+        self.runtimes[uid] = rt
+        return rt
+
+    def lock(self, uid):
+        return self._locks.setdefault(uid, asyncio.Lock())
+
+    async def get(self, uid):
+        from jarvis.tenant import UnknownUser
+        if uid not in self.runtimes:
+            raise UnknownUser(uid)
+        return self.runtimes[uid]
 
 
 class FakeProactiveStore:

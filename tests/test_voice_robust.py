@@ -84,7 +84,7 @@ def test_dropped_socket_mid_card_leaves_the_confirmation_pending_for_other_chann
         from jarvis.tenant import thread_config
         state = c.portal.call(h.graph.aget_state, thread_config(1, voice=True))
         assert state.interrupts and calls == []
-        assert h.svc.current is None
+        assert h.svc.sessions == {}
 
 
 def test_oversized_frame_closes_1009():

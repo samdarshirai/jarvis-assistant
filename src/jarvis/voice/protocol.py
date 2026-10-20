@@ -8,6 +8,8 @@ MAX_TEXT_FRAME = 64 * 1024  # control frames are tiny; the audio cap alone left 
 
 CLOSE_REPLACED = 4000
 CLOSE_UNAUTHORIZED = 4401
+CLOSE_NEEDS_SETUP = 4403  # sent after {"type":"error","code": NEEDS_DEEPGRAM | NEEDS_LLM}: the user must add a key first
+NEEDS_DEEPGRAM, NEEDS_LLM = "needs_deepgram", "needs_llm"
 CLOSE_TOO_LONG = 4408
 CLOSE_TOO_BIG = 1009
 CLOSE_UPSTREAM = 1011
