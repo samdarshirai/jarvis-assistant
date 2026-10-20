@@ -27,12 +27,14 @@ def test_voice_uses_users_deepgram_key():
     assert h.keys == [("stt", "dg-1"), ("tts", "dg-1")]
 
 
-def _refused(h):
-    """Connect and return (frames before the close, close code)."""
+def _refused(h, hello=None):
+    """Connect, send the app's hello (unless None), and return (frames before the close, close code)."""
     seen = []
     with TestClient(h.app) as c:
         with pytest.raises(WebSocketDisconnect) as e:
             with c.websocket_connect("/voice", headers=AUTH) as ws:
+                if hello is not None:
+                    ws.send_json({"type": "hello", **hello})
                 for _ in range(5):
                     seen.append(read(ws))
     return seen, e.value.code
@@ -40,16 +42,32 @@ def _refused(h):
 
 def test_voice_without_deepgram_key_closes_4403():
     h = build(chat_scripts("Hi."), with_voice=False)
-    seen, code = _refused(h)
+    seen, code = _refused(h, hello={})
     assert seen == [("text", {"type": "error", "code": "needs_deepgram"})] and code == 4403
     assert h.keys == [] and h.stt.streams == []
 
 
+def test_refused_session_still_stores_the_fcm_token():
+    # a friend who skipped Deepgram must still get proactive push: the hello is read before the 4403
+    h = build(chat_scripts("Hi."), with_voice=False)
+    seen, code = _refused(h, hello={"fcm_token": "tok-1"})
+    assert seen == [("text", {"type": "error", "code": "needs_deepgram"})] and code == 4403
+    assert h.devices.fcm == {1: "tok-1"}
+
+
+def test_refused_session_without_hello_is_not_held_open():
+    h = build(chat_scripts("Hi."), with_voice=False)
+    h.svc.hello_timeout = 0.1
+    seen, code = _refused(h)
+    assert seen == [("text", {"type": "error", "code": "needs_deepgram"})] and code == 4403
+    assert h.devices.fcm == {}
+
+
 def test_voice_without_llm_key_closes_4403_needs_llm():
     h = build(chat_scripts("Hi."), with_llm=False)
-    seen, code = _refused(h)
+    seen, code = _refused(h, hello={"fcm_token": "tok-2"})
     assert seen == [("text", {"type": "error", "code": "needs_llm"})] and code == 4403
-    assert h.stt.streams == []
+    assert h.stt.streams == [] and h.devices.fcm == {1: "tok-2"}
 
 
 def test_audio_turn_streams_transcript_reply_and_audio_in_order():

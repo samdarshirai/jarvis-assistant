@@ -322,6 +322,8 @@ class VoiceSession:
 
 
 class VoiceService:
+    hello_timeout = 10.0  # a refused client that never says hello is closed after this, not held open
+
     def __init__(self, tenants, devices, stt_factory=DeepgramSTT, tts_factory=DeepgramTTS):
         self.tenants, self.devices = tenants, devices
         self.stt_factory, self.tts_factory = stt_factory, tts_factory  # (deepgram_key) -> STT / TTS
@@ -344,6 +346,7 @@ class VoiceService:
         missing = P.NEEDS_DEEPGRAM if not key else P.NEEDS_LLM if rt.graph is None else None
         await ws.accept()
         if missing:
+            await self._take_hello(ws, device.device_id)  # push must work before the user adds a Deepgram key
             await ws.send_text(P.frame("error", code=missing))
             await ws.close(code=P.CLOSE_NEEDS_SETUP)
             return
@@ -369,6 +372,17 @@ class VoiceService:
                 del self.sessions[device.device_id]
             with contextlib.suppress(Exception):
                 await ws.close()
+
+    async def _take_hello(self, ws: WebSocket, device_id: int) -> None:
+        """Store the fcm token of the client's first frame when it is a hello; best effort, bounded wait."""
+        try:
+            msg = await asyncio.wait_for(ws.receive(), self.hello_timeout)
+        except (asyncio.TimeoutError, RuntimeError):
+            return
+        m = P.parse(msg.get("text") or "")  # parse() enforces the text frame cap; bytes or a disconnect parse to None
+        fcm = m.get("fcm_token") if m and m["type"] == "hello" else None
+        if isinstance(fcm, str) and fcm:
+            await asyncio.to_thread(self.devices.set_fcm, device_id, fcm)
 
     async def deliver(self, user_id: int, actions: list[dict]) -> bool:
         """Push to that user's most recently connected session; False when they have none (or it is gone)."""
