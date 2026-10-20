@@ -27,7 +27,7 @@ from jarvis.google.auth import PgTokenStore, build_service, bump_epoch, current_
 from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
-from jarvis.llm import LLMProvider
+from jarvis.llm import LLMProvider, creds_for
 from jarvis.memory import MemoryStore
 from jarvis.notes import NoteStore
 from jarvis.proactive.mailwatch import undo_event
@@ -42,7 +42,7 @@ from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.research_tools import register_research_tools
 from jarvis.tools.task_tools import register_task_tools
-from jarvis.users import ensure_owner
+from jarvis.users import SecretStore, ensure_owner
 from jarvis.web import WebSearch, DdgSearch
 from jarvis.voice.devices import Devices
 from jarvis.voice.stt import DeepgramSTT
@@ -103,7 +103,10 @@ async def lifespan(app: FastAPI):
         calendar = CalendarClient(svc("calendar", "v3"), s.timezone)
         tasks_client = TasksClient(svc("tasks", "v1"))
         gmail = GmailClient(svc("gmail", "v1"))
-        llm = LLMProvider(s, audit)
+        creds = creds_for(SecretStore(pool, s.fernet_key).all(owner_id), s)
+        if creds is None:
+            raise RuntimeError("The owner has no LLM key: set JARVIS_OPENROUTER_API_KEY (copied on first run) or store llm_key.")
+        llm = LLMProvider(creds, audit)
         devices = Devices(pool)
 
         async def undo(event_id: str) -> bool:
