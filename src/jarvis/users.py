@@ -1,10 +1,16 @@
+import argparse
+import copy
 import re
+import sys
 from dataclasses import dataclass
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import psycopg
 from cryptography.fernet import Fernet
 
-from jarvis.db import DATA_TABLES, finish_user_columns
+from jarvis.config import get_settings
+from jarvis.db import DATA_TABLES, finish_user_columns, init_schema, make_pool
+from jarvis.voice.devices import Devices
 
 MAX_USERS = 100
 SECRET_NAMES = ("llm_base_url", "llm_key", "model_fast", "model_strong", "deepgram_key", "tavily_key")
@@ -163,3 +169,80 @@ def ensure_owner(pool, s) -> int | None:
             if _table_exists(c, t):
                 c.execute(f"UPDATE {t} SET thread_id = %s WHERE thread_id = %s", (thread_id(uid), LEGACY_THREAD))
         return uid
+
+
+def run(argv: list[str], pool, s) -> str:
+    """The `users` CLI: returns the output text. Never prints secret values."""
+    p = argparse.ArgumentParser(prog="python -m jarvis.users")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    add = sub.add_parser("add")
+    add.add_argument("email")
+    add.add_argument("--owner", action="store_true")
+    add.add_argument("--tz", default=None, metavar="IANA")
+    sub.add_parser("list")
+    for name in ("disable", "enable", "delete"):
+        sub.add_parser(name).add_argument("email")
+    sub.choices["delete"].add_argument("--yes", action="store_true")
+    a = p.parse_args(argv)
+    users = UserStore(pool)
+    if a.cmd == "list":
+        with pool.connection() as c:
+            keyed = {r[0] for r in c.execute("SELECT user_id FROM user_secrets WHERE name = 'llm_key'").fetchall()}
+            made = dict(c.execute("SELECT id, created_at FROM users").fetchall())
+        return "\n".join(f"{u.id}\t{u.email}\t{'owner' if u.is_owner else '-'}\t{'disabled' if u.disabled else 'enabled'}"
+                         f"\tllm_key={'yes' if u.id in keyed else 'no'}\t{made[u.id]:%Y-%m-%d %H:%M}"
+                         for u in users.list()) or "No users."
+    try:
+        email = clean_email(a.email)
+        if a.cmd == "add":
+            tz = a.tz or s.timezone
+            ZoneInfo(tz)
+            if a.owner:
+                if any(u.is_owner for u in users.list()):
+                    return "Error: an owner already exists."
+                s = copy.copy(s)
+                s.owner_email = email
+                ensure_owner(pool, s)  # adopts rows from before users existed, as the server does on first run
+                u = users.by_email(email)
+                users.set_tz(u.id, tz)
+            else:
+                u = users.add(email, tz)
+            return f"Added {u.email} (id {u.id}{', owner' if u.is_owner else ''})."
+    except (ValueError, ZoneInfoNotFoundError) as e:
+        return f"Error: {e}"
+    u = users.by_email(email)
+    if u is None:
+        return f"No user {email}."
+    if a.cmd == "enable":
+        users.set_disabled(u.id, False)
+        return f"Enabled {email}."
+    if u.is_owner:
+        return f"Error: {email} is the owner; refusing to {a.cmd} the owner."
+    if a.cmd == "disable":
+        users.set_disabled(u.id, True)
+        return f"Disabled {email}; revoked {Devices(pool).revoke_user(u.id)} device(s)."
+    counts = {}
+    with pool.connection() as c:
+        for t in (*DATA_TABLES, "user_secrets"):
+            counts[t] = c.execute(f"SELECT count(*) FROM {t} WHERE user_id = %s", (u.id,)).fetchone()[0]
+        for t in CHECKPOINT_TABLES:
+            if _table_exists(c, t):
+                counts[t] = c.execute(f"SELECT count(*) FROM {t} WHERE thread_id = %s", (thread_id(u.id),)).fetchone()[0]
+    lines = "\n".join(f"  {t}: {n}" for t, n in counts.items())
+    if not a.yes:
+        return f"Would delete {email} and:\n{lines}\nNothing deleted; rerun with --yes."
+    users.delete(u.id)
+    return f"Deleted {email} and:\n{lines}"
+
+
+def main() -> None:
+    pool = make_pool(get_settings().database_url)
+    try:
+        init_schema(pool)
+        print(run(sys.argv[1:], pool, get_settings()))
+    finally:
+        pool.close()
+
+
+if __name__ == "__main__":
+    main()
