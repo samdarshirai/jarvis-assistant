@@ -271,6 +271,21 @@ def test_claim_failures_are_identical_401(pool):
     assert c.post("/auth/claim", json={"nonce": nonce, "verifier": VERIFIER, "code": code}).status_code == 200
 
 
+def test_start_refuses_503_busy_when_too_many_live_attempts(pool):
+    c = client(pool, None)
+    with pool.connection() as conn:  # 1000 live attempts (a flood) plus one expired, which the purge removes
+        conn.execute("INSERT INTO auth_attempts (nonce, challenge) SELECT 'n' || i, 'c' FROM generate_series(1, 1000) i")
+        conn.execute("INSERT INTO auth_attempts (nonce, challenge, created_at) VALUES ('old', 'c', now() - interval '1 hour')")
+    r = c.post("/auth/start", json={"challenge": challenge()})
+    assert r.status_code == 503 and r.json() == {"error": "busy"}
+    assert counts(pool)["auth_attempts"] == 1000  # nothing written, the expired one purged
+    with pool.connection() as conn:
+        conn.execute("DELETE FROM auth_attempts WHERE nonce = 'n1'")
+        idx = conn.execute("SELECT indexdef FROM pg_indexes WHERE tablename = 'auth_attempts'").fetchall()
+    assert c.post("/auth/start", json={"challenge": challenge()}).status_code == 200
+    assert any("(created_at)" in d for (d,) in idx)
+
+
 def test_start_rejects_a_malformed_challenge(pool):
     assert client(pool, None).post("/auth/start", json={"challenge": "short"}).status_code == 422
 

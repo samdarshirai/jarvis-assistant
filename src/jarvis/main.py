@@ -23,7 +23,7 @@ from jarvis.keys import Keys
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
 from jarvis.proactive.store import purge_all as purge_proactive
-from jarvis.signin import BadState, Refused, SignIn
+from jarvis.signin import BadState, Busy, Refused, SignIn
 from jarvis.tenant import Tenants
 from jarvis.timeutil import now_local
 from jarvis.users import UserStore, ensure_owner
@@ -242,7 +242,10 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         svc, err = signin_or_503()
         if err:
             return err
-        nonce, url = await asyncio.to_thread(svc.start, body.challenge)
+        try:
+            nonce, url = await asyncio.to_thread(svc.start, body.challenge)
+        except Busy:
+            return JSONResponse({"error": "busy"}, status_code=503)
         return {"nonce": nonce, "url": url}
 
     @app.get("/auth/callback", response_class=HTMLResponse)

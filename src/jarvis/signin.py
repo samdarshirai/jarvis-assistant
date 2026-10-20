@@ -16,6 +16,11 @@ from jarvis.google.auth import PgTokenStore, save_credentials
 from jarvis.users import SecretStore
 
 TTL = 600  # seconds from start to claim
+MAX_LIVE_ATTEMPTS = 1000  # a flood of /auth/start beyond this is refused instead of growing the table
+
+
+class Busy(Exception):
+    """Too many sign-ins in progress."""
 
 
 class BadState(Exception):
@@ -49,7 +54,11 @@ class SignIn:
         nonce = secrets.token_urlsafe(32)
         with self.pool.connection() as c:
             c.execute("DELETE FROM auth_attempts WHERE created_at <= now() - make_interval(secs => %s)", (TTL,))
-            c.execute("INSERT INTO auth_attempts (nonce, challenge) VALUES (%s, %s)", (nonce, challenge))
+            busy = c.execute("SELECT count(*) FROM auth_attempts").fetchone()[0] >= MAX_LIVE_ATTEMPTS  # all live now
+            if not busy:  # raised after the block, so the purge still commits
+                c.execute("INSERT INTO auth_attempts (nonce, challenge) VALUES (%s, %s)", (nonce, challenge))
+        if busy:
+            raise Busy()
         return nonce, web_auth.start_url(self.client_secrets, self.redirect_uri, nonce)
 
     def finish(self, nonce: str, code: str) -> str:

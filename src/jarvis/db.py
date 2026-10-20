@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
   finish_code_hash TEXT  -- sha256 of the code the callback put in the deep link; the claim must show it
 );
 ALTER TABLE auth_attempts ADD COLUMN IF NOT EXISTS finish_code_hash TEXT;
+CREATE INDEX IF NOT EXISTS auth_attempts_created_at_idx ON auth_attempts (created_at);  -- the purge on every start
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,  -- NULL for system rows
