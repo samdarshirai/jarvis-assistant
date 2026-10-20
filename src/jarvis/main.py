@@ -19,6 +19,7 @@ from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
+from jarvis.keys import Keys
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
 from jarvis.proactive.store import purge_all as purge_proactive
@@ -74,6 +75,7 @@ async def lifespan(app: FastAPI):
                 # The app and dashboard look the caller's runtime up per request (auth_runtime), not the owner's.
                 app.state.dashboard = DashboardService(devices, tenants, weather_city=s.weather_city)
                 app.state.app_api = app_api = AppService(devices, tenants)
+                app.state.keys = Keys(devices, tenants)
                 tg = TelegramChannel(tenants, owner_id, s.telegram_owner_chat_id,
                                      deliver_actions=partial(voice.deliver, owner_id), undo=undo).build(s.telegram_bot_token)
                 try:
@@ -101,6 +103,7 @@ async def lifespan(app: FastAPI):
                     app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
                     app.state.dashboard = None
                     app.state.app_api = None
+                    app.state.keys = None
                     app.state.signin = None
                     app.state.tenants = None
                     try:
@@ -143,6 +146,25 @@ class ChatIn(BaseModel):
 class ConfirmIn(BaseModel):
     interrupt_id: str
     decision: Literal["yes", "no"]
+
+
+Secret = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]  # pasted keys carry newlines
+Models = Annotated[str, StringConstraints(max_length=500)]
+
+
+class LLMIn(BaseModel):
+    base_url: Annotated[str, StringConstraints(max_length=500)]
+    api_key: Secret
+    model_fast: Models = ""
+    model_strong: Models = ""
+
+
+class KeyIn(BaseModel):
+    api_key: Secret
+
+
+class MeIn(BaseModel):
+    tz: Annotated[str, StringConstraints(max_length=100)]
 
 
 class StartIn(BaseModel):
@@ -194,10 +216,10 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     async def bad_request(request: Request, exc: RequestValidationError):
         return JSONResponse({"error": "bad_request"}, status_code=422)
 
-    async def guarded(request: Request):
-        """(service, caller's runtime, error response): 503 until the lifespan built it, 401 on a bad device token
-        or a disabled user."""
-        svc = getattr(app.state, "app_api", None)
+    async def guarded(request: Request, name: str = "app_api"):
+        """(service app.state.<name>, caller's runtime, error response): 503 until the lifespan built it, 401 on a bad
+        device token or a disabled user."""
+        svc = getattr(app.state, name, None)
         if svc is None:
             return None, None, JSONResponse({"error": "unavailable"}, status_code=503)
         rt = await svc.authenticate(request.headers.get("authorization", ""))
@@ -313,6 +335,31 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     async def chat_confirm(request: Request, body: ConfirmIn):
         svc, rt, err = await guarded(request)
         return err or llm_or_409(rt) or await svc.confirm(rt, body.interrupt_id, body.decision)
+
+    @app.get("/me")
+    async def me(request: Request):
+        svc, rt, err = await guarded(request, "keys")
+        return err or await svc.me(rt)
+
+    @app.put("/me")
+    async def put_me(request: Request, body: MeIn):
+        svc, rt, err = await guarded(request, "keys")
+        return err or await svc.set_tz(rt, body.tz)
+
+    @app.put("/settings/llm")
+    async def put_llm(request: Request, body: LLMIn):
+        svc, rt, err = await guarded(request, "keys")
+        return err or await svc.set_llm(rt, body.base_url, body.api_key, body.model_fast, body.model_strong)
+
+    @app.put("/settings/{which}")
+    async def put_key(request: Request, which: Literal["deepgram", "tavily"], body: KeyIn):
+        svc, rt, err = await guarded(request, "keys")
+        return err or await svc.set_key(rt, which, body.api_key)
+
+    @app.delete("/settings/{which}")
+    async def delete_key(request: Request, which: Literal["deepgram", "tavily"]):
+        svc, rt, err = await guarded(request, "keys")
+        return err or await svc.delete_key(rt, which)
 
     @app.websocket("/voice")
     async def voice(ws: WebSocket):
