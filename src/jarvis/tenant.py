@@ -178,8 +178,11 @@ async def auth_runtime(devices, tenants: Tenants, authorization: str) -> UserRun
     auth = await asyncio.to_thread(devices.verify, token)
     if auth is None:
         return None
+    # The cached runtime's user row goes stale when the users CLI (another process) disables or re-enables someone.
+    user = await asyncio.to_thread(UserStore(tenants.pool).get, auth.user_id)
+    if user is None or user.disabled:
+        return None
     try:
-        rt = await tenants.get(auth.user_id)
+        return await tenants.get(auth.user_id)
     except UnknownUser:
         return None
-    return None if rt.user.disabled else rt

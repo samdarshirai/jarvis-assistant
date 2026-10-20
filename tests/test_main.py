@@ -314,6 +314,8 @@ async def test_lifespan_refuses_voice_during_teardown_and_drains_abandoned_steps
 
     async with lifespan(app):
         assert app.state.voice is not None
+        # the app and dashboard look the caller's runtime up per request instead of holding the owner's
+        assert app.state.app_api.tenants is app.state.dashboard.tenants is FakeTenants.made[0]
         t = asyncio.create_task(abandoned_step())
         app.state.voice.steps.add(t)
     assert app.state.voice is None  # new connections get 1013 while the app shuts down
@@ -366,12 +368,12 @@ class _Dash:
     def __init__(self, ok=True):
         self.ok, self.seen = ok, None
 
-    async def authorized(self, header):
+    async def authenticate(self, header):
         self.seen = header
-        return self.ok
+        return "rt-a" if self.ok else None
 
-    async def payload(self, coords=None):
-        return {"events": [], "reauth": False}
+    async def payload(self, rt, coords=None):
+        return {"events": [], "reauth": False, "rt": rt}
 
 
 def test_dashboard_is_503_until_the_service_is_built():
@@ -389,7 +391,7 @@ def test_dashboard_returns_the_payload_for_a_paired_device():
     app = create_app(with_lifespan=False)
     dash = app.state.dashboard = _Dash()
     r = TestClient(app).get("/dashboard", headers={"Authorization": "Bearer good"})
-    assert r.status_code == 200 and r.json() == {"events": [], "reauth": False}
+    assert r.status_code == 200 and r.json() == {"events": [], "reauth": False, "rt": "rt-a"}
     assert dash.seen == "Bearer good"
 
 

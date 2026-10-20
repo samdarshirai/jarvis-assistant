@@ -91,7 +91,6 @@ def guarded_http_client(*, resolve=socket.getaddrinfo, transport: httpx.AsyncBas
 class AuditCallback(BaseCallbackHandler):
     def __init__(self, audit, secret: str = ""):
         self.audit = audit
-        self.secret = secret  # redacted from error text before it is recorded
         self._t0: dict = {}
 
     def on_chat_model_start(self, serialized, messages, *, run_id, **kwargs):
@@ -110,8 +109,41 @@ class AuditCallback(BaseCallbackHandler):
                           cost_usd=usage.get("cost"))
 
     def on_llm_error(self, error, *, run_id, **kwargs):
-        text = str(error).replace(self.secret, "***") if self.secret else str(error)
+        text = str(_provider_error(error))
         self.audit.record("llm", "error", result={"error": text}, latency_ms=self._latency(run_id))
+
+
+class LLMProviderError(RuntimeError):
+    """Only a fixed category and HTTP status may escape the provider boundary."""
+
+    def __init__(self, status_code: int | None):
+        self.status_code = status_code
+        self.code = {401: "rejected_key", 403: "rejected_key", 402: "out_of_credit",
+                     429: "rate_limited"}.get(status_code, "provider_failed")
+        super().__init__(self.code if status_code is None else f"{self.code} (HTTP {status_code})")
+
+
+def _provider_error(error: Exception) -> LLMProviderError:
+    status = getattr(error, "status_code", None)
+    return LLMProviderError(status if type(status) is int and 100 <= status <= 599 else None)
+
+
+class _SafeChatOpenAI(ChatOpenAI):
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        try:
+            return super()._generate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        except Exception as error:
+            safe = _provider_error(error)
+        raise safe
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        try:
+            return await super()._agenerate(messages, stop=stop, run_manager=run_manager, **kwargs)
+        except Exception as error:
+            safe = _provider_error(error)
+        # Outside the handler: neither __context__ nor __cause__ retains a body, request or secret.
+        # Sanitize before LangChain callbacks and LangGraph checkpoint error writes see the failure.
+        raise safe
 
 
 class LLMProvider:
@@ -129,8 +161,8 @@ class LLMProvider:
             extra = {"provider": provider, "usage": {"include": True}}
         # ponytail: only the async path is guarded (every caller uses ainvoke); pass a guarded http_client if sync calls appear.
         return [
-            ChatOpenAI(model=m, api_key=self.creds.api_key, base_url=self.creds.base_url, temperature=0,
-                       callbacks=[self.cb], extra_body=extra, http_async_client=self.http)
+            _SafeChatOpenAI(model=m, api_key=self.creds.api_key, base_url=self.creds.base_url, temperature=0,
+                            callbacks=[self.cb], extra_body=extra, http_async_client=self.http)
             for m in {"fast": self.creds.fast, "strong": self.creds.strong}[tier]
         ]
 
