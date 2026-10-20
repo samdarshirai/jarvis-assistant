@@ -59,6 +59,8 @@ Hardening (not done): `/auth/start` has no rate limit, so add a per-IP limit at 
 
 ## Every deploy
 
+`pg_dump` before deploy; the schema upgrade is one-way (NOT NULL user_id, composite keys); the old image cannot write after it. So a rollback across the multi-user upgrade means restoring that dump, not just redeploying the old image.
+
 ```
 git push origin main
 ```
