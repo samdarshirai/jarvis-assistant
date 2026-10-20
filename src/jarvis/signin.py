@@ -1,5 +1,7 @@
 """Sign in with Google, then a PKCE-style claim: the app sends sha256(verifier) at start and the verifier at claim,
-so only the app that started the sign-in can collect the device token. The token never sits in a URL."""
+so only the app that started the sign-in can collect the device token. The token never sits in a URL.
+The callback also puts a one-time code in the deep link, so only the browser that approved at Google can complete
+the claim: someone who starts a sign-in and gets another person to approve it cannot collect that person's token."""
 import base64
 import hashlib
 import hmac
@@ -24,9 +26,13 @@ class Refused(Exception):
     """The Google account may not sign in: not on the list, unverified email, disabled or a different Google account."""
 
 
+def _hash(s: str) -> str:
+    return hashlib.sha256(s.encode()).hexdigest()
+
+
 def _young(c, nonce: str, finished: bool):
     done = "IS NOT NULL" if finished else "IS NULL"
-    return c.execute(f"SELECT challenge, created_at, device_token_enc FROM auth_attempts WHERE nonce = %s"
+    return c.execute(f"SELECT challenge, created_at, device_token_enc, finish_code_hash FROM auth_attempts WHERE nonce = %s"
                      f" AND device_token_enc {done} AND created_at > now() - make_interval(secs => %s) FOR UPDATE",
                      (nonce, TTL)).fetchone()
 
@@ -53,32 +59,35 @@ class SignIn:
             if row is None:
                 raise BadState()
             c.execute("DELETE FROM auth_attempts WHERE nonce = %s", (nonce,))
-        challenge, created_at, _ = row
+        challenge, created_at = row[:2]
         creds, claims = self.exchange(code)
         user = self.users.by_email(claims.get("email") or "")
-        if (user is None or user.disabled or claims.get("email_verified") is not True or not claims.get("sub")
-                or user.google_sub not in (None, claims["sub"])):
+        if user is None or user.disabled or claims.get("email_verified") is not True or not claims.get("sub"):
             raise Refused()
-        if user.google_sub is None:
-            try:
-                self.users.set_sub(user.id, claims["sub"])
-            except psycopg.errors.UniqueViolation:  # this Google account already belongs to another user
-                raise Refused() from None
+        try:
+            if not self.users.set_sub(user.id, claims["sub"]):  # a different Google account owns this user
+                raise Refused()
+        except psycopg.errors.UniqueViolation:  # this Google account already belongs to another user
+            raise Refused() from None
         save_credentials(PgTokenStore(self.pool, user.id), self.key, creds)
         _, token = self.devices.create(user.id)
+        code = secrets.token_urlsafe(32)
         with self.pool.connection() as c:
-            c.execute("INSERT INTO auth_attempts (nonce, challenge, created_at, device_token_enc) VALUES (%s, %s, %s, %s)",
-                      (nonce, challenge, created_at, Fernet(self.key).encrypt(token.encode())))
+            c.execute("INSERT INTO auth_attempts (nonce, challenge, created_at, device_token_enc, finish_code_hash)"
+                      " VALUES (%s, %s, %s, %s, %s)",
+                      (nonce, challenge, created_at, Fernet(self.key).encrypt(token.encode()), _hash(code)))
         self.invalidate(user.id)  # new Google credentials: the next get() rebuilds the user's clients
-        return f"jarvis://signin?nonce={nonce}"
+        return f"jarvis://signin?nonce={nonce}&code={code}"
 
-    def claim(self, nonce: str, verifier: str) -> str | None:
-        """The device token, once; None for an unknown, unfinished, expired or used attempt or a wrong verifier."""
+    def claim(self, nonce: str, verifier: str, code: str) -> str | None:
+        """The device token, once; None for an unknown, unfinished, expired or used attempt, a wrong verifier
+        or a wrong finish code."""
         answer = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         with self.pool.connection() as c:
             row = _young(c, nonce, finished=True)
-            if row is None or not hmac.compare_digest(row[0], answer):
-                return None  # a wrong verifier keeps the attempt: guessing 256 bits is hopeless, burning it is a DoS
+            if row is None or not (hmac.compare_digest(row[0], answer) & hmac.compare_digest(row[3], _hash(code))):
+                # a wrong verifier or code keeps the attempt: guessing 256 bits is hopeless, burning it is a DoS
+                return None
             c.execute("DELETE FROM auth_attempts WHERE nonce = %s", (nonce,))
         return Fernet(self.key).decrypt(bytes(row[2])).decode()
 

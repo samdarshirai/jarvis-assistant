@@ -156,7 +156,8 @@ class StartIn(BaseModel):
 
 class ClaimIn(BaseModel):
     nonce: Annotated[str, StringConstraints(max_length=100)]
-    verifier: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+    verifier: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._~-]{43,128}$")]  # RFC 7636 code verifier
+    code: Annotated[str, StringConstraints(max_length=100)]
 
 
 def _page(message: str, status: int, link: str = "") -> HTMLResponse:
@@ -244,7 +245,7 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         svc, err = signin_or_503()
         if err:
             return err
-        token = await asyncio.to_thread(svc.claim, body.nonce, body.verifier)
+        token = await asyncio.to_thread(svc.claim, body.nonce, body.verifier, body.code)
         if token is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return {"token": token, "needs_setup": await asyncio.to_thread(svc.needs_setup, token)}

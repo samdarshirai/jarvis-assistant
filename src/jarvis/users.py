@@ -80,8 +80,11 @@ class UserStore:
         with self.pool.connection() as c:
             c.execute(f"UPDATE users SET {column} = %s WHERE id = %s", (value, user_id))
 
-    def set_sub(self, user_id: int, sub: str) -> None:
-        self._set(user_id, "google_sub", sub)
+    def set_sub(self, user_id: int, sub: str) -> bool:
+        """Binds the Google account once: False (nothing changed) when a different sub is already stored."""
+        with self.pool.connection() as c:
+            return c.execute("UPDATE users SET google_sub = %s WHERE id = %s AND (google_sub IS NULL OR google_sub = %s)",
+                             (sub, user_id, sub)).rowcount > 0
 
     def set_tz(self, user_id: int, tz: str) -> None:
         self._set(user_id, "tz", tz)

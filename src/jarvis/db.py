@@ -25,8 +25,10 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
   nonce TEXT PRIMARY KEY,
   challenge TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  device_token_enc BYTEA  -- set by the Google callback, handed to the app once by the claim
+  device_token_enc BYTEA,  -- set by the Google callback, handed to the app once by the claim
+  finish_code_hash TEXT  -- sha256 of the code the callback put in the deep link; the claim must show it
 );
+ALTER TABLE auth_attempts ADD COLUMN IF NOT EXISTS finish_code_hash TEXT;
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,  -- NULL for system rows
