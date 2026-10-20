@@ -42,15 +42,15 @@ async def test_both_sends_each_channel_even_if_telegram_fails():
 
 async def test_make_notifier_sends_to_the_owner_chat():
     bot = SimpleNamespace(send_message=AsyncMock())
-    n = make_notifier(bot, 42, "", SimpleNamespace(fcm_tokens=lambda: ["t"]))
+    n = make_notifier(bot, 42, "", SimpleNamespace(fcm_tokens=lambda uid: ["t"]), 1, True)
     await n.telegram("hi", undo_event_id="abc")
     args, kwargs = bot.send_message.call_args
     assert args == (42, "hi") and kwargs["reply_markup"].inline_keyboard[0][0].callback_data == "undo:abc"
 
 
 async def test_push_is_a_noop_without_credentials_or_devices():
-    assert await make_notifier(SimpleNamespace(), 1, "", SimpleNamespace(fcm_tokens=lambda: ["t"])).push("x") == 0
-    assert await make_notifier(SimpleNamespace(), 1, "creds.json", SimpleNamespace(fcm_tokens=lambda: [])).push("x") == 0
+    assert await make_notifier(SimpleNamespace(), 1, "", SimpleNamespace(fcm_tokens=lambda uid: ["t"]), 1, True).push("x") == 0
+    assert await make_notifier(SimpleNamespace(), 1, "creds.json", SimpleNamespace(fcm_tokens=lambda uid: []), 1, True).push("x") == 0
 
 
 async def test_push_sends_to_every_device_token(monkeypatch):
@@ -62,6 +62,14 @@ async def test_push_sends_to_every_device_token(monkeypatch):
         return len(tokens)
 
     monkeypatch.setattr("jarvis.proactive.notify.send_push", fake_send)
-    n = make_notifier(SimpleNamespace(), 1, "creds.json", SimpleNamespace(fcm_tokens=lambda: ["a", "b"]))
+    n = make_notifier(SimpleNamespace(), 1, "creds.json", SimpleNamespace(fcm_tokens=lambda uid: {7: ["a", "b"]}[uid]), 7, False)
     assert await n.push("hello") == 2
     assert seen == {"project": "proj", "access": "AT", "tokens": ["a", "b"], "text": "hello"}
+
+
+async def test_friend_notice_is_push_only():
+    bot = SimpleNamespace(send_message=AsyncMock())
+    n = make_notifier(bot, 42, "", SimpleNamespace(fcm_tokens=lambda uid: []), 7, False)
+    await n.telegram("hi", undo_event_id="abc")
+    await n.both("brief")
+    bot.send_message.assert_not_called()

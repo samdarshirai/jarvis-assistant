@@ -12,7 +12,7 @@ TELEGRAM_MAX = 4000  # Telegram refuses 4096+; keep headroom
 
 
 class Notifier:
-    """Owner-only outbound messages for scheduled jobs. Both senders are injected so jobs test without a network."""
+    """One user's outbound messages for scheduled jobs. Both senders are injected so jobs test without a network."""
 
     def __init__(self, send_message, send_push_text):
         self._send_message = send_message
@@ -35,14 +35,16 @@ class Notifier:
                 log.exception("proactive delivery failed")
 
 
-def make_notifier(bot, chat_id: int, fcm_credentials_path: str, devices) -> Notifier:
+def make_notifier(bot, chat_id: int, fcm_credentials_path: str, devices, user_id: int, telegram: bool) -> Notifier:
+    """Push goes to the user's own devices; Telegram is the owner's chat only, a no-op for everyone else."""
     async def send_message(text, markup):
-        await bot.send_message(chat_id, text, reply_markup=markup)
+        if telegram:
+            await bot.send_message(chat_id, text, reply_markup=markup)
 
     async def send_push_text(text) -> int:
         if not fcm_credentials_path:
             return 0
-        tokens = await asyncio.to_thread(devices.fcm_tokens)
+        tokens = await asyncio.to_thread(devices.fcm_tokens, user_id)
         if not tokens:
             return 0
 
