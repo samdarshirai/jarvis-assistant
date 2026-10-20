@@ -7,9 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="JARVIS_", extra="ignore")
 
-    openrouter_api_key: str
-    models_fast: str
-    models_strong: str
+    owner_email: str = ""  # Google email of user #1; required once to adopt data from before users existed
+    openrouter_api_key: str = ""  # copied into the owner's secrets on first run; users bring their own keys
+    models_fast: str = ""  # server default model ids for users who set none
+    models_strong: str = ""
     database_url: str
     telegram_bot_token: str
     telegram_owner_chat_id: int
