@@ -5,6 +5,7 @@ from fastapi import FastAPI, WebSocket
 from langchain_core.messages import AIMessage
 from starlette.websockets import WebSocketDisconnect
 
+from jarvis.voice.devices import DeviceAuth
 from jarvis.voice.stt import SttEvent
 from jarvis.voice.ws import VoiceService
 from tests.fakes import FakeSTT, FakeTTS
@@ -20,7 +21,7 @@ class FakeDevices:
         self.fcm: dict[int, str] = {}
 
     def verify(self, token):
-        return 1 if token == "good" else None
+        return DeviceAuth(1, 1) if token == "good" else None
 
     def set_fcm(self, device_id, token):
         self.fcm[device_id] = token

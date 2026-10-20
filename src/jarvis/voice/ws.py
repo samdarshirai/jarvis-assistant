@@ -309,8 +309,8 @@ class VoiceService:
             return
         auth = ws.headers.get("authorization", "")
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        device_id = await asyncio.to_thread(self.devices.verify, token) if token else None
-        if device_id is None:
+        device = await asyncio.to_thread(self.devices.verify, token) if token else None
+        if device is None:
             await ws.close(code=P.CLOSE_UNAUTHORIZED)  # before accept: no audio is ever read from a stranger
             return
         await ws.accept()
@@ -321,7 +321,7 @@ class VoiceService:
             await ws.send_text(P.frame("error", message="Speech recognition is unavailable."))
             await ws.close(code=P.CLOSE_UPSTREAM)
             return
-        session = VoiceSession(ws, self.graph, self.devices, device_id, stream, self.tts, self.lock, self.steps)
+        session = VoiceSession(ws, self.graph, self.devices, device.device_id, stream, self.tts, self.lock, self.steps)
         old, self.current = self.current, session
         if old:
             await old.close(P.CLOSE_REPLACED)

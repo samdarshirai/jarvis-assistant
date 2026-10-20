@@ -5,6 +5,7 @@ import httpx
 
 from jarvis.config import get_settings
 from jarvis.db import init_schema, make_pool
+from jarvis.users import ensure_owner
 from jarvis.voice.devices import Devices
 from jarvis.voice.protocol import MAX_SPEAK_CHARS
 
@@ -54,7 +55,8 @@ def main() -> None:
     pool = make_pool(s.database_url)
     try:
         init_schema(pool)
-        tokens = Devices(pool).fcm_tokens()
+        owner = ensure_owner(pool, s)  # pushes go to the owner's phones until per-user delivery exists
+        tokens = Devices(pool).fcm_tokens(owner) if owner else []
     finally:
         pool.close()
     project, access = fcm_access_token(s.fcm_credentials_path)
