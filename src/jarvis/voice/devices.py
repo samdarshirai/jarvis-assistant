@@ -42,8 +42,11 @@ class Devices:
         return found
 
     def set_fcm(self, device_id: int, fcm_token: str) -> None:
-        with self.pool.connection() as c:  # one phone, one device row: a phone re-signed in as another user moves
-            c.execute("UPDATE devices SET fcm_token = NULL WHERE fcm_token = %s AND id <> %s", (fcm_token, device_id))
+        # one phone, one row per user: a re-sign-in moves the token off the user's old row. Other users' rows are
+        # never touched, so replaying someone's token can't remove their push registration.
+        with self.pool.connection() as c:
+            c.execute("UPDATE devices SET fcm_token = NULL WHERE fcm_token = %s AND id <> %s"
+                      " AND user_id = (SELECT user_id FROM devices WHERE id = %s)", (fcm_token, device_id, device_id))
             c.execute("UPDATE devices SET fcm_token = %s WHERE id = %s", (fcm_token, device_id))
 
     def fcm_tokens(self, user_id: int) -> list[str]:

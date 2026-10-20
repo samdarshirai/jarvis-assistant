@@ -62,15 +62,24 @@ def test_fcm_tokens_only_for_that_user(pool, uids):
 
 
 def test_fcm_token_moves_with_the_phone(pool, uids):
-    # the same phone signed in as another user: the previous device row must stop receiving that user's pushes
+    # the same phone re-signed in (a new device row for the same user): the old row stops getting the pushes twice
+    d = Devices(pool)
+    old, _ = d.create(uids[0])
+    new, _ = d.create(uids[0])
+    d.set_fcm(old, "phone-1")
+    d.set_fcm(new, "phone-1")
+    assert d.fcm_tokens(uids[0]) == ["phone-1"]
+    d.set_fcm(new, "phone-1")  # re-saving on the same device keeps it
+    assert d.fcm_tokens(uids[0]) == ["phone-1"]
+
+
+def test_fcm_token_replayed_by_another_user_never_clears_theirs(pool, uids):
     d = Devices(pool)
     da, _ = d.create(uids[0])
     db, _ = d.create(uids[1])
-    d.set_fcm(da, "phone-1")
-    d.set_fcm(db, "phone-1")
-    assert (d.fcm_tokens(uids[0]), d.fcm_tokens(uids[1])) == ([], ["phone-1"])
-    d.set_fcm(db, "phone-1")  # re-saving on the same device keeps it
-    assert d.fcm_tokens(uids[1]) == ["phone-1"]
+    d.set_fcm(da, "phone-a")
+    d.set_fcm(db, "phone-a")  # B replays A's token: B's row gets it, A's registration stays
+    assert (d.fcm_tokens(uids[0]), d.fcm_tokens(uids[1])) == (["phone-a"], ["phone-a"])
 
 
 def test_revoke(pool, uids):
