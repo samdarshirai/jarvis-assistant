@@ -2,8 +2,6 @@ import asyncio
 import html
 import logging
 from contextlib import asynccontextmanager
-from functools import partial
-from types import SimpleNamespace
 
 from datetime import date
 from typing import Annotated, Literal
@@ -90,9 +88,7 @@ async def lifespan(app: FastAPI):
                 try:
                     await tg.start()
                     await tg.updater.start_polling()
-                    owner_devices = SimpleNamespace(fcm_tokens=partial(devices.fcm_tokens, owner_id))  # until per-user notifiers
-                    sched = start_proactive(s, owner.proactive, owner.calendar, owner.tasks, owner.gmail, owner.llm,
-                                            owner.audit, tg.bot, owner_devices)
+                    sched = start_proactive(s, tenants, UserStore(pool), tg.bot, devices)
                     try:
                         yield
                     finally:

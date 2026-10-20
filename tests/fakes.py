@@ -9,12 +9,14 @@ from jarvis.voice.stt import SttEvent  # noqa: F401  (re-exported for tests)
 
 
 class FakeChat(BaseChatModel):
-    script: list[AIMessage]
+    script: list  # AIMessage replies, or exceptions to raise
     i: int = 0
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs):
         msg = self.script[self.i]
         self.i += 1
+        if isinstance(msg, Exception):  # a scripted provider failure
+            raise msg
         return ChatResult(generations=[ChatGeneration(message=msg)])
 
     @property
@@ -180,6 +182,30 @@ class FakeNotifier:
         self.calls.append(("push", text, None))
         return 1
 
-    async def both(self, text):
-        await self.telegram(text)
+    async def both(self, text, undo_event_id=None):
+        await self.telegram(text, undo_event_id)
         await self.push(text)
+
+
+class FakeUsers:
+    """UserStore twin: enabled() is re-read on every tick, like the real one."""
+
+    def __init__(self, users):
+        self.users = list(users)
+
+    def enabled(self):
+        return [u for u in self.users if not u.disabled]
+
+
+class FakeTenants:
+    """Tenants twin holding prebuilt runtimes; an unknown id raises like Tenants.get does."""
+
+    def __init__(self, runtimes: dict):
+        self.runtimes = runtimes
+
+    async def get(self, user_id):
+        from jarvis.tenant import UnknownUser
+
+        if user_id not in self.runtimes:
+            raise UnknownUser(user_id)
+        return self.runtimes[user_id]

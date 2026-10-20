@@ -56,7 +56,7 @@ async def sweep(calendar, store, notifier, tz: str, lead_minutes: int, now: date
     # ponytail: claim before sending = at most once; a failed send is not retried (notifier.both logs it)
     for a, b in find_conflicts(events, tz):
         if await asyncio.to_thread(store.claim_alert, conflict_key(a, b)):
-            await notifier.telegram(conflict_text(a, b, tz))
+            await notifier.both(conflict_text(a, b, tz))
     for e in leave_now_due(events, now, lead_minutes, tz):
         if await asyncio.to_thread(store.claim_alert, leave_key(e)):
             await notifier.both(leave_text(e, tz))

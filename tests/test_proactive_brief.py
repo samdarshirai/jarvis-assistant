@@ -77,11 +77,13 @@ async def test_gather_reads_today_and_filters_overdue_tasks():
     assert gmail.query == ("is:unread is:important newer_than:1d", 5)
 
 
-async def test_a_failing_source_becomes_none_and_the_others_survive():
-    facts, reauth = await gather(Cal(exc=RuntimeError("boom")), Tasks(), Gmail(), TZ, NOW)
+async def test_a_failing_source_becomes_none_and_the_others_survive(caplog):
+    facts, reauth = await gather(Cal(exc=RuntimeError("sk-source-sentinel")), Tasks(), Gmail(), TZ, NOW)
     assert facts["events"] is None and facts["overdue"] and facts["mail"] and reauth is False
     facts, reauth = await gather(Cal(), Tasks(exc=ReauthRequired("x")), Gmail(), TZ, NOW)
     assert facts["overdue"] is None and reauth is True
+    assert "RuntimeError" in caplog.text and "sk-source-sentinel" not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 def test_render_facts_covers_every_state():

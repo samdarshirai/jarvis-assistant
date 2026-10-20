@@ -164,7 +164,8 @@ async def test_booking_email_creates_one_event_notifies_with_undo_and_audits():
         event_id=eid, summary="Flight LH123 to Berlin", start=datetime(2026, 10, 9, 8, 10, tzinfo=B),
         end=datetime(2026, 10, 9, 10, 0, tzinfo=B), location="FRA", reminders=[1440, 180], message_id="m1",
         description="Added by Jarvis from an email: Your flight LH123 is booked")]
-    [(kind, text, undo)] = w.notifier.calls
+    [(kind, text, undo), (push_kind, push_text, push_undo)] = w.notifier.calls
+    assert (push_kind, push_text, push_undo) == ("push", text, None)
     assert kind == "telegram" and undo == eid and "Flight LH123 to Berlin" in text
     assert w.store.mail["m1"] == ("created", eid) and w.store.is_auto_event(eid)
     assert [r["name"] for r in w.audit.records] == ["auto_event_attempt", "auto_event_created"]
@@ -175,7 +176,7 @@ async def test_a_handled_message_is_never_processed_again():
     w = make(script=[FLIGHT])
     await w.job.run_once(NOW)
     await w.job.run_once(NOW + timedelta(minutes=5))  # script is exhausted: a second LLM call would error
-    assert len(w.cal.created) == 1 and len(w.notifier.calls) == 1 and w.gmail.read == ["m1"]
+    assert len(w.cal.created) == 1 and len(w.notifier.calls) == 2 and w.gmail.read == ["m1"]
 
 
 async def test_event_already_on_the_calendar_is_a_silent_duplicate():
@@ -198,7 +199,7 @@ async def test_409_for_our_own_earlier_write_is_treated_as_created():
     w.store.add_auto_event(event_id_for("m1"), "m1")
     await w.job.run_once(NOW)
     eid = event_id_for("m1")
-    assert w.store.mail["m1"] == ("created", eid) and [c[2] for c in w.notifier.calls] == [eid]
+    assert w.store.mail["m1"] == ("created", eid) and [c[2] for c in w.notifier.calls] == [eid, None]
     assert "auto_event_created" in [r["name"] for r in w.audit.records]
 
 
@@ -207,18 +208,18 @@ async def test_existing_event_made_from_this_mail_is_treated_as_created():
     await w.job.run_once(NOW)
     eid = event_id_for("m1")
     assert w.cal.created == [] and w.store.mail["m1"] == ("created", eid) and w.store.is_auto_event(eid)
-    assert [c[2] for c in w.notifier.calls] == [eid]
+    assert [c[2] for c in w.notifier.calls] == [eid, None]
     assert [r["name"] for r in w.audit.records] == ["auto_event_created"]
 
 
-@pytest.mark.parametrize("lookup,outcome,whitelisted,notices", [("exists", "created", True, 1), ("404", "error", False, 0),
+@pytest.mark.parametrize("lookup,outcome,whitelisted,notices", [("exists", "created", True, 2), ("404", "error", False, 0),
                                                                     ("500", "error", True, 0)])
-async def test_create_failure_leaves_an_audit_trail(lookup, outcome, whitelisted, notices):
+async def test_create_failure_leaves_an_audit_trail(lookup, outcome, whitelisted, notices, caplog):
     w = make(script=[FLIGHT])
     w.cal.lookup = lookup
 
     def boom(*a, **k):
-        raise TimeoutError("response lost")
+        raise TimeoutError("sk-create-sentinel")
     w.cal.create_auto_event = boom
     await w.job.run_once(NOW)
     eid = event_id_for("m1")
@@ -231,6 +232,29 @@ async def test_create_failure_leaves_an_audit_trail(lookup, outcome, whitelisted
         assert all(r["args"].get("event_id") == eid for r in w.audit.records[:2])
     assert w.store.is_auto_event(eid) is whitelisted and w.store.mail["m1"][0] == outcome
     assert len(w.notifier.calls) == notices
+    assert "sk-create-sentinel" not in caplog.text and "sk-create-sentinel" not in str(w.audit.records)
+    assert all(r["result"] == {"error": "TimeoutError"} for r in w.audit.records if r["name"] == "mail_error")
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.parametrize("sink", ["lookup", "notice"])
+async def test_mail_helpers_log_only_exception_type(sink, caplog):
+    w = make(script=[FLIGHT])
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("sk-mail-helper-sentinel")
+
+    if sink == "lookup":
+        w.cal.create_auto_event = fail
+        w.cal.get_event = fail
+    else:
+        async def failed_notice(*args, **kwargs):
+            fail()
+        w.notifier.both = failed_notice
+    await w.job.run_once(NOW)
+    assert "RuntimeError" in caplog.text
+    assert "sk-mail-helper-sentinel" not in caplog.text and "sk-mail-helper-sentinel" not in str(w.audit.records)
+    assert all(record.exc_info is None for record in caplog.records)
 
 
 async def test_newsletter_never_reaches_the_llm():
@@ -279,7 +303,7 @@ async def test_cap_stops_creates_and_notifies_once():
     mails = [{**MAIL, "id": "m1"}, {**MAIL, "id": "m2"}]
     w = make(mails=mails, script=[FLIGHT, FLIGHT], cap=0)
     await w.job.run_once(NOW)
-    assert w.cal.created == [] and [c[0] for c in w.notifier.calls] == ["telegram"]
+    assert w.cal.created == [] and [c[0] for c in w.notifier.calls] == ["telegram", "push"]
     assert "limit" in w.notifier.calls[0][1] and {w.store.mail[i][0] for i in ("m1", "m2")} == {"capped"}
 
 
