@@ -370,3 +370,11 @@ def test_date_only_start_is_rejected_and_date_only_end_defaults():
 def test_short_title_does_not_make_a_duplicate(summary):
     x = validate_extraction(FLIGHT, NOW, TZ)
     assert not is_duplicate(x, [cal_ev(summary=summary)], "m1", TZ)
+
+
+async def test_without_an_llm_key_mail_waits_untouched_for_one():
+    w = make()
+    w.job.llm = None
+    await w.job.run_once(NOW)
+    assert w.gmail.queries == [] and w.store.mail == {} and w.audit.records == []
+    assert w.store.get_state("mail_cursor") == "1000"  # not advanced: these mails are handled once a key is set

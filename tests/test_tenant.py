@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -79,12 +80,13 @@ async def test_lru_evicts_but_lock_survives(pool, uids):
     t = tenants(pool, max_size=1)
     ra = await t.get(a)
     lock = t.lock(a)
-    await t.get(b)  # evicts a
-    assert ra.llm.closed  # the evicted provider's http client is closed
+    async with lock:  # a step of a's is running: b's request must not wait on it
+        await asyncio.wait_for(t.get(b), 5)  # evicts a
+    assert not ra.llm.closed  # holders without the lock (scheduler, owner channels) keep a working client
     ra2 = await t.get(a)
     assert ra2 is not ra and ra2.lock is lock and t.lock(a) is lock
     await t.close()
-    assert ra2.llm.closed
+    assert ra.llm.closed and ra2.llm.closed  # everything is closed at shutdown
 
 
 async def test_tavily_key_selects_tavily_search(pool, uids, monkeypatch):

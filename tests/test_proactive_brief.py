@@ -136,3 +136,8 @@ async def test_brief_still_goes_out_when_google_needs_reconsent_then_raises_for_
 def test_render_facts_mail_label_is_overridable():
     text = render_facts({"events": [], "overdue": [], "mail": MAIL}, TZ, mail_label="Unread email")
     assert "Unread email: boss@corp.com: Contract" in text and "Important" not in text
+
+
+async def test_compose_without_an_llm_key_sends_the_plain_list():
+    text, used = await compose(None, {"events": EVENTS, "overdue": [], "mail": []}, TZ)
+    assert not used and text.startswith("Good morning. ") and "Standup" in text

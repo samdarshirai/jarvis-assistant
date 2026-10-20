@@ -110,6 +110,8 @@ def _join(xs: list[str]) -> str:
 
 
 async def compose(llm, facts: dict, tz: str) -> tuple[str, bool]:
+    if llm is None:  # no LLM key yet: the plain list
+        return speak_facts(facts, tz), False
     text = render_facts(facts, tz)
     try:
         msg = await llm.get("fast").ainvoke([SystemMessage(SYSTEM), HumanMessage(wrap_untrusted(text))])

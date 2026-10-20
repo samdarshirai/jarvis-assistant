@@ -120,6 +120,8 @@ class MailWatch:
         if cursor is None:  # first run: start from now, never backfill old mail
             await asyncio.to_thread(self.store.set_state, "mail_cursor", str(int(now.timestamp())))
             return
+        if self.llm is None:  # no LLM key yet: leave the cursor so this mail is handled once a key is set
+            return
         # ponytail: at most 20 messages per poll (Gmail list cap used by search_emails); busier inboxes lose the oldest
         mails = await asyncio.to_thread(self.gmail.search_emails, f"in:inbox after:{cursor}", 20)
         for m in mails:

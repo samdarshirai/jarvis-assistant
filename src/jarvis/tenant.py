@@ -100,6 +100,8 @@ class Tenants:
         self._cache: OrderedDict[int, UserRuntime] = OrderedDict()
         self._locks: dict[int, asyncio.Lock] = {}  # never evicted: a rebuilt runtime keeps the lock a running step holds
         self._gen: dict[int, int] = {}  # bumped by invalidate() so a build that raced it is not cached
+        # ponytail: evicted and invalidated runtimes may still be in use by holders that skip the lock (scheduler,
+        # owner channels), so their LLM clients close only at shutdown; one client leaks per eviction or key change.
         self._retired: list[UserRuntime] = []
 
     def lock(self, user_id: int) -> asyncio.Lock:
@@ -118,9 +120,7 @@ class Tenants:
                 continue
             self._cache[user_id] = rt
             while len(self._cache) > self.max_size:
-                _, old = self._cache.popitem(last=False)
-                async with old.lock:  # let a running step finish before its http client goes
-                    await _close(old)
+                self._retired.append(self._cache.popitem(last=False)[1])  # same as invalidate: closed at shutdown
             return rt
 
     def invalidate(self, user_id: int) -> None:
@@ -129,8 +129,6 @@ class Tenants:
         rt = self._cache.pop(user_id, None)
         if rt is not None:
             rt.google_epoch[0] += 1  # anyone still holding the old runtime gets fresh Google clients
-            # ponytail: the old provider may still be in use by a long-lived holder (owner channels until they look
-            # the runtime up per request), so its client is closed at shutdown; leaks one client per key change.
             self._retired.append(rt)
 
     async def close(self) -> None:
