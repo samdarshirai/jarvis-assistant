@@ -228,4 +228,59 @@ void main() {
     expect(find.text('Not on the list? Ask the owner to add your email.'), findsOneWidget);
     await links.close();
   });
+
+  // A friend without Deepgram never opens /voice, so the push token goes over REST after push init.
+  for (final (name, me) in [('no Deepgram key', meBody(deepgram: null)), ('no LLM key', meBody(llm: false, deepgram: null))]) {
+    testWidgets('the push token is registered after push init with $name', (t) async {
+      final order = <String>[];
+      final refresh = StreamController<String>();
+      final api = RecApi({
+        'GET /me': me,
+        'PUT /device/fcm': (Map<String, dynamic>? body) {
+          order.add('put ${body!['token']}');
+          return {'ok': true};
+        },
+      });
+      await t.pumpWidget(JarvisApp(
+          store: MemStore({'token': 'tok'}),
+          apiFor: (_) => api,
+          links: const Stream.empty(),
+          startWake: () async {},
+          stopWake: () async {},
+          tz: () async => null,
+          dashboardFetch: (_) async => sampleDashboard(),
+          alarm: () async => null,
+          pushInit: () async => order.add('init'),
+          fcmToken: () async => 'fcm-1',
+          fcmRefresh: () => refresh.stream));
+      for (var i = 0; i < 4; i++) {
+        await t.pump();
+      }
+      expect(order, ['init', 'put fcm-1']);
+      refresh.add('fcm-2'); // Firebase rotated the token
+      await t.pump();
+      expect(order, ['init', 'put fcm-1', 'put fcm-2']);
+      await t.pumpWidget(const SizedBox());
+      unawaited(refresh.close()); // its done future never fires under fake async once the app cancelled its listener
+    });
+  }
+
+  testWidgets('a failed push registration is silent', (t) async {
+    final api = RecApi({'GET /me': meBody(deepgram: null), 'PUT /device/fcm': ApiError(503, null, '/device/fcm')});
+    await t.pumpWidget(JarvisApp(
+        store: MemStore({'token': 'tok'}),
+        apiFor: (_) => api,
+        links: const Stream.empty(),
+        stopWake: () async {},
+        tz: () async => null,
+        dashboardFetch: (_) async => sampleDashboard(),
+        alarm: () async => null,
+        fcmToken: () async => 'fcm-1'));
+    for (var i = 0; i < 4; i++) {
+      await t.pump();
+    }
+    expect(api.paths, contains('PUT /device/fcm'));
+    expect(find.byType(SessionScreen), findsOneWidget);
+    await t.pumpWidget(const SizedBox());
+  });
 }

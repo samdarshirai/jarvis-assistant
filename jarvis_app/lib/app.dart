@@ -56,6 +56,8 @@ class JarvisApp extends StatefulWidget {
       this.onSessionEnded,
       this.onSessionStarted,
       this.fcmToken,
+      this.pushInit,
+      this.fcmRefresh,
       this.store = const ConfigStore(),
       this.apiFor = ApiClient.new,
       this.links,
@@ -69,6 +71,8 @@ class JarvisApp extends StatefulWidget {
   final VoidCallback? onSessionEnded;
   final VoidCallback? onSessionStarted;
   final Future<String?> Function()? fcmToken;
+  final Future<void> Function()? pushInit; // Firebase setup; the token is registered over REST after it
+  final Stream<String> Function()? fcmRefresh; // Firebase's token rotations
   final ConfigStore store;
   final ApiClient Function(Config) apiFor;
   final Stream<Uri>? links; // jarvis://signin deep links; null: the platform's (app_links)
@@ -94,6 +98,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   SessionController? _controller;
   DashboardController? _dashboard;
   StreamSubscription<Uri>? _links;
+  StreamSubscription<String>? _fcmRefresh;
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   late final _auth = AuthClient(widget.apiFor(Config(_store.url, null)), _store);
   late final Future<void> _initialized;
@@ -120,6 +125,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _links?.cancel();
+    _fcmRefresh?.cancel();
     _controller?.dispose(); // before the dashboard: its onEnded refreshes it
     _dashboard?.dispose();
     if (AppHost.controller == _controller) AppHost.attach(null);
@@ -160,9 +166,26 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
       _setupError = setupError;
       _bind(c, ready, voiceReady);
     });
+    if (c.token != null) unawaited(_registerPush(c)); // whatever the key setup: push must reach a friend without Deepgram
     unawaited(const MethodChannel('jarvis/readiness').invokeMethod<void>('set', voiceReady)
         .catchError((Object _) {})); // Android-only; no credentials cross this channel
     if (ready) unawaited(widget.onReady?.call(voiceReady).catchError((Object _) {}));
+  }
+
+  /// Sends this phone's push token for the signed-in device, now and on every rotation. Silent on failure: the next
+  /// launch retries.
+  Future<void> _registerPush(Config c) async {
+    Future<void> put(String? token) async {
+      if (token == null || token.isEmpty || _config != c) return; // signed out or re-signed in meanwhile
+      await widget.apiFor(c).put('/device/fcm', {'token': token});
+    }
+
+    try {
+      await widget.pushInit?.call();
+      await _fcmRefresh?.cancel();
+      _fcmRefresh = widget.fcmRefresh?.call().listen((t) => put(t).catchError((Object _) {}));
+      await put(await widget.fcmToken?.call());
+    } catch (_) {}
   }
 
   Future<void> _onLink(Uri link) async {

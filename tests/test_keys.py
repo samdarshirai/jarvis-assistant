@@ -251,7 +251,35 @@ async def test_unauthenticated_401(pool, uids):
 
 def test_caddy_proxies_account_and_settings_routes():
     line = next(l for l in (Path(__file__).parents[1] / "Caddyfile").read_text().splitlines() if "@public path" in l)
-    assert {"/me", "/settings/*"} <= set(line.split())
+    assert {"/me", "/settings/*", "/device/fcm"} <= set(line.split())
+
+
+# FCM registration over REST: a friend without Deepgram never opens /voice, so the hello there can't carry it
+async def test_put_device_fcm_updates_only_the_callers_device(pool, uids, caplog):
+    caplog.set_level(logging.DEBUG)
+    a, b = uids
+    c, _ = await setup(pool, a)  # device of user a, with no Deepgram or LLM key
+    devices = Devices(pool)
+    other_a, _ = devices.create(a)
+    dev_b, _ = devices.create(b)
+    devices.set_fcm(other_a, "phone-a2")
+    devices.set_fcm(dev_b, "phone-b")
+    r = await c.put("/device/fcm", json={"token": "phone-a1-SECRET"})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert sorted(devices.fcm_tokens(a)) == ["phone-a1-SECRET", "phone-a2"] and devices.fcm_tokens(b) == ["phone-b"]
+    assert "phone-a1-SECRET" not in caplog.text
+
+
+async def test_put_device_fcm_refuses_bad_bearer_disabled_user_and_bad_token(pool, uids):
+    c, _ = await setup(pool, uids[0])
+    r = await c.put("/device/fcm", json={"token": "x"}, headers={"Authorization": "Bearer nope"})
+    assert r.status_code == 401
+    for body in ({"token": ""}, {"token": "x" * 4097}, {"token": 5}, {}):
+        assert (await c.put("/device/fcm", json=body)).status_code == 422, body
+    assert (await c.put("/device/fcm", json={"token": "x" * 4096})).status_code == 200
+    UserStore(pool).set_disabled(uids[0], True)
+    assert (await c.put("/device/fcm", json={"token": "y"})).status_code == 401
+    assert Devices(pool).fcm_tokens(uids[0]) == ["x" * 4096]
 
 
 # --- fix round 1 ---

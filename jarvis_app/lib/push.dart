@@ -11,10 +11,17 @@ String? speakTextOf(Map<String, dynamic> data) {
 
 class PushBridge {
   static bool ready = false;
+  static Future<void>? _starting; // init runs from both onReady and the token registration: start Firebase once
 
   /// Push is optional: without google-services.json the app still works; only tap-to-play is unavailable.
   static Future<void> init() async {
-    if ((await const ConfigStore().load()).token == null || ready) return;
+    if ((await const ConfigStore().load()).token == null) return;
+    await (_starting ??= _start());
+  }
+
+  static Stream<String> refreshes() => ready ? FirebaseMessaging.instance.onTokenRefresh : const Stream.empty();
+
+  static Future<void> _start() async {
     try {
       await Firebase.initializeApp();
       ready = true;

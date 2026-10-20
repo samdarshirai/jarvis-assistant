@@ -162,6 +162,10 @@ class KeyIn(BaseModel):
     api_key: Secret
 
 
+class FcmIn(BaseModel):
+    token: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)]
+
+
 class MeIn(BaseModel):
     tz: Annotated[str, StringConstraints(max_length=100)]
 
@@ -362,6 +366,20 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     async def delete_key(request: Request, which: Literal["deepgram", "tavily"]):
         svc, rt, err = await guarded(request, "keys")
         return err or await svc.delete_key(rt, which)
+
+    @app.put("/device/fcm")
+    async def put_fcm(request: Request, body: FcmIn):
+        """The calling device's push token. Over REST because a user without Deepgram never opens /voice."""
+        svc = getattr(app.state, "keys", None)
+        if svc is None:
+            return JSONResponse({"error": "unavailable"}, status_code=503)
+        auth = request.headers.get("authorization", "")
+        token = auth[7:].strip() if auth[:7].lower() == "bearer " else ""
+        device = await asyncio.to_thread(svc.devices.verify, token) if token else None  # None for a disabled user
+        if device is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        await asyncio.to_thread(svc.devices.set_fcm, device.device_id, body.token)
+        return {"ok": True}
 
     @app.websocket("/voice")
     async def voice(ws: WebSocket):

@@ -562,7 +562,8 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("POST", "/chat/confirm", {"interrupt_id": "i", "decision": "yes"}), ("GET", "/me", None),
           ("PUT", "/me", {"tz": "UTC"}), ("PUT", "/settings/llm", {"base_url": "https://x.example.com/v1", "api_key": "k"}),
           ("PUT", "/settings/deepgram", {"api_key": "k"}), ("PUT", "/settings/tavily", {"api_key": "k"}),
-          ("DELETE", "/settings/deepgram", None), ("DELETE", "/settings/tavily", None), ("GET", "/dashboard", None)]
+          ("DELETE", "/settings/deepgram", None), ("DELETE", "/settings/tavily", None), ("GET", "/dashboard", None),
+          ("PUT", "/device/fcm", {"token": "fcm-x"})]
 PUBLIC = {"/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}
 
