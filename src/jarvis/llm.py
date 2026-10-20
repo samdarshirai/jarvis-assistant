@@ -1,7 +1,7 @@
 import asyncio
 import socket
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
 import httpx
@@ -17,7 +17,7 @@ TIMEOUT = 60.0
 @dataclass(frozen=True)
 class LLMCreds:
     base_url: str
-    api_key: str
+    api_key: str = field(repr=False)
     fast: list[str]
     strong: list[str]
 
@@ -133,6 +133,9 @@ class LLMProvider:
                        callbacks=[self.cb], extra_body=extra, http_async_client=self.http)
             for m in {"fast": self.creds.fast, "strong": self.creds.strong}[tier]
         ]
+
+    async def aclose(self) -> None:
+        await self.http.aclose()
 
     def get(self, tier: str, tools: list | None = None):
         models = [m.bind_tools(tools) if tools else m for m in self._models(tier)]

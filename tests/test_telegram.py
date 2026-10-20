@@ -9,7 +9,8 @@ from telegram import Update
 from telegram.error import TelegramError
 
 from jarvis.agent.graph import build_graph
-from jarvis.channels.telegram import FAIL_TEXT, THREAD, TelegramChannel, format_confirmation
+from jarvis.channels.telegram import FAIL_TEXT, TelegramChannel, format_confirmation
+from jarvis.tenant import thread_config
 from jarvis.tools.registry import Registry, Tool
 from tests.fakes import FakeProvider, MemoryAudit
 
@@ -41,7 +42,7 @@ def make_channel(scripts, calls, extra=()):
     for t in extra:
         reg.add(t)
     g = build_graph(FakeProvider(scripts), reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
-    return TelegramChannel(g, OWNER)
+    return TelegramChannel(g, OWNER, user_id=1)
 
 
 def ids(c, n=-1):
@@ -105,12 +106,12 @@ async def test_graph_failure_sends_fixed_message():
     graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(interrupts=())),
                             ainvoke=AsyncMock(side_effect=RuntimeError("all models down")))
     c = chat()
-    await TelegramChannel(graph, OWNER).on_text(text_update(c), None)
+    await TelegramChannel(graph, OWNER, user_id=1).on_text(text_update(c), None)
     assert sent(c) == [(FAIL_TEXT, {})]
 
 
 def test_owner_filter_rejects_strangers():
-    ch = TelegramChannel(None, OWNER)
+    ch = TelegramChannel(None, OWNER, user_id=1)
 
     def upd(chat_id):
         return Update.de_json({"update_id": 1, "message": {"message_id": 1, "date": 0,
@@ -186,7 +187,7 @@ async def test_edit_markup_error_does_not_block_action():
 
 
 def test_build_registers_handlers_without_network():
-    app = TelegramChannel(None, OWNER).build("123:abc")
+    app = TelegramChannel(None, OWNER, user_id=1).build("123:abc")
     assert len(app.handlers[0]) == 2 and len(app.handlers[1]) == 1
 
 
@@ -248,7 +249,7 @@ async def test_legacy_bare_callback_data_is_already_handled():
         await ch.on_button(button_update(c, data), None)
         assert sent(c) == [("Already handled.", {})]
     assert calls == []
-    assert (await ch.graph.aget_state(THREAD)).interrupts  # still waiting for a real answer
+    assert (await ch.graph.aget_state(thread_config(1))).interrupts  # still waiting for a real answer
 
 
 async def test_empty_reply_sends_fallback():
@@ -261,7 +262,7 @@ async def test_empty_reply_sends_fallback():
 
 
 def test_text_handler_ignores_edited_messages():
-    app = TelegramChannel(None, OWNER).build("123:abc")
+    app = TelegramChannel(None, OWNER, user_id=1).build("123:abc")
     h = app.handlers[0][0]
 
     def upd(key):
@@ -344,7 +345,7 @@ async def test_phone_action_without_a_voice_client_tells_the_user_it_was_not_run
 async def test_pending_card_from_another_channel_is_reoffered_with_working_buttons():
     calls = []
     ch = pending_channel(calls)
-    out = await ch.graph.ainvoke({"messages": [HumanMessage("book gym")]}, THREAD)  # e.g. proposed by voice
+    out = await ch.graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(1))  # e.g. proposed by voice
     iid = out["__interrupt__"][0].id
     c = chat()
     await ch.on_text(text_update(c, "hello?"), None)

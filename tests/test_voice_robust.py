@@ -81,8 +81,8 @@ def test_dropped_socket_mid_card_leaves_the_confirmation_pending_for_other_chann
             read(ws)
             ping(ws)
             until(ws, "confirm_card")
-        from jarvis.voice.ws import VOICE_CFG
-        state = c.portal.call(h.graph.aget_state, VOICE_CFG)
+        from jarvis.tenant import thread_config
+        state = c.portal.call(h.graph.aget_state, thread_config(1, voice=True))
         assert state.interrupts and calls == []
         assert h.svc.current is None
 

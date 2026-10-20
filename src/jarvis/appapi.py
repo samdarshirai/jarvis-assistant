@@ -7,9 +7,10 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from jarvis.agent.graph import turn_replies
-from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT, THREAD
+from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.dashboard import DashboardService
 from jarvis.google.auth import ReauthRequired
+from jarvis.tenant import thread_config
 from jarvis.timeutil import now_local
 from jarvis.voice.ws import card_lines, is_tap_only
 
@@ -24,9 +25,10 @@ class AppService:
     authorized = DashboardService.authorized  # same bearer + constant-time verify; only needs self.devices
 
     def __init__(self, devices, calendar, tasks, gmail, notes, graph, lock: asyncio.Lock, audit, tz: str,
-                 source_timeout: float = 12.0):
+                 source_timeout: float = 12.0, *, user_id: int):
         self.devices, self.calendar, self.tasks, self.gmail, self.notes = devices, calendar, tasks, gmail, notes
         self.graph, self.lock, self.audit, self.tz, self.source_timeout = graph, lock, audit, tz, source_timeout
+        self.cfg = thread_config(user_id)
         self.steps: set[asyncio.Task] = set()  # chat graph steps; drained in lifespan teardown
 
     async def _call(self, fn, *args):
@@ -136,12 +138,12 @@ class AppService:
 
     async def _present(self, graph_input) -> dict:
         try:
-            result = await self.graph.ainvoke(graph_input, THREAD)
+            result = await self.graph.ainvoke(graph_input, self.cfg)
         except Exception:
             log.exception("graph run failed")
             card = None
             try:  # re-offer a still-pending confirmation so the owner is not locked out
-                interrupts = (await self.graph.aget_state(THREAD)).interrupts
+                interrupts = (await self.graph.aget_state(self.cfg)).interrupts
                 card = self._card(interrupts[0]) if interrupts else None
             except Exception:
                 log.exception("could not re-offer pending confirmation")
@@ -153,7 +155,7 @@ class AppService:
 
     async def chat(self, text: str) -> dict:
         async def decide():
-            pending = (await self.graph.aget_state(THREAD)).interrupts
+            pending = (await self.graph.aget_state(self.cfg)).interrupts
             if pending:
                 return {"reply": PENDING_TEXT, "card": self._card(pending[0]), "client_actions": []}
             return await self._present({"messages": [HumanMessage(text)]})
@@ -162,7 +164,7 @@ class AppService:
 
     async def confirm(self, interrupt_id: str, decision: str) -> dict:
         async def decide():
-            interrupts = (await self.graph.aget_state(THREAD)).interrupts
+            interrupts = (await self.graph.aget_state(self.cfg)).interrupts
             if decision not in ("yes", "no") or not interrupts or interrupts[0].id != interrupt_id:
                 return {"reply": HANDLED_TEXT, "card": None, "client_actions": []}
             return await self._present(Command(resume=decision == "yes"))

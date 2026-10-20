@@ -9,10 +9,10 @@ from telegram.error import TelegramError
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
 
 from jarvis.agent.graph import turn_replies
+from jarvis.tenant import thread_config
 
 log = logging.getLogger(__name__)
 
-THREAD = {"configurable": {"thread_id": "owner"}, "recursion_limit": 40}
 FAIL_TEXT = "Something went wrong. Please try again."
 EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you are unsure."
 PENDING_TEXT = "Let's sort out the pending action first, confirm or cancel it."
@@ -56,10 +56,12 @@ def format_confirmation(payload: dict) -> str:
 
 
 class TelegramChannel:
-    def __init__(self, graph, owner_chat_id: int, deliver_actions=None, lock: asyncio.Lock | None = None, undo=None):
+    def __init__(self, graph, owner_chat_id: int, deliver_actions=None, lock: asyncio.Lock | None = None, undo=None,
+                 *, user_id: int):
         self.deliver_actions = deliver_actions
         self.undo = undo  # async (event_id) -> bool; removes an event Jarvis auto-created from email
         self.graph = graph
+        self.cfg = thread_config(user_id)  # Telegram is the owner's channel
         self.owner = owner_chat_id
         self.owner_filter = filters.Chat(chat_id=owner_chat_id)
         self.lock = lock or asyncio.Lock()  # shared with voice: one graph step at a time on the thread
@@ -78,7 +80,7 @@ class TelegramChannel:
     async def _invoke(self, graph_input):
         """Run the graph (the caller holds the lock). None means the run failed."""
         try:
-            return await self.graph.ainvoke(graph_input, THREAD)
+            return await self.graph.ainvoke(graph_input, self.cfg)
         except Exception:
             log.exception("graph run failed")
             return None
@@ -90,7 +92,7 @@ class TelegramChannel:
         if result is None:
             await chat.send_message(FAIL_TEXT)
             try:  # buttons may be gone; re-offer a still-pending confirmation so the owner is not locked out
-                state = await self.graph.aget_state(THREAD)
+                state = await self.graph.aget_state(self.cfg)
                 if state.interrupts:
                     await self._offer(chat, state.interrupts[0])
             except Exception:
@@ -110,7 +112,7 @@ class TelegramChannel:
     async def on_text(self, update, context):
         chat = update.effective_chat
         async with self.lock:  # read pending -> decide -> run is one step; replies are sent after release
-            pending = (await self.graph.aget_state(THREAD)).interrupts
+            pending = (await self.graph.aget_state(self.cfg)).interrupts
             result = None if pending else await self._invoke({"messages": [HumanMessage(update.message.text)]})
         if pending:
             await chat.send_message(PENDING_TEXT)
@@ -143,7 +145,7 @@ class TelegramChannel:
             await self._undo(chat, iid)
             return
         async with self.lock:
-            interrupts = (await self.graph.aget_state(THREAD)).interrupts
+            interrupts = (await self.graph.aget_state(self.cfg)).interrupts
             stale = action not in ("yes", "no") or not interrupts or interrupts[0].id != iid
             result = None if stale else await self._invoke(Command(resume=action == "yes"))
         if stale:

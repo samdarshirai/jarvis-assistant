@@ -162,3 +162,14 @@ def test_bye_emits_no_error_frame():
             for _ in range(5):
                 seen.append(read(ws))
         assert texts(seen, "error") == []
+
+
+def test_another_users_device_is_closed_before_accept():
+    h = build(chat_scripts("Hi."))
+    h.svc.user_id = 2  # the service is the owner's (user 2); the device belongs to user 1
+    with TestClient(h.app) as c:
+        with pytest.raises(WebSocketDisconnect) as e:
+            with c.websocket_connect("/voice", headers=AUTH):
+                pass
+        assert e.value.code == 4401
+    assert h.stt.streams == []

@@ -9,7 +9,10 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from jarvis.agent.graph import repair_tool_gaps, window
 from jarvis.channels.telegram import TelegramChannel
-from jarvis.voice.ws import HANDLED_TEXT, VOICE_CFG
+from jarvis.tenant import thread_config
+from jarvis.voice.ws import HANDLED_TEXT
+
+VOICE_CFG = thread_config(1, voice=True)
 from tests.test_graph import call, tool
 from tests.test_telegram import OWNER, button_update, chat, ids, sent, text_update
 from tests.voice_helpers import AUTH, FINAL, build, ping, read, texts, until, until_state
@@ -157,7 +160,7 @@ def test_concurrent_voice_tap_and_telegram_button_run_the_tool_once():
     h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("put gym at seven")])
     slow = SlowReads(h.graph)
     h.svc.graph = slow
-    ch = TelegramChannel(slow, OWNER, lock=h.svc.lock)
+    ch = TelegramChannel(slow, OWNER, lock=h.svc.lock, user_id=1)
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         card = present_card(ws)
         tc = chat()
@@ -173,7 +176,7 @@ def test_telegram_text_waits_for_a_running_voice_step():
     calls = []
     t, entered, release = blocking_tool(calls)
     h = build(gym_scripts(AIMessage("chat"), AIMessage("Hi from Telegram.")), [t], [FINAL("put gym at seven")])
-    ch = TelegramChannel(h.graph, OWNER, lock=h.svc.lock)
+    ch = TelegramChannel(h.graph, OWNER, lock=h.svc.lock, user_id=1)
     with TestClient(h.app) as c:
         try:
             with c.websocket_connect("/voice", headers=AUTH) as ws:
@@ -221,7 +224,7 @@ def test_spoken_yes_meant_for_a_card_resolved_elsewhere_does_not_approve_the_nex
                "strong": [call("create_task", {"summary": "Mum"}, id="c2")]},
               [tool("create_event", "calendar", calls), tool("create_task", "tasks", calls)],
               [FINAL("gym and remind me about mum"), FINAL("yes")])
-    ch = TelegramChannel(h.graph, OWNER)
+    ch = TelegramChannel(h.graph, OWNER, user_id=1)
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         card_a = present_card(ws)
         tc = chat()

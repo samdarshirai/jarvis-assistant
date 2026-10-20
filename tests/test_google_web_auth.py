@@ -48,11 +48,20 @@ class Svc:
         return self.ok
 
 
+class Tenants:
+    def __init__(self):
+        self.invalidated = []
+
+    def invalidate(self, user_id):
+        self.invalidated.append(user_id)
+
+
 def client(monkeypatch, key, secrets, ok=True, store=None):
     monkeypatch.setattr("jarvis.main.get_settings", lambda: settings(key, secrets))
     app = create_app(with_lifespan=False)
     app.state.app_api = Svc(ok)
     app.state.google_store = store
+    app.state.tenants, app.state.owner_id = Tenants(), 1
     return TestClient(app)
 
 
@@ -85,20 +94,19 @@ def test_callback_rejects_bad_state_and_stores_nothing(monkeypatch, key, secrets
     assert r.status_code == 400 and not store.blobs
 
 
-def test_callback_stores_encrypted_credentials_and_bumps_epoch(monkeypatch, key, secrets):
-    from jarvis.google import auth
-
+def test_callback_stores_encrypted_credentials_and_invalidates_the_owner_runtime(monkeypatch, key, secrets):
     class Creds:
         def to_json(self):
             return json.dumps({"refresh_token": "rt"})
 
     monkeypatch.setattr(web_auth, "exchange", lambda path, redirect, code: Creds() if (code, redirect) == ("good", REDIRECT) else 1 / 0)
-    store, before = MemStore(), auth.current_epoch()
-    r = client(monkeypatch, key, secrets, store=store).get(
+    store = MemStore()
+    c = client(monkeypatch, key, secrets, store=store)
+    r = c.get(
         "/google/callback", params={"code": "good", "state": web_auth.make_state(key)})
     assert r.status_code == 200 and "connected" in r.text
     assert json.loads(Fernet(key).decrypt(store.blobs["google"])) == {"refresh_token": "rt"}
-    assert auth.current_epoch() == before + 1
+    assert c.app.state.tenants.invalidated == [1]
 
 
 def test_callback_exchange_failure_is_502(monkeypatch, key, secrets):
@@ -109,17 +117,6 @@ def test_callback_exchange_failure_is_502(monkeypatch, key, secrets):
     r = client(monkeypatch, key, secrets, store=MemStore()).get(
         "/google/callback", params={"code": "c", "state": web_auth.make_state(key)})
     assert r.status_code == 502
-
-
-def test_cached_service_rebuilds_after_new_consent():
-    from jarvis.google import auth
-    from jarvis.main import cached_service
-
-    built = []
-    get = cached_service(lambda: built.append(1) or len(built))
-    assert get() == get() == 1
-    auth.bump_epoch()
-    assert get() == 2
 
 
 def test_start_url_accepts_the_client_json_inline(secrets):

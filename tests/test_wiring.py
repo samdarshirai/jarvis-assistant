@@ -1,5 +1,5 @@
 from jarvis.agent.domains import DOMAINS
-from jarvis.main import build_registry
+from jarvis.tenant import build_registry
 from jarvis.tools.registry import Registry, Tool
 
 CONFIRM = {"create_event", "update_event", "delete_event", "create_task", "complete_task",

@@ -15,17 +15,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
 ]
 PROVIDER = "google"
-_epoch = 0
-
-
-def bump_epoch() -> None:
-    """New consent stored: cached Google clients built on the old credentials must be rebuilt."""
-    global _epoch
-    _epoch += 1
-
-
-def current_epoch() -> int:
-    return _epoch
 
 
 class ReauthRequired(Exception):

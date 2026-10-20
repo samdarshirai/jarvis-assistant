@@ -1,7 +1,5 @@
 import asyncio
 import logging
-import threading
-import time
 from contextlib import asynccontextmanager
 from functools import partial
 from types import SimpleNamespace
@@ -15,35 +13,20 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, StringConstraints
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
-from jarvis.agent.graph import build_graph
 from jarvis.appapi import AppService
-from jarvis.audit import Audit, purge_all as purge_audit
+from jarvis.audit import purge_all as purge_audit
 from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
 from jarvis.google import web_auth
-from jarvis.google.auth import PgTokenStore, build_service, bump_epoch, current_epoch, save_credentials
-from jarvis.google.calendar import CalendarClient
-from jarvis.google.gmail import GmailClient
-from jarvis.google.tasks import TasksClient
-from jarvis.llm import LLMProvider, creds_for
-from jarvis.memory import MemoryStore
-from jarvis.notes import NoteStore
+from jarvis.google.auth import PgTokenStore, save_credentials
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
-from jarvis.proactive.store import ProactiveStore, purge_all as purge_proactive
+from jarvis.proactive.store import purge_all as purge_proactive
+from jarvis.tenant import Tenants
 from jarvis.timeutil import now_local
-from jarvis.tools.calendar_tools import register_calendar_tools
-from jarvis.tools.gmail_tools import register_gmail_tools
-from jarvis.tools.memory_tools import register_memory_tools
-from jarvis.tools.note_tools import register_note_tools
-from jarvis.tools.phone_tools import register_phone_tools
-from jarvis.tools.registry import Registry
-from jarvis.tools.research_tools import register_research_tools
-from jarvis.tools.task_tools import register_task_tools
-from jarvis.users import SecretStore, ensure_owner
-from jarvis.web import WebSearch, DdgSearch
+from jarvis.users import ensure_owner
 from jarvis.voice.devices import Devices
 from jarvis.voice.stt import DeepgramSTT
 from jarvis.voice.tts import DeepgramTTS
@@ -52,134 +35,98 @@ from jarvis.voice.ws import VoiceService
 log = logging.getLogger(__name__)
 
 
-def cached_service(build, ttl: float = 1800.0, clock=time.monotonic):
-    """Reuse the built Google client per thread (httplib2 is not thread-safe); rebuild after ttl so token
-    refresh and ReauthRequired still surface. Tools run in to_thread, hence the thread-local."""
-    local = threading.local()
-
-    def get():
-        hit = getattr(local, "hit", None)
-        if hit is None or clock() - hit[0] > ttl or hit[2] != current_epoch():
-            hit = local.hit = (clock(), build(), current_epoch())
-        return hit[1]
-
-    return get
-
-
-def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int | None = None) -> Registry:
-    registry = Registry()
-    gmail = GmailClient(svc("gmail", "v1"))
-    register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz, gmail.sent_to)
-    register_task_tools(registry, TasksClient(svc("tasks", "v1")))
-    register_gmail_tools(registry, gmail)
-    register_phone_tools(registry)
-    if pool is not None:
-        register_memory_tools(registry, MemoryStore(pool, user_id))
-        register_note_tools(registry, NoteStore(pool, user_id))
-    register_research_tools(registry, WebSearch(tavily_key) if tavily_key else DdgSearch())
-    return registry
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
     pool = make_pool(s.database_url)
     try:
         init_schema(pool)
-        # Owner-only wiring until the per-user runtime lands: everything below runs as the owner.
+        # Owner-only wiring until per-user channels land: everything below runs as the owner's runtime.
         owner_id = ensure_owner(pool, s)
         if owner_id is None:
             raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")
-        audit = Audit(pool, owner_id)
         purge_audit(pool, 90)
-        proactive_store = ProactiveStore(pool, owner_id)
         purge_proactive(pool, 90)
-        store = PgTokenStore(pool, owner_id)
-
-        def svc(name: str, version: str):
-            return cached_service(lambda: build_service(name, version, store, s.fernet_key))
-
-        registry = build_registry(svc, s.timezone, pool, s.tavily_api_key, owner_id)
-        calendar = CalendarClient(svc("calendar", "v3"), s.timezone)
-        tasks_client = TasksClient(svc("tasks", "v1"))
-        gmail = GmailClient(svc("gmail", "v1"))
-        creds = creds_for(SecretStore(pool, s.fernet_key).all(owner_id), s)
-        if creds is None:
-            raise RuntimeError("The owner has no LLM key: set JARVIS_OPENROUTER_API_KEY (copied on first run) or store llm_key.")
-        llm = LLMProvider(creds, audit)
         devices = Devices(pool)
-
-        async def undo(event_id: str) -> bool:
-            return await undo_event(calendar, proactive_store, audit, event_id)
 
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
-            graph = build_graph(llm, registry, audit, saver, s.timezone,
-                                memories=MemoryStore(pool, owner_id).all)
-            # One lock for both channels on the shared thread "owner": "read pending -> decide -> ainvoke" is one step.
-            # ponytail: one global lock, fine for a single owner; per-thread locks if more threads ever appear.
-            lock = asyncio.Lock()
-            voice = VoiceService(
-                graph, devices,
-                DeepgramSTT(s.deepgram_api_key) if s.deepgram_api_key else None,
-                DeepgramTTS(s.deepgram_api_key) if s.deepgram_api_key else None,
-                lock=lock)
-            app.state.voice = voice
-            app.state.google_store = store
-            app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool, owner_id), s.timezone, weather_city=s.weather_city, store=proactive_store)
-            app.state.app_api = app_api = AppService(devices, calendar, tasks_client, gmail, NoteStore(pool, owner_id), graph,
-                                                     lock, audit, s.timezone)
-            tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
-                                 lock=lock, undo=undo).build(s.telegram_bot_token)
+            tenants = Tenants(pool, s, saver)
             try:
-                await tg.initialize()
-            except Exception:
-                # If initialize failed, still try to shut down
+                # No LLM key yet is fine: owner.graph is None and chat fails until the owner sets one.
+                owner = await tenants.get(owner_id)
+
+                async def undo(event_id: str) -> bool:
+                    return await undo_event(owner.calendar, owner.proactive, owner.audit, event_id)
+
+                # One per-user lock for every channel on the owner's thread: "read pending -> decide -> ainvoke" is one step.
+                voice = VoiceService(
+                    owner.graph, devices,
+                    DeepgramSTT(s.deepgram_api_key) if s.deepgram_api_key else None,
+                    DeepgramTTS(s.deepgram_api_key) if s.deepgram_api_key else None,
+                    lock=owner.lock, user_id=owner_id)
+                app.state.voice = voice
+                app.state.google_store = PgTokenStore(pool, owner_id)
+                app.state.tenants, app.state.owner_id = tenants, owner_id
+                app.state.dashboard = DashboardService(devices, owner.calendar, owner.tasks, owner.gmail, owner.notes,
+                                                       owner.tz, weather_city=s.weather_city, store=owner.proactive)
+                app.state.app_api = app_api = AppService(devices, owner.calendar, owner.tasks, owner.gmail, owner.notes,
+                                                         owner.graph, owner.lock, owner.audit, owner.tz, user_id=owner_id)
+                tg = TelegramChannel(owner.graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
+                                     lock=owner.lock, undo=undo, user_id=owner_id).build(s.telegram_bot_token)
                 try:
-                    await tg.shutdown()
+                    await tg.initialize()
                 except Exception:
-                    log.exception("failed to shutdown telegram app after init failure")
-                raise
-            sched = None
-            try:
-                await tg.start()
-                await tg.updater.start_polling()
-                owner_devices = SimpleNamespace(fcm_tokens=partial(devices.fcm_tokens, owner_id))  # until per-user notifiers
-                sched = start_proactive(s, proactive_store, calendar, tasks_client, gmail, llm, audit, tg.bot, owner_devices)
+                    # If initialize failed, still try to shut down
+                    try:
+                        await tg.shutdown()
+                    except Exception:
+                        log.exception("failed to shutdown telegram app after init failure")
+                    raise
+                sched = None
                 try:
-                    yield
+                    await tg.start()
+                    await tg.updater.start_polling()
+                    owner_devices = SimpleNamespace(fcm_tokens=partial(devices.fcm_tokens, owner_id))  # until per-user notifiers
+                    sched = start_proactive(s, owner.proactive, owner.calendar, owner.tasks, owner.gmail, owner.llm,
+                                            owner.audit, tg.bot, owner_devices)
+                    try:
+                        yield
+                    finally:
+                        pass  # Teardown happens in outer finally
                 finally:
-                    pass  # Teardown happens in outer finally
+                    # Ordered teardown for all paths through start/start_polling/yield
+                    if sched is not None:
+                        sched.shutdown(wait=False)  # stop new jobs before the channels and pool go away
+                    app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
+                    app.state.dashboard = None
+                    app.state.app_api = None
+                    app.state.google_store = None
+                    app.state.tenants = None
+                    try:
+                        if tg.updater.running:
+                            await tg.updater.stop()
+                    except Exception:
+                        log.exception("failed to stop updater")
+                    try:
+                        if tg.running:
+                            await tg.stop()
+                    except Exception:
+                        log.exception("failed to stop telegram app")
+                    try:
+                        await tg.shutdown()
+                    except Exception:
+                        log.exception("failed to shutdown telegram app")
+                    # A graph step an abandoned voice turn left running must finish (audit row + checkpoint) before the
+                    # saver and pool close. asyncio.wait does not cancel on timeout, unlike wait_for(gather(...)).
+                    try:
+                        pending = set(voice.steps) | set(app_api.steps)
+                        if pending:
+                            await asyncio.wait(pending, timeout=30)
+                    except Exception:
+                        log.exception("voice steps did not drain")
             finally:
-                # Ordered teardown for all paths through start/start_polling/yield
-                if sched is not None:
-                    sched.shutdown(wait=False)  # stop new jobs before the channels and pool go away
-                app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
-                app.state.dashboard = None
-                app.state.app_api = None
-                app.state.google_store = None
-                try:
-                    if tg.updater.running:
-                        await tg.updater.stop()
-                except Exception:
-                    log.exception("failed to stop updater")
-                try:
-                    if tg.running:
-                        await tg.stop()
-                except Exception:
-                    log.exception("failed to stop telegram app")
-                try:
-                    await tg.shutdown()
-                except Exception:
-                    log.exception("failed to shutdown telegram app")
-                # A graph step an abandoned voice turn left running must finish (audit row + checkpoint) before the
-                # saver and pool close. asyncio.wait does not cancel on timeout, unlike wait_for(gather(...)).
-                try:
-                    pending = set(voice.steps) | set(app_api.steps)
-                    if pending:
-                        await asyncio.wait(pending, timeout=30)
-                except Exception:
-                    log.exception("voice steps did not drain")
+                await tenants.close()  # after the steps drained: closes each runtime's LLM http client
     finally:
         pool.close()
 
@@ -272,7 +219,9 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         except Exception:
             log.exception("google consent exchange failed")
             return _consent_page("Google did not accept the sign-in. Open Jarvis and try again.", 502)
-        bump_epoch()
+        tenants = getattr(app.state, "tenants", None)
+        if tenants is not None:
+            tenants.invalidate(app.state.owner_id)  # rebuild the owner's Google clients on the new consent
         return _consent_page("Google is connected. You can return to Jarvis.", 200)
 
     @app.get("/calendar")

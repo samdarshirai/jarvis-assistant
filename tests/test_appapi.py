@@ -83,7 +83,7 @@ class Graph:
 
 def svc(src=None, graph=None, audit=None, **kw):
     src = src or Src()
-    return AppService(Devices(), src, src, src, src, graph or Graph(), asyncio.Lock(), audit or Audit(), TZ, **kw)
+    return AppService(Devices(), src, src, src, src, graph or Graph(), asyncio.Lock(), audit or Audit(), TZ, **{"user_id": 1, **kw})
 
 
 async def test_authorized_matches_dashboard():
@@ -163,7 +163,7 @@ async def test_chat_replies_on_plain_thread():
     out = await svc(graph=g).chat("hi")
     assert out == {"reply": "Hello", "card": None, "client_actions": [{"a": 1}]}
     cfg = g.inputs[0][1]
-    assert cfg["configurable"] == {"thread_id": "owner"}
+    assert cfg["configurable"] == {"thread_id": "user:1"}
 
 
 async def test_chat_empty_fallback_and_new_interrupt_card():

@@ -8,15 +8,14 @@ from langgraph.types import Command
 from starlette.websockets import WebSocket
 
 from jarvis.agent.graph import turn_replies
-from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT, THREAD
+from jarvis.tenant import thread_config
+from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.voice import protocol as P
 from jarvis.voice.confirm import match_confirmation
 from jarvis.voice.tts import split_sentences
 
 log = logging.getLogger(__name__)
 
-# One thread for every channel (FR-1). The "voice" flag only selects the fast model tier inside the graph.
-VOICE_CFG = {**THREAD, "configurable": {**THREAD["configurable"], "voice": True}}
 TAP_ONLY = {"send_draft"}  # irreversible and third-party-facing: a spoken yes is never enough
 TAP_TEXT = "I need you to tap Confirm on the screen to send it."
 STT_DOWN_TEXT = "Sorry, I can't hear you right now."
@@ -32,9 +31,11 @@ def is_tap_only(payload: dict) -> bool:
 
 
 class VoiceSession:
-    def __init__(self, ws: WebSocket, graph, devices, device_id: int, stt, tts, lock: asyncio.Lock, steps: set):
+    def __init__(self, ws: WebSocket, graph, devices, device_id: int, stt, tts, lock: asyncio.Lock, steps: set,
+                 cfg: dict):
         self.ws, self.graph, self.devices, self.device_id, self.stt, self.tts = ws, graph, devices, device_id, stt, tts
         self.lock, self.steps = lock, steps
+        self.cfg = cfg  # the user's one thread (FR-1), voice flag set: selects the fast tier
         self.state = "listening"
         self.turn: asyncio.Task | None = None
         self.utterance_bytes = 0
@@ -100,7 +101,7 @@ class VoiceSession:
         await self.send("error", message=FAIL_TEXT)
         await self._say([FAIL_TEXT])
         with contextlib.suppress(Exception):  # buttons may be gone: re-offer a still-pending confirmation
-            state = await self.graph.aget_state(VOICE_CFG)
+            state = await self.graph.aget_state(self.cfg)
             if state.interrupts:
                 await self._card(state.interrupts[0])
 
@@ -134,9 +135,9 @@ class VoiceSession:
         await self.set_state("thinking")
 
         async def decide():
-            pending = (await self.graph.aget_state(VOICE_CFG)).interrupts
+            pending = (await self.graph.aget_state(self.cfg)).interrupts
             if not pending:
-                result = await self.graph.ainvoke({"messages": [HumanMessage(text)]}, VOICE_CFG)
+                result = await self.graph.ainvoke({"messages": [HumanMessage(text)]}, self.cfg)
                 return lambda: self._present(result)
             it = pending[0]
             if it.id != self.offered:  # never presented here (Telegram, an earlier session): present, never resume
@@ -144,7 +145,7 @@ class VoiceSession:
             decision = match_confirmation(text)
             if decision is None or (decision and is_tap_only(it.value)):
                 return lambda: self._refuse(it, TAP_TEXT if decision else PENDING_TEXT)
-            result = await self.graph.ainvoke(Command(resume=decision), VOICE_CFG)
+            result = await self.graph.ainvoke(Command(resume=decision), self.cfg)
             return lambda: self._present(result)
 
         await (await self._step(decide))()
@@ -165,10 +166,10 @@ class VoiceSession:
         decision = m.get("decision")
 
         async def decide():
-            interrupts = (await self.graph.aget_state(VOICE_CFG)).interrupts
+            interrupts = (await self.graph.aget_state(self.cfg)).interrupts
             if decision not in ("yes", "no") or not interrupts or interrupts[0].id != m.get("interrupt_id"):
                 return lambda: self._say([HANDLED_TEXT])  # stale, repeated or bare taps never resume anything
-            result = await self.graph.ainvoke(Command(resume=decision == "yes"), VOICE_CFG)
+            result = await self.graph.ainvoke(Command(resume=decision == "yes"), self.cfg)
             return lambda: self._present(result)
 
         await (await self._step(decide))()
@@ -297,8 +298,9 @@ class VoiceSession:
 
 
 class VoiceService:
-    def __init__(self, graph, devices, stt, tts, lock: asyncio.Lock | None = None):
+    def __init__(self, graph, devices, stt, tts, lock: asyncio.Lock | None = None, *, user_id: int):
         self.graph, self.devices, self.stt, self.tts = graph, devices, stt, tts
+        self.user_id = user_id  # owner-only until per-user voice sessions
         self.lock = lock or asyncio.Lock()  # shared with Telegram: one graph step at a time on the thread
         self.steps: set[asyncio.Task] = set()  # in-flight graph steps, including ones a cancelled turn abandoned
         self.current: VoiceSession | None = None
@@ -310,7 +312,7 @@ class VoiceService:
         auth = ws.headers.get("authorization", "")
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
         device = await asyncio.to_thread(self.devices.verify, token) if token else None
-        if device is None:
+        if device is None or device.user_id != self.user_id:
             await ws.close(code=P.CLOSE_UNAUTHORIZED)  # before accept: no audio is ever read from a stranger
             return
         await ws.accept()
@@ -321,7 +323,8 @@ class VoiceService:
             await ws.send_text(P.frame("error", message="Speech recognition is unavailable."))
             await ws.close(code=P.CLOSE_UPSTREAM)
             return
-        session = VoiceSession(ws, self.graph, self.devices, device.device_id, stream, self.tts, self.lock, self.steps)
+        session = VoiceSession(ws, self.graph, self.devices, device.device_id, stream, self.tts, self.lock, self.steps,
+                               thread_config(self.user_id, voice=True))
         old, self.current = self.current, session
         if old:
             await old.close(P.CLOSE_REPLACED)

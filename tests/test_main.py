@@ -12,6 +12,23 @@ def test_health_without_lifespan():
     assert TestClient(app).get("/health").json() == {"ok": True}
 
 
+class FakeTenants:
+    made = []
+
+    def __init__(self, pool, s, saver):
+        self.closed = False
+        FakeTenants.made.append(self)
+
+    async def get(self, user_id):
+        import asyncio
+        rt = MagicMock()
+        rt.lock = asyncio.Lock()
+        return rt
+
+    async def close(self):
+        self.closed = True
+
+
 @pytest.fixture
 def mock_lifespan_deps(monkeypatch):
     """Shared monkeypatch setup for all lifespan tests."""
@@ -36,24 +53,8 @@ def mock_lifespan_deps(monkeypatch):
     monkeypatch.setattr("jarvis.main.make_pool", lambda url: fake_pool)
     monkeypatch.setattr("jarvis.main.init_schema", lambda pool: None)
 
-    mock_audit = MagicMock()
-    monkeypatch.setattr("jarvis.main.Audit", lambda pool, user_id=None: mock_audit)
     monkeypatch.setattr("jarvis.main.ensure_owner", lambda pool, s: 1)
-
-    monkeypatch.setattr("jarvis.main.PgTokenStore", lambda pool, user_id: MagicMock())
-    monkeypatch.setattr(
-        "jarvis.main.build_service", lambda name, ver, store, key: MagicMock()
-    )
-    monkeypatch.setattr("jarvis.main.CalendarClient", lambda svc, tz: MagicMock())
-    monkeypatch.setattr("jarvis.main.TasksClient", lambda svc: MagicMock())
-    monkeypatch.setattr("jarvis.main.LLMProvider", lambda s, audit: MagicMock())
-    monkeypatch.setattr("jarvis.main.SecretStore", lambda pool, key: MagicMock())
-    monkeypatch.setattr("jarvis.main.creds_for", lambda secrets, s: MagicMock())
-    monkeypatch.setattr("jarvis.main.register_calendar_tools", lambda *args: None)
-    monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
-    monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
-    monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
-    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool, user_id: MagicMock())
+    monkeypatch.setattr("jarvis.main.Tenants", FakeTenants)
     monkeypatch.setattr("jarvis.main.start_proactive", lambda *a, **k: MagicMock())
 
     # Mock AsyncPostgresSaver
@@ -67,6 +68,7 @@ def mock_lifespan_deps(monkeypatch):
         lambda url: mock_saver_ctx,
     )
 
+    FakeTenants.made.clear()
     return {
         "fake_pool": fake_pool,
         "call_order": call_order,
@@ -76,7 +78,7 @@ def mock_lifespan_deps(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
-    """Test that pool is closed even if build_graph raises."""
+    """Test that pool is closed even if building the owner runtime raises."""
     from types import SimpleNamespace
 
     fake_pool = MagicMock()
@@ -97,31 +99,14 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
     monkeypatch.setattr("jarvis.main.make_pool", lambda url: fake_pool)
     monkeypatch.setattr("jarvis.main.init_schema", lambda pool: None)
 
-    mock_audit = MagicMock()
-    monkeypatch.setattr("jarvis.main.Audit", lambda pool, user_id=None: mock_audit)
     monkeypatch.setattr("jarvis.main.ensure_owner", lambda pool, s: 1)
-
-    monkeypatch.setattr("jarvis.main.PgTokenStore", lambda pool, user_id: MagicMock())
-    monkeypatch.setattr(
-        "jarvis.main.build_service", lambda name, ver, store, key: MagicMock()
-    )
-    monkeypatch.setattr("jarvis.main.CalendarClient", lambda svc, tz: MagicMock())
-    monkeypatch.setattr("jarvis.main.TasksClient", lambda svc: MagicMock())
-    monkeypatch.setattr("jarvis.main.LLMProvider", lambda s, audit: MagicMock())
-    monkeypatch.setattr("jarvis.main.SecretStore", lambda pool, key: MagicMock())
-    monkeypatch.setattr("jarvis.main.creds_for", lambda secrets, s: MagicMock())
-    monkeypatch.setattr("jarvis.main.register_calendar_tools", lambda *args: None)
-    monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
-    monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
-    monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
-    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool, user_id: MagicMock())
+    monkeypatch.setattr("jarvis.main.Tenants", FakeTenants)
     monkeypatch.setattr("jarvis.main.start_proactive", lambda *a, **k: MagicMock())
 
-    # Make build_graph raise
-    def mock_build_graph(*args, **kwargs):
+    async def boom(self, user_id):
         raise ValueError("graph build failed")
 
-    monkeypatch.setattr("jarvis.main.build_graph", mock_build_graph)
+    monkeypatch.setattr(FakeTenants, "get", boom)
 
     # Mock AsyncPostgresSaver
     mock_saver = AsyncMock()
@@ -158,9 +143,7 @@ async def test_lifespan_initialize_failure_calls_shutdown_and_closes_pool(
     fake_tg_app.initialize = AsyncMock(side_effect=ValueError("telegram init failed"))
     fake_tg_app.shutdown = AsyncMock()
     fake_tg_app.updater = AsyncMock()
-    fake_graph = MagicMock()
 
-    monkeypatch.setattr("jarvis.main.build_graph", lambda *args, **kwargs: fake_graph)
 
     # Mock TelegramChannel to return fake_tg_app
     mock_tg_channel = MagicMock()
@@ -195,7 +178,6 @@ async def test_lifespan_start_polling_failure_calls_teardown_in_order(
 
     # Mock telegram app
     fake_tg_app = AsyncMock()
-    fake_graph = MagicMock()
     fake_updater = AsyncMock()
     fake_updater.running = True
     fake_tg_app.updater = fake_updater
@@ -221,7 +203,6 @@ async def test_lifespan_start_polling_failure_calls_teardown_in_order(
 
     fake_updater.start_polling = mock_start_polling
 
-    monkeypatch.setattr("jarvis.main.build_graph", lambda *args, **kwargs: fake_graph)
 
     # Mock TelegramChannel to return fake_tg_app
     mock_tg_channel = MagicMock()
@@ -257,7 +238,6 @@ async def test_lifespan_normal_path_calls_teardown_in_order(mock_lifespan_deps):
 
     # Mock telegram app
     fake_tg_app = AsyncMock()
-    fake_graph = MagicMock()
     fake_updater = AsyncMock()
     fake_updater.running = True
     fake_tg_app.updater = fake_updater
@@ -277,7 +257,6 @@ async def test_lifespan_normal_path_calls_teardown_in_order(mock_lifespan_deps):
     fake_tg_app.stop = AsyncMock(side_effect=track_stop)
     fake_tg_app.shutdown = AsyncMock(side_effect=track_shutdown)
 
-    monkeypatch.setattr("jarvis.main.build_graph", lambda *args, **kwargs: fake_graph)
 
     # Mock TelegramChannel to return fake_tg_app
     mock_tg_channel = MagicMock()
@@ -288,7 +267,8 @@ async def test_lifespan_normal_path_calls_teardown_in_order(mock_lifespan_deps):
 
     # Normal serving
     async with lifespan(app):
-        pass
+        assert app.state.tenants is FakeTenants.made[0]
+    assert FakeTenants.made[0].closed  # runtimes' LLM clients closed in teardown
 
     # Verify call order: stop_updater -> stop -> shutdown -> pool.close
     assert call_order == ["stop_updater", "stop", "shutdown"], f"Got: {call_order}"
@@ -318,7 +298,6 @@ async def test_lifespan_refuses_voice_during_teardown_and_drains_abandoned_steps
     fake_tg_app.updater = AsyncMock()
     fake_tg_app.updater.running = True
     fake_tg_app.running = True
-    monkeypatch.setattr("jarvis.main.build_graph", lambda *a, **k: MagicMock())
     channel = MagicMock()
     channel.build = MagicMock(return_value=fake_tg_app)
     monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *a, **kw: channel)
@@ -339,7 +318,7 @@ async def test_lifespan_refuses_voice_during_teardown_and_drains_abandoned_steps
 
 
 def test_cached_service_reuses_then_rebuilds_after_ttl():
-    from jarvis.main import cached_service
+    from jarvis.tenant import cached_service
     now, n = [0.0], [0]
 
     def build():
@@ -370,7 +349,6 @@ async def test_lifespan_starts_the_scheduler_after_polling_and_stops_it_first(mo
         return sched
 
     monkeypatch.setattr("jarvis.main.start_proactive", start)
-    monkeypatch.setattr("jarvis.main.build_graph", lambda *a, **k: MagicMock())
     channel = MagicMock()
     channel.build = MagicMock(return_value=fake_tg_app)
     monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *a, **kw: channel)

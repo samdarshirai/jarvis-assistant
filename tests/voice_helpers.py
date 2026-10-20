@@ -31,7 +31,7 @@ def build(scripts, tools=(), stt_script=(), tts=None, stt=None, with_voice=True)
     g, audit = make(scripts, list(tools))
     tts = tts or FakeTTS()
     stt = stt or FakeSTT(stt_script)
-    svc = VoiceService(g, FakeDevices(), stt if with_voice else None, tts if with_voice else None)
+    svc = VoiceService(g, FakeDevices(), stt if with_voice else None, tts if with_voice else None, user_id=1)
     app = FastAPI()
 
     @app.websocket("/voice")
