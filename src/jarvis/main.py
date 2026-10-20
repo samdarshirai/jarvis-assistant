@@ -193,12 +193,47 @@ def _page(message: str, status: int, link: str = "") -> HTMLResponse:
         status_code=status)
 
 
+_CONTACT = "rai.samdarshi01@gmail.com"
+_HOME = f"""<h1>Jarvis</h1>
+<p>Jarvis is a private AI assistant for a small invited group. It works with your Google Calendar, Gmail and Tasks, and runs in an Android app.</p>
+<p>Access is by invitation only. Contact: <a href="mailto:{_CONTACT}">{_CONTACT}</a></p>
+<p><a href="/privacy">Privacy policy</a></p>"""
+_PRIVACY = f"""<h1>Jarvis privacy policy</h1>
+<p>Jarvis is a private assistant for invited users. It accesses your Google data only to act on your requests.</p>
+<h2>What we access</h2>
+<ul><li>Your Google email address, to sign you in.</li>
+<li>Google Calendar, Tasks and Gmail (read and draft), only to answer or act on what you ask in the app.</li></ul>
+<h2>What we store</h2>
+<ul><li>Your Google access token and any API keys you add (LLM, Deepgram, Tavily), encrypted at rest.</li>
+<li>Your notes, memories, chat history and an activity log, kept per user and never shown to other users.</li></ul>
+<h2>Who sees it</h2>
+<p>Your data is sent only to the services you configure: Google, and the LLM, speech and search providers whose API keys you supply. We do not sell your data or use it for advertising.</p>
+<p>Jarvis's use of information received from Google APIs adheres to the
+<a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Google user data is not used to develop or train generalized AI models.</p>
+<h2>Deletion</h2>
+<p>Email <a href="mailto:{_CONTACT}">{_CONTACT}</a> and your account and all stored data are deleted. You can also revoke access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>"""
+
+
+def _static(body: str) -> HTMLResponse:
+    return HTMLResponse(
+        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<body style="font-family:sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem">{body}')
+
+
 def create_app(with_lifespan: bool = True) -> FastAPI:
     app = FastAPI(lifespan=lifespan if with_lifespan else None)
 
     @app.get("/health")
     def health():
         return {"ok": True}
+
+    @app.get("/", response_class=HTMLResponse)
+    def home():
+        return _static(_HOME)
+
+    @app.get("/privacy", response_class=HTMLResponse)
+    def privacy():
+        return _static(_PRIVACY)
 
     @app.get("/dashboard")
     async def dashboard(request: Request):

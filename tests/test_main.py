@@ -12,6 +12,12 @@ def test_health_without_lifespan():
     assert TestClient(app).get("/health").json() == {"ok": True}
 
 
+def test_public_home_and_privacy_pages():
+    c = TestClient(create_app(with_lifespan=False))
+    assert "Jarvis" in c.get("/").text
+    assert "Limited Use" in c.get("/privacy").text
+
+
 class FakeTenants:
     made = []
 
