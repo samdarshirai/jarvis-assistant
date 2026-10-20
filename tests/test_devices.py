@@ -61,6 +61,18 @@ def test_fcm_tokens_only_for_that_user(pool, uids):
     assert (d.fcm_tokens(uids[0]), d.fcm_tokens(uids[1])) == (["fcm-a"], ["fcm-b"])
 
 
+def test_fcm_token_moves_with_the_phone(pool, uids):
+    # the same phone signed in as another user: the previous device row must stop receiving that user's pushes
+    d = Devices(pool)
+    da, _ = d.create(uids[0])
+    db, _ = d.create(uids[1])
+    d.set_fcm(da, "phone-1")
+    d.set_fcm(db, "phone-1")
+    assert (d.fcm_tokens(uids[0]), d.fcm_tokens(uids[1])) == ([], ["phone-1"])
+    d.set_fcm(db, "phone-1")  # re-saving on the same device keeps it
+    assert d.fcm_tokens(uids[1]) == ["phone-1"]
+
+
 def test_revoke(pool, uids):
     d = Devices(pool)
     did, token = d.create(uids[0])

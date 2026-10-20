@@ -42,7 +42,8 @@ class Devices:
         return found
 
     def set_fcm(self, device_id: int, fcm_token: str) -> None:
-        with self.pool.connection() as c:
+        with self.pool.connection() as c:  # one phone, one device row: a phone re-signed in as another user moves
+            c.execute("UPDATE devices SET fcm_token = NULL WHERE fcm_token = %s AND id <> %s", (fcm_token, device_id))
             c.execute("UPDATE devices SET fcm_token = %s WHERE id = %s", (fcm_token, device_id))
 
     def fcm_tokens(self, user_id: int) -> list[str]:
