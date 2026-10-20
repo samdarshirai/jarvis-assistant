@@ -1,6 +1,6 @@
 # Run Jarvis on your phone
 
-The app is Android only (Flutter, package `com.jarvis.jarvis_app`, Android 14+). iPhone is not supported.
+The app is Android only (Flutter, package `com.samdarshi.jarvis`, Android 14+). iPhone is not supported.
 
 **Implemented:** Telegram chat, Calendar (with reminders, invites and conflict warnings), Tasks and a Shopping list, Gmail, memory/notes/web research, Pixel voice app, morning brief, proactive alerts and email-to-calendar. All sub-projects built.
 

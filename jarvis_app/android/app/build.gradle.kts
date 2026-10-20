@@ -29,7 +29,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.jarvis.jarvis_app"
+        applicationId = "com.samdarshi.jarvis" // namespace stays com.jarvis.jarvis_app: the Kotlin classes live there
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
