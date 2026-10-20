@@ -143,13 +143,13 @@ class AppService:
         try:
             result = await rt.graph.ainvoke(graph_input, cfg)
         except Exception:
-            log.exception("graph run failed")
+            log.error("graph run failed")
             card = None
             try:  # re-offer a still-pending confirmation so the owner is not locked out
                 interrupts = (await rt.graph.aget_state(cfg)).interrupts
                 card = self._card(interrupts[0]) if interrupts else None
             except Exception:
-                log.exception("could not re-offer pending confirmation")
+                log.error("could not re-offer pending confirmation")
             return {"reply": FAIL_TEXT, "card": card, "client_actions": []}
         if result.get("__interrupt__"):
             return {"reply": None, "card": self._card(result["__interrupt__"][0]), "client_actions": []}

@@ -1,4 +1,5 @@
 import socket
+import traceback
 from uuid import uuid4
 
 import httpx
@@ -141,10 +142,47 @@ def test_callback_records_failure():
     audit = MemoryAudit()
     cb = AuditCallback(audit)
     cb.on_llm_error(RuntimeError("boom"), run_id=uuid4())
-    assert audit.records[0]["result"] == {"error": "boom"}
+    assert audit.records[0]["result"] == {"error": "provider_failed"}
 
 
 def test_callback_redacts_key_from_errors():
     audit = MemoryAudit()
     AuditCallback(audit, secret="sk-secret-123").on_llm_error(RuntimeError("bad key sk-secret-123"), run_id=uuid4())
     assert "sk-secret-123" not in str(audit.records[0])
+
+
+@pytest.mark.parametrize("status,code", [(401, "rejected_key"), (403, "rejected_key"), (402, "out_of_credit"),
+                                       (429, "rate_limited"), (500, "provider_failed")])
+@pytest.mark.parametrize("sync", [False, True])
+async def test_provider_error_preserves_status_without_body_request_or_chain(status, code, sync, caplog):
+    key = "sk-synthetic-status-body-secret"
+    audit = MemoryAudit()
+    provider = LLMProvider(LLMCreds("https://provider.example/v1", key, ["m"], ["m"]), audit)
+
+    def reject(request):
+        assert request.headers["Authorization"] == f"Bearer {key}"
+        return httpx.Response(status, json={"error": {"message": f"Rejected {key}"}})
+
+    await provider.http.aclose()
+    provider.http = httpx.AsyncClient(transport=httpx.MockTransport(reject))
+    model = provider.get("fast")
+    model.root_async_client.max_retries = 0
+    with httpx.Client(transport=httpx.MockTransport(reject)) as http:
+        model.root_client = model.root_client.with_options(http_client=http, max_retries=0)
+        model.client = model.root_client.chat.completions
+        try:
+            with pytest.raises(Exception) as caught:
+                if sync:
+                    model.invoke("hello")
+                else:
+                    await model.ainvoke("hello")
+        finally:
+            await provider.aclose()
+    error = caught.value
+    assert getattr(error, "status_code", None) == status
+    assert getattr(error, "code", None) == code
+    assert error.__cause__ is None and error.__context__ is None
+    assert not hasattr(error, "request") and not hasattr(error, "response") and not hasattr(error, "body")
+    assert audit.records
+    assert key not in "".join(traceback.format_exception(error))
+    assert key not in caplog.text and key not in str(audit.records)

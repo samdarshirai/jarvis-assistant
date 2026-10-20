@@ -1,8 +1,11 @@
 import asyncio
+import logging
 from datetime import date
 from types import SimpleNamespace as NS
 
 from cryptography.fernet import Fernet
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.types import Command
@@ -10,9 +13,12 @@ from langgraph.types import Command
 from langgraph.checkpoint.memory import InMemorySaver
 
 from jarvis.appapi import AppService
+from jarvis.agent.graph import build_graph
 from jarvis.google.auth import ReauthRequired
 from jarvis.main import create_app
-from jarvis.tenant import Tenants
+from jarvis.llm import LLMCreds, LLMProvider
+from jarvis.tenant import Tenants, thread_config
+from jarvis.tools.registry import Registry
 from jarvis.users import UserStore
 from jarvis.voice.devices import Devices
 
@@ -197,6 +203,66 @@ async def test_chat_failure_reoffers_pending_card():
     g.aget_state = state
     out = await svc().chat(rt(graph=g), "hi")
     assert out["reply"].startswith("Something went wrong") and out["card"]["interrupt_id"] == "i1"
+
+
+@pytest.mark.parametrize("failure", ["body", "request_chain"])
+async def test_provider_error_body_never_reaches_logs_audit_reply_or_checkpoint(caplog, failure):
+    key = "sk-synthetic-provider-body-secret"
+    audit = Audit()
+    provider = LLMProvider(LLMCreds("https://provider.example/v1", key, ["m"], ["m"]), audit)
+
+    def reject(request):
+        assert request.headers["Authorization"] == f"Bearer {key}"
+        if failure == "request_chain":
+            try:
+                raise RuntimeError(f"chained secret: {key}")
+            except RuntimeError as error:
+                raise httpx.ReadError(f"request secret: {key}", request=request) from error
+        return httpx.Response(401, json={"error": {"message": f"Rejected API key: {key}", "type": "invalid_api_key"}})
+
+    await provider.http.aclose()
+    provider.http = httpx.AsyncClient(transport=httpx.MockTransport(reject))
+    saver = InMemorySaver()
+    graph = build_graph(provider, Registry(), audit, saver, TZ)
+    try:
+        with caplog.at_level(logging.DEBUG):
+            out = await svc().chat(rt(graph=graph, audit=audit, uid=2), "hello")
+        checkpoints = [item async for item in saver.alist(thread_config(2))]
+    finally:
+        await provider.aclose()
+    errors = [value for item in checkpoints for _, channel, value in item.pending_writes if channel == "__error__"]
+    assert errors, "The failing graph step must have a checkpoint error write to inspect"
+    assert audit.rows
+    assert out["reply"].startswith("Something went wrong")
+    for surface in (caplog.text, str(audit.rows), str(out), repr(checkpoints)):
+        assert key not in surface
+
+
+async def test_chat_failure_logs_neither_raw_errors_nor_their_chains(caplog):
+    key = "sk-synthetic-chained-error-secret"
+
+    def fail():
+        try:
+            raise RuntimeError(f"request Authorization: Bearer {key}")
+        except RuntimeError as error:
+            raise ValueError("provider failed") from error
+
+    class Broken(Graph):
+        async def ainvoke(self, inp, cfg):
+            fail()
+
+        async def aget_state(self, cfg):
+            if self.inputs:
+                fail()
+            self.inputs.append(cfg)
+            return NS(interrupts=[])
+
+    with caplog.at_level(logging.ERROR):
+        out = await svc().chat(rt(graph=Broken()), "hello")
+    assert "graph run failed" in caplog.text
+    assert "could not re-offer pending confirmation" in caplog.text
+    assert key not in caplog.text
+    assert key not in str(out)
 
 
 async def test_confirm_stale_or_mismatched_does_not_resume():
