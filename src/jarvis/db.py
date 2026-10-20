@@ -28,7 +28,6 @@ CREATE TABLE IF NOT EXISTS auth_attempts (
   device_token_enc BYTEA,  -- set by the Google callback, handed to the app once by the claim
   finish_code_hash TEXT  -- sha256 of the code the callback put in the deep link; the claim must show it
 );
-ALTER TABLE auth_attempts ADD COLUMN IF NOT EXISTS finish_code_hash TEXT;
 CREATE INDEX IF NOT EXISTS auth_attempts_created_at_idx ON auth_attempts (created_at);  -- the purge on every start
 CREATE TABLE IF NOT EXISTS audit_log (
   id BIGSERIAL PRIMARY KEY,
@@ -119,12 +118,14 @@ def init_schema(pool: ConnectionPool) -> None:
     which stays NULL until users.ensure_owner adopts the rows and calls finish_user_columns."""
     with pool.connection() as conn:  # one transaction: committed on exit
         conn.execute(SCHEMA)
-        have = {r[0] for r in conn.execute(  # ALTER locks ACCESS EXCLUSIVE even as a no-op: only run it when needed
-            "SELECT table_name FROM information_schema.columns WHERE table_schema = current_schema()"
-            " AND column_name = 'user_id'").fetchall()}
-        for t in DATA_TABLES:
-            if t not in have:
-                conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+        # ALTER locks ACCESS EXCLUSIVE even as a no-op, so a re-run issues none. CREATE INDEX IF NOT EXISTS in SCHEMA
+        # may still take a brief SHARE lock on users, auth_attempts and notes.
+        have = set(conn.execute("SELECT table_name, column_name FROM information_schema.columns"
+                                " WHERE table_schema = current_schema()").fetchall())
+        adds = [(t, "user_id", "INTEGER REFERENCES users(id) ON DELETE CASCADE") for t in DATA_TABLES]
+        for t, col, decl in [*adds, ("auth_attempts", "finish_code_hash", "TEXT")]:
+            if (t, col) not in have:
+                conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {col} {decl}")
         finish_user_columns(conn)
 
 

@@ -6,7 +6,7 @@ import pytest
 from cryptography.fernet import Fernet
 from psycopg_pool import ConnectionPool
 
-from jarvis.db import init_schema
+from jarvis.db import SCHEMA, init_schema
 from jarvis.users import MAX_USERS, SecretStore, UserStore, ensure_owner
 
 KEY = Fernet.generate_key().decode()
@@ -204,7 +204,16 @@ def test_init_schema_on_an_upgraded_database_runs_no_add_column(pool):
             return cm()
 
     init_schema(Pool())
-    assert seen and not [s for s in seen if s.startswith("ALTER TABLE")]
+    # the whole statement set of a re-run: the CREATE ... IF NOT EXISTS script, then catalog/row SELECTs only
+    assert seen[0] is SCHEMA and "ALTER" not in SCHEMA.upper()
+    assert [s for s in seen[1:] if not s.lstrip().upper().startswith("SELECT")] == []
+    # a database still missing a guarded column gets it
+    with pool.connection() as c:
+        c.execute("ALTER TABLE auth_attempts DROP COLUMN finish_code_hash")
+    init_schema(pool)
+    with pool.connection() as c:
+        assert c.execute("SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()"
+                         " AND table_name = 'auth_attempts' AND column_name = 'finish_code_hash'").fetchone()
 
 
 def test_ensure_owner_is_idempotent(pool):
