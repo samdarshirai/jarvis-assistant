@@ -132,3 +132,22 @@ async def test_invalidate_makes_the_old_runtime_rebuild_google_clients(pool, uid
     assert r.tasks._svc() is first
     t.invalidate(a)
     assert r.tasks._svc() is not first
+
+
+async def test_scheduler_scans_of_every_user_retire_no_runtime(pool, uids):
+    from jarvis.proactive.scheduler import run_for_users
+    from jarvis.users import MAX_USERS
+
+    users = UserStore(pool)
+    for i in range(40 - len(uids)):  # more users than the old 32-runtime cache held
+        users.add(f"u{i}@example.com", "Europe/Berlin")
+    t = tenants(pool)
+    assert t.max_size >= MAX_USERS
+
+    async def job(rt, notifier, llm, tz, now):
+        pass
+
+    for _ in range(3):  # every tick of every job walks all users
+        await run_for_users("sweep", job, users, t, lambda uid: True, lambda u: None)
+    assert len(t._cache) == 40 and t._retired == []
+    await t.close()

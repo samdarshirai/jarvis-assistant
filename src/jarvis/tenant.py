@@ -25,7 +25,7 @@ from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.research_tools import register_research_tools
 from jarvis.tools.task_tools import register_task_tools
-from jarvis.users import SecretStore, User, UserStore, thread_id
+from jarvis.users import MAX_USERS, SecretStore, User, UserStore, thread_id
 from jarvis.web import DdgSearch, WebSearch
 
 log = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class UserRuntime:
 
 
 class Tenants:
-    def __init__(self, pool, settings, saver, max_size: int = 32, *,
+    def __init__(self, pool, settings, saver, max_size: int = max(32, MAX_USERS), *,
                  google_service_factory=build_service, llm_provider_factory=LLMProvider):
         self.pool, self.s, self.saver, self.max_size = pool, settings, saver, max_size
         self.google_service_factory, self.llm_provider_factory = google_service_factory, llm_provider_factory
@@ -102,6 +102,7 @@ class Tenants:
         self._gen: dict[int, int] = {}  # bumped by invalidate() so a build that raced it is not cached
         # ponytail: evicted and invalidated runtimes may still be in use by holders that skip the lock (scheduler,
         # owner channels), so their LLM clients close only at shutdown; one client leaks per eviction or key change.
+        # With max_size >= the user cap (the default) nothing is ever evicted: runtimes retire only on invalidate().
         self._retired: list[UserRuntime] = []
 
     def lock(self, user_id: int) -> asyncio.Lock:
