@@ -93,7 +93,11 @@ class Keys:
         await asyncio.to_thread(UserStore(self.tenants.pool).set_tz, rt.user.id, tz)
         return await self._changed(rt, "set_timezone", {"tz": tz})
 
-    async def set_llm(self, rt, base_url: str, api_key: str, model_fast: str = "", model_strong: str = ""):
+    async def set_llm(self, rt, base_url: str, api_key: str, model_fast: str | None = None,
+                      model_strong: str | None = None):
+        # None keeps the stored model ids (a key rotation must not reset them); "" clears them to the server default
+        model_fast = rt.secrets.get("model_fast", "") if model_fast is None else model_fast
+        model_strong = rt.secrets.get("model_strong", "") if model_strong is None else model_strong
         try:
             url = clean_base_url(base_url)
         except ValueError:

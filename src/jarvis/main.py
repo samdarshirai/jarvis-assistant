@@ -155,8 +155,8 @@ Models = Annotated[str, StringConstraints(max_length=500)]
 class LLMIn(BaseModel):
     base_url: Annotated[str, StringConstraints(max_length=500)]
     api_key: Secret
-    model_fast: Models = ""
-    model_strong: Models = ""
+    model_fast: Models | None = None  # omitted keeps the stored ids, "" clears them
+    model_strong: Models | None = None
 
 
 class KeyIn(BaseModel):

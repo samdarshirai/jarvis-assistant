@@ -120,10 +120,14 @@ async def test_put_llm_saves_only_after_passing_test(pool, uids, caplog):
     assert after is not before and after.secrets["llm_key"] == KEY  # invalidated: the next request has the new key
     assert KEY not in r.text and KEY not in caplog.text and KEY not in audit_text(pool)
     assert "set_llm" in audit_text(pool)
-    # Omitted model ids fall back to the server defaults (stored ones are cleared).
+    # Omitted model ids keep the stored ones: rotating the key must not reset custom models.
     await c.put("/settings/llm", json={"base_url": "https://api.example.com/v1", "api_key": KEY})
-    assert (check.calls[-1].fast, check.calls[-1].strong) == (["default/fast"], ["default/strong"])
-    assert "model_fast" not in secrets(pool, uid)
+    assert (check.calls[-1].fast, check.calls[-1].strong) == (["good/fast"], ["good/a", "good/b"])
+    assert (secrets(pool, uid)["model_fast"], secrets(pool, uid)["model_strong"]) == ("good/fast", "good/a , good/b")
+    # An explicit "" clears the stored id: the server default applies again.
+    await c.put("/settings/llm", json={"base_url": "https://api.example.com/v1", "api_key": KEY, "model_fast": ""})
+    assert (check.calls[-1].fast, check.calls[-1].strong) == (["default/fast"], ["good/a", "good/b"])
+    assert "model_fast" not in secrets(pool, uid) and secrets(pool, uid)["model_strong"] == "good/a , good/b"
 
 
 async def test_put_llm_failure_saves_nothing_and_names_model(pool, uids, caplog):
