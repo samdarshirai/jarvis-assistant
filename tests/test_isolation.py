@@ -564,7 +564,7 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("PUT", "/settings/deepgram", {"api_key": "k"}), ("PUT", "/settings/tavily", {"api_key": "k"}),
           ("DELETE", "/settings/deepgram", None), ("DELETE", "/settings/tavily", None), ("GET", "/dashboard", None),
           ("PUT", "/device/fcm", {"token": "fcm-x"})]
-PUBLIC = {"/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
+PUBLIC = {"/", "/privacy", "/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}
 
 
