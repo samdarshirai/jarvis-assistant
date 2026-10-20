@@ -17,6 +17,9 @@ from jarvis.proactive.mailwatch import MailWatch
 from jarvis.proactive.notify import make_notifier
 
 log = logging.getLogger(__name__)
+# ponytail: mail watch auto-creates calendar events, and the app has no Undo for them yet (Undo is a Telegram button,
+# the owner's only), so it runs for the owner only; set True once the app can undo an auto-added event.
+FRIEND_MAIL_WATCH = False
 REAUTH_TEXT = "Jarvis needs Google access again. Open the app and sign in."
 ISSUE_TEXT = {
     "google": REAUTH_TEXT,
@@ -94,6 +97,8 @@ async def run_for_users(name: str, job, users, tenants, has_google, notifier_for
 
 def per_user_jobs(s) -> dict:
     async def mail(rt, notifier, llm, tz, now):
+        if not (rt.user.is_owner or FRIEND_MAIL_WATCH):
+            return
         await MailWatch(rt.gmail, rt.calendar, rt.proactive, notifier, llm, rt.audit, tz, s.auto_event_cap).run_once(now)
 
     async def alerts(rt, notifier, llm, tz, now):

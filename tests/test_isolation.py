@@ -243,6 +243,8 @@ def env(pool, monkeypatch, caplog):
     CALLS.clear()
     GOOGLE.clear()
     FakeLLM.made = []
+    # mail watch is owner-only for now; run it for the friends here so its per-user isolation stays covered
+    monkeypatch.setattr("jarvis.proactive.scheduler.FRIEND_MAIL_WATCH", True)
     drop_checkpoint_tables(pool)  # the lifespan's saver creates them fresh; other suites expect them absent
     users = UserStore(pool)
     a, b = users.add("a@example.com", "Europe/Berlin").id, users.add("b@example.com", "Asia/Kolkata").id

@@ -282,13 +282,30 @@ async def test_mail_state_isolated_between_users(pool, uids):
     mail = [{"id": "m1", "subject": "Your flight booking", "snippet": ""}]
     gmail = lambda: MagicMock(search_emails=MagicMock(return_value=mail),  # noqa: E731
                               read_email=MagicMock(return_value={"from": "x", "subject": "s", "body": "b"}))
-    rt_a = runtime(user(a), llm=FakeProvider({"fast": [AIMessage('{"found": false}')]}), store=store_a, gmail=gmail())
+    rt_a = runtime(user(a, owner=True), llm=FakeProvider({"fast": [AIMessage('{"found": false}')]}), store=store_a, gmail=gmail())
     rt_b = runtime(user(b), llm=None, store=store_b, gmail=gmail())
     tick, n, _ = harness(rt_a, rt_b)
     await tick("mail", WED)
     assert store_a.mail_seen("m1") and not store_b.mail_seen("m1")
     assert store_a.get_state("mail_cursor") != "1700000000"
     assert store_b.get_state("mail_cursor") is None  # no key: no cursor initialization or source reads
+
+
+async def test_mail_watch_auto_creates_events_for_the_owner_only():
+    # friends have no Undo for auto-added events in the app yet, so mail watch runs for the owner only
+    def rt(u):
+        store = FakeProactiveStore()
+        store.set_state("mail_cursor", "1700000000")
+        cal = MagicMock(list_for_proactive=MagicMock(return_value=[]))
+        return runtime(u, llm=FakeProvider({"fast": [AIMessage('{"found": false}')]}), store=store, calendar=cal)
+
+    owner, friend = rt(user(1, owner=True)), rt(user(2))
+    tick, n, _ = harness(owner, friend)
+    await tick("mail", WED)
+    owner.gmail.search_emails.assert_called_once()
+    friend.gmail.search_emails.assert_not_called()
+    friend.calendar.create_auto_event.assert_not_called()
+    assert friend.proactive.get_state("mail_cursor") == "1700000000" and n[2].calls == []
 
 
 async def test_start_proactive_builds_and_starts_the_jobs():
@@ -337,7 +354,7 @@ async def test_real_provider_key_echo_never_reaches_proactive_logs_or_audit(name
     store.set_state("mail_cursor", "1000")
     gmail = MagicMock(search_emails=MagicMock(return_value=[{"id": "m1", "from": "airline", "subject": "Flight booking", "snippet": ""}]),
                       read_email=MagicMock(return_value={"from": "airline", "subject": "Flight booking", "body": "Flight"}))
-    rt = runtime(user(2), llm=provider, store=store, gmail=gmail)
+    rt = runtime(user(2, owner=True), llm=provider, store=store, gmail=gmail)  # mail watch is the owner's only
     rt.audit = audit
     tick, n, _ = harness(rt)
     try:

@@ -48,6 +48,7 @@ Friends are added by hand and bring their own LLM key (any OpenAI-compatible end
 - Google's one-time auth code appears in access logs on `/auth/callback?code=...`: filter the query string.
 - Unclaimed device rows: a finished sign-in the app never claims leaves a `devices` row (the encrypted attempt is purged after 10 minutes; the device stays until revoked, disabled or deleted).
 - Retired runtimes (evicted or invalidated) are held until restart: one LLM client leaks per eviction or key change.
+- Mail watch (auto-creating calendar events from booking emails) runs for the OWNER only: its Undo is a Telegram button and the app has none, so friends get no auto-created events. To enable for friends, add Undo to the app and set `FRIEND_MAIL_WATCH = True` in `proactive/scheduler.py`.
 - The 100-user cap check is count-then-insert and can overshoot under concurrent adds (CLI only).
 - Test counts and the acceptance rows in this file predate multi-tenant; multi-tenant rows are 84-98 in `ACCEPTANCE.md`, not run.
 

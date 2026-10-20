@@ -131,7 +131,7 @@ Prerequisites: `docs/DEPLOY-RAILWAY.md` "Multi-user prerequisites" done (redirec
 | 92 | Voice (Talk) with no Deepgram key | Server sends `needs_deepgram` and closes 4403; the app tells the friend to add a Deepgram key in Settings. Add it: voice works. Remove it: the message returns |
 | 93 | Owner and friend use their phones at once, each asking "my calendar" and "what do you remember" | Each sees only their own data; a friend with no LLM key gets 409 `needs_setup`, never the operator's key |
 | 94 | `python -m jarvis.users disable friend@gmail.com` while the friend is chatting | The next request returns 401 and the app returns to sign-in; the owner is unaffected. `enable`, then sign in again works |
-| 95 | Friend: trigger a conflict alert or wait for the brief | Arrives as a push on the friend's phone only; nothing reaches the owner's Telegram |
+| 95 | Friend: trigger a conflict alert or wait for the brief | Arrives as a push on the friend's phone only; nothing reaches the owner's Telegram. Mail watch is owner-only for now (no Undo in the app): a booking email to the friend adds NO calendar event |
 | 96 | Use the friend's phone more than 7 days after sign-in | Chat and calendar still work without a new sign-in (Google and device tokens survive the week) |
 | 97 | `python -m jarvis.users delete friend@gmail.com`, then again with `--yes` | First run lists row counts and deletes nothing; second removes the user, their data and their conversation |
 | 98 | Two phones signed in as the same friend | Both work; their requests serialise on the one per-user lock |
