@@ -1,3 +1,4 @@
+import datetime
 import json
 
 import pytest
@@ -27,7 +28,7 @@ class StubCreds:
             self.valid = False
 
     @classmethod
-    def from_authorized_user_info(cls, info, scopes):
+    def from_authorized_user_info(cls, info, scopes=None):
         return cls(info)
 
     def refresh(self, request):
@@ -66,10 +67,22 @@ def test_revoked_refresh_requires_reauth(key, monkeypatch):
         auth.load_credentials(store, key)
 
 
-def test_scopes_are_calendar_tasks_and_gmail_only():
-    assert sorted(s.rsplit("/", 1)[1] for s in auth.SCOPES) == [
-        "calendar", "gmail.compose", "gmail.readonly", "tasks"]
-    assert all(s.startswith("https://www.googleapis.com/auth/") for s in auth.SCOPES)
+def test_scopes_are_calendar_tasks_gmail_and_sign_in_identity_only():
+    assert sorted(s.rsplit("/", 1)[-1] for s in auth.SCOPES) == [
+        "calendar", "gmail.compose", "gmail.readonly", "openid", "tasks", "userinfo.email"]
+    assert all(s.startswith("https://www.googleapis.com/auth/") for s in auth.SCOPES if s != "openid")
+
+
+def test_loaded_credentials_keep_the_scopes_they_were_granted(key):
+    # A refresh sends these scopes; asking for ones never granted (openid on a pre-sign-in consent) fails at Google.
+    from google.oauth2.credentials import Credentials
+
+    store = MemStore()
+    old = Credentials("at", refresh_token="rt", client_id="c", client_secret="s",
+                      token_uri="https://oauth2.googleapis.com/token", scopes=auth.SCOPES[:4],
+                      expiry=datetime.datetime(2999, 1, 1))
+    auth.save_credentials(store, key, old)
+    assert auth.load_credentials(store, key).scopes == auth.SCOPES[:4]
 
 
 def test_rotated_key_requires_reauth(key, monkeypatch):

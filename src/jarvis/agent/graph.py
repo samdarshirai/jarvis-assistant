@@ -233,7 +233,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
                     kwargs = tool.args_schema(**c["args"]).model_dump(exclude_unset=True)
                     result = await asyncio.to_thread(tool.fn, **kwargs)
                 except ReauthRequired:
-                    result = {"error": "Google authorization expired. Tell the user to run: python -m jarvis.google.auth"}
+                    result = {"error": "Google authorization expired. Tell the user to open the Jarvis app and sign in with Google again."}
                 except HttpError as e:
                     result = {"error": f"Google API error {e.resp.status}. Tell the user; do not retry writes."}
                 except (ValueError, KeyError) as e:  # bad args/dates/tz; includes pydantic ValidationError

@@ -29,7 +29,7 @@ def pool():
     p = make_pool(url)
     init_schema(p)
     with p.connection() as c:
-        c.execute("TRUNCATE users, user_secrets, audit_log, oauth_tokens, devices, memories, notes, mail_seen, alerts_sent, auto_events, proactive_state"
+        c.execute("TRUNCATE users, user_secrets, audit_log, oauth_tokens, devices, memories, notes, mail_seen, alerts_sent, auto_events, proactive_state, auth_attempts"
                   " RESTART IDENTITY CASCADE")
     yield p
     p.close()

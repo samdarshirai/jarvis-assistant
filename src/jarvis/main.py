@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 from contextlib import asynccontextmanager
 from functools import partial
@@ -19,14 +20,13 @@ from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
-from jarvis.google import web_auth
-from jarvis.google.auth import PgTokenStore, save_credentials
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
 from jarvis.proactive.store import purge_all as purge_proactive
+from jarvis.signin import BadState, Refused, SignIn
 from jarvis.tenant import Tenants
 from jarvis.timeutil import now_local
-from jarvis.users import ensure_owner
+from jarvis.users import UserStore, ensure_owner
 from jarvis.voice.devices import Devices
 from jarvis.voice.stt import DeepgramSTT
 from jarvis.voice.tts import DeepgramTTS
@@ -66,8 +66,13 @@ async def lifespan(app: FastAPI):
                     DeepgramTTS(s.deepgram_api_key) if s.deepgram_api_key else None,
                     lock=owner.lock, user_id=owner_id)
                 app.state.voice = voice
-                app.state.google_store = PgTokenStore(pool, owner_id)
                 app.state.tenants, app.state.owner_id = tenants, owner_id
+                if s.google_web_client_secrets and s.public_base_url:
+                    loop = asyncio.get_running_loop()  # finish() runs in a worker thread; Tenants belongs to the loop
+                    app.state.signin = SignIn(
+                        pool, UserStore(pool), devices, s.fernet_key, client_secrets=s.google_web_client_secrets,
+                        redirect_uri=s.public_base_url.rstrip("/") + "/auth/callback",
+                        invalidate=lambda uid: loop.call_soon_threadsafe(tenants.invalidate, uid))
                 app.state.dashboard = DashboardService(devices, owner.calendar, owner.tasks, owner.gmail, owner.notes,
                                                        owner.tz, weather_city=s.weather_city, store=owner.proactive)
                 app.state.app_api = app_api = AppService(devices, owner.calendar, owner.tasks, owner.gmail, owner.notes,
@@ -101,7 +106,7 @@ async def lifespan(app: FastAPI):
                     app.state.voice = None  # a connection arriving during teardown is refused (1013) instead of reaching a closing service
                     app.state.dashboard = None
                     app.state.app_api = None
-                    app.state.google_store = None
+                    app.state.signin = None
                     app.state.tenants = None
                     try:
                         if tg.updater.running:
@@ -145,9 +150,24 @@ class ConfirmIn(BaseModel):
     decision: Literal["yes", "no"]
 
 
-def _consent_page(message: str, status: int) -> HTMLResponse:
+class StartIn(BaseModel):
+    challenge: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9_-]{43}$")]  # base64url(sha256), no padding
+
+
+class ClaimIn(BaseModel):
+    nonce: Annotated[str, StringConstraints(max_length=100)]
+    verifier: Annotated[str, StringConstraints(min_length=1, max_length=200)]
+
+
+def _page(message: str, status: int, link: str = "") -> HTMLResponse:
+    """A fixed message; with a link, the page sends the browser back to the app."""
+    go = ""
+    if link:
+        url = html.escape(link)
+        go = f'<meta http-equiv="refresh" content="0;url={url}">'
+        message += f' <a href="{url}">Open Jarvis</a>'
     return HTMLResponse(
-        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+        f'<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">{go}'
         f'<body style="font-family:sans-serif;padding:2rem;text-align:center"><h2>Jarvis</h2><p>{message}</p>',
         status_code=status)
 
@@ -189,40 +209,45 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     def found(body):
         return JSONResponse({"error": "not_found"}, status_code=404) if body is None else body
 
-    def google_redirect(s) -> str | None:
-        return s.public_base_url.rstrip("/") + "/google/callback" if s.google_web_client_secrets and s.public_base_url else None
+    def signin_or_503():
+        svc = getattr(app.state, "signin", None)
+        return svc, (JSONResponse({"error": "unavailable"}, status_code=503) if svc is None else None)
 
-    @app.post("/google/auth/start")
-    async def google_auth_start(request: Request):
-        svc, err = await guarded(request)
+    @app.post("/auth/start")
+    async def auth_start(body: StartIn):
+        svc, err = signin_or_503()
         if err:
             return err
-        s = get_settings()
-        redirect = google_redirect(s)
-        if redirect is None:
-            return JSONResponse({"error": "not_configured"}, status_code=503)
-        url = await asyncio.to_thread(web_auth.start_url, s.google_web_client_secrets, redirect, web_auth.make_state(s.fernet_key))
-        return {"url": url}
+        nonce, url = await asyncio.to_thread(svc.start, body.challenge)
+        return {"nonce": nonce, "url": url}
 
-    @app.get("/google/callback", response_class=HTMLResponse)
-    async def google_callback(code: str = "", state: str = "", error: str = ""):
-        s = get_settings()
-        store = getattr(app.state, "google_store", None)
-        redirect = google_redirect(s)
-        if store is None or redirect is None:
-            return _consent_page("Jarvis is not ready to connect Google yet.", 503)
-        if error or not code or not web_auth.state_ok(s.fernet_key, state):
-            return _consent_page("That Google link is invalid or expired. Open Jarvis and tap Reconnect Google again.", 400)
+    @app.get("/auth/callback", response_class=HTMLResponse)
+    async def auth_callback(code: str = "", state: str = "", error: str = ""):
+        svc = getattr(app.state, "signin", None)
+        if svc is None:
+            return _page("Jarvis is not ready for sign-in yet.", 503)
+        if error or not code:
+            return _page("Sign-in was cancelled or the link is invalid. Open Jarvis and try again.", 400)
         try:
-            creds = await asyncio.to_thread(web_auth.exchange, s.google_web_client_secrets, redirect, code)
-            await asyncio.to_thread(save_credentials, store, s.fernet_key, creds)
-        except Exception:
-            log.exception("google consent exchange failed")
-            return _consent_page("Google did not accept the sign-in. Open Jarvis and try again.", 502)
-        tenants = getattr(app.state, "tenants", None)
-        if tenants is not None:
-            tenants.invalidate(app.state.owner_id)  # rebuild the owner's Google clients on the new consent
-        return _consent_page("Google is connected. You can return to Jarvis.", 200)
+            link = await asyncio.to_thread(svc.finish, state, code)
+        except BadState:
+            return _page("That sign-in link is invalid or expired. Open Jarvis and try again.", 400)
+        except Refused:
+            return _page("That Google account is not on the list. Ask the owner to add your email.", 403)
+        except Exception as e:
+            log.error("google sign-in failed: %s", type(e).__name__)  # the type only: Google's text may carry the code
+            return _page("Google did not accept the sign-in. Open Jarvis and try again.", 502)
+        return _page("Signed in. Returning to Jarvis…", 200, link)
+
+    @app.post("/auth/claim")
+    async def auth_claim(body: ClaimIn):
+        svc, err = signin_or_503()
+        if err:
+            return err
+        token = await asyncio.to_thread(svc.claim, body.nonce, body.verifier)
+        if token is None:
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return {"token": token, "needs_setup": await asyncio.to_thread(svc.needs_setup, token)}
 
     @app.get("/calendar")
     async def calendar(request: Request, days: int = 7):

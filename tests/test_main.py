@@ -28,6 +28,9 @@ class FakeTenants:
     async def close(self):
         self.closed = True
 
+    def invalidate(self, user_id):
+        self.invalidated = [*getattr(self, "invalidated", []), user_id]
+
 
 @pytest.fixture
 def mock_lifespan_deps(monkeypatch):
@@ -45,7 +48,7 @@ def mock_lifespan_deps(monkeypatch):
         tavily_api_key="",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
-        deepgram_api_key="", fcm_credentials_path="",
+        deepgram_api_key="", fcm_credentials_path="", google_web_client_secrets="", public_base_url="",
     )
 
     # Patch all dependencies to minimal no-ops
@@ -91,7 +94,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
         tavily_api_key="",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
-        deepgram_api_key="", fcm_credentials_path="",
+        deepgram_api_key="", fcm_credentials_path="", google_web_client_secrets="", public_base_url="",
     )
 
     # Patch all dependencies to minimal no-ops
@@ -388,3 +391,27 @@ def test_dashboard_returns_the_payload_for_a_paired_device():
     r = TestClient(app).get("/dashboard", headers={"Authorization": "Bearer good"})
     assert r.status_code == 200 and r.json() == {"events": [], "reauth": False}
     assert dash.seen == "Bearer good"
+
+
+@pytest.mark.asyncio
+async def test_lifespan_wires_sign_in_when_the_web_client_is_configured(mock_lifespan_deps):
+    import asyncio
+
+    import jarvis.main
+
+    monkeypatch = mock_lifespan_deps["monkeypatch"]
+    s = jarvis.main.get_settings()
+    s.google_web_client_secrets, s.public_base_url = "{}", "https://jarvis.example.com/"
+    tg = AsyncMock()
+    tg.updater = AsyncMock()
+    channel = MagicMock()
+    channel.build = MagicMock(return_value=tg)
+    monkeypatch.setattr("jarvis.main.TelegramChannel", lambda *a, **kw: channel)
+    app = FastAPI()
+    async with lifespan(app):
+        signin = app.state.signin
+        assert signin.redirect_uri == "https://jarvis.example.com/auth/callback"
+        await asyncio.to_thread(signin.invalidate, 7)  # from the worker thread finish() runs in
+        await asyncio.sleep(0)
+        assert FakeTenants.made[0].invalidated == [7]
+    assert app.state.signin is None

@@ -1,19 +1,10 @@
 import json
-from types import SimpleNamespace
 
 import pytest
-from cryptography.fernet import Fernet
-from fastapi.testclient import TestClient
 
 from jarvis.google import web_auth
-from jarvis.main import create_app
 
-REDIRECT = "https://jarvis.example.com/google/callback"
-
-
-@pytest.fixture
-def key():
-    return Fernet.generate_key().decode()
+REDIRECT = "https://jarvis.example.com/auth/callback"
 
 
 @pytest.fixture
@@ -25,100 +16,32 @@ def secrets(tmp_path):
     return str(p)
 
 
-def settings(key, secrets):
-    return SimpleNamespace(fernet_key=key, google_web_client_secrets=secrets, public_base_url="https://jarvis.example.com/")
-
-
-class MemStore:
-    def __init__(self):
-        self.blobs = {}
-
-    def put(self, provider, blob):
-        self.blobs[provider] = blob
-
-    def get(self, provider):
-        return self.blobs.get(provider)
-
-
-class Svc:
-    def __init__(self, ok=True):
-        self.ok = ok
-
-    async def authorized(self, header):
-        return self.ok
-
-
-class Tenants:
-    def __init__(self):
-        self.invalidated = []
-
-    def invalidate(self, user_id):
-        self.invalidated.append(user_id)
-
-
-def client(monkeypatch, key, secrets, ok=True, store=None):
-    monkeypatch.setattr("jarvis.main.get_settings", lambda: settings(key, secrets))
-    app = create_app(with_lifespan=False)
-    app.state.app_api = Svc(ok)
-    app.state.google_store = store
-    app.state.tenants, app.state.owner_id = Tenants(), 1
-    return TestClient(app)
-
-
-def test_state_roundtrip_and_tamper(key):
-    s = web_auth.make_state(key)
-    assert web_auth.state_ok(key, s)
-    assert not web_auth.state_ok(key, "garbage")
-    assert not web_auth.state_ok(Fernet.generate_key().decode(), s)
-
-
-def test_start_needs_a_paired_device(monkeypatch, key, secrets):
-    assert client(monkeypatch, key, secrets, ok=False).post("/google/auth/start").status_code == 401
-
-
-def test_start_returns_offline_consent_url(monkeypatch, key, secrets):
-    r = client(monkeypatch, key, secrets).post("/google/auth/start", headers={"Authorization": "Bearer x"})
-    url = r.json()["url"]
-    assert r.status_code == 200 and url.startswith("https://accounts.google.com/")
+def test_start_url_asks_offline_consent_with_identity_scopes(secrets):
+    url = web_auth.start_url(secrets, REDIRECT, "nonce123")
+    assert url.startswith("https://accounts.google.com/") and "state=nonce123" in url
     assert "access_type=offline" in url and "prompt=consent" in url and "code_challenge" not in url
-    assert "redirect_uri=https%3A%2F%2Fjarvis.example.com%2Fgoogle%2Fcallback" in url
-
-
-def test_start_503_when_web_client_not_configured(monkeypatch, key):
-    assert client(monkeypatch, key, "").post("/google/auth/start", headers={"Authorization": "Bearer x"}).status_code == 503
-
-
-def test_callback_rejects_bad_state_and_stores_nothing(monkeypatch, key, secrets):
-    store = MemStore()
-    r = client(monkeypatch, key, secrets, store=store).get("/google/callback", params={"code": "c", "state": "forged"})
-    assert r.status_code == 400 and not store.blobs
-
-
-def test_callback_stores_encrypted_credentials_and_invalidates_the_owner_runtime(monkeypatch, key, secrets):
-    class Creds:
-        def to_json(self):
-            return json.dumps({"refresh_token": "rt"})
-
-    monkeypatch.setattr(web_auth, "exchange", lambda path, redirect, code: Creds() if (code, redirect) == ("good", REDIRECT) else 1 / 0)
-    store = MemStore()
-    c = client(monkeypatch, key, secrets, store=store)
-    r = c.get(
-        "/google/callback", params={"code": "good", "state": web_auth.make_state(key)})
-    assert r.status_code == 200 and "connected" in r.text
-    assert json.loads(Fernet(key).decrypt(store.blobs["google"])) == {"refresh_token": "rt"}
-    assert c.app.state.tenants.invalidated == [1]
-
-
-def test_callback_exchange_failure_is_502(monkeypatch, key, secrets):
-    def boom(*a):
-        raise RuntimeError("invalid_grant")
-
-    monkeypatch.setattr(web_auth, "exchange", boom)
-    r = client(monkeypatch, key, secrets, store=MemStore()).get(
-        "/google/callback", params={"code": "c", "state": web_auth.make_state(key)})
-    assert r.status_code == 502
+    assert "openid" in url and "userinfo.email" in url and "calendar" in url
+    assert "redirect_uri=https%3A%2F%2Fjarvis.example.com%2Fauth%2Fcallback" in url
 
 
 def test_start_url_accepts_the_client_json_inline(secrets):
     url = web_auth.start_url(open(secrets).read(), REDIRECT, "s")
     assert url.startswith("https://accounts.google.com/") and "client_id=cid" in url
+
+
+def test_exchange_verifies_the_id_token_against_the_web_client(monkeypatch, secrets):
+    seen = {}
+
+    def fetch_token(self, code):
+        seen["code"] = code
+        self.oauth2session.token = {"access_token": "at", "id_token": "idt", "token_type": "Bearer", "expires_at": 2000000000}
+
+    def verify(token, request, audience):
+        seen["verify"] = (token, audience)
+        return {"email": "a@example.com", "sub": "s", "email_verified": True}
+
+    monkeypatch.setattr(web_auth.Flow, "fetch_token", fetch_token)
+    monkeypatch.setattr(web_auth.id_token, "verify_oauth2_token", verify)
+    creds, claims = web_auth.exchange(secrets, REDIRECT, "the-code")
+    assert seen == {"code": "the-code", "verify": ("idt", "cid")}
+    assert claims["sub"] == "s" and creds.token == "at"

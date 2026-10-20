@@ -14,7 +14,7 @@ from jarvis.proactive.notify import make_notifier
 from jarvis.timeutil import now_local
 
 log = logging.getLogger(__name__)
-REAUTH_TEXT = "Jarvis needs Google access again. Run python -m jarvis.google.auth on the server."
+REAUTH_TEXT = "Jarvis needs Google access again. Open the app and sign in."
 
 
 def guarded(name: str, job, notifier, store, audit, tz: str):

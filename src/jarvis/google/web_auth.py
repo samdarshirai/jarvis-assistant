@@ -1,23 +1,11 @@
-"""Browser-based Google consent for the remote backend: the app opens start_url(), Google redirects to /google/callback."""
+"""Browser-based Google sign-in for the remote backend: the app opens start_url(), Google redirects to /auth/callback."""
 import json
 
-from cryptography.fernet import Fernet, InvalidToken
+from google.auth.transport.requests import Request
+from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
 
 from jarvis.google.auth import SCOPES
-
-STATE_TTL = 600  # seconds the consent link stays valid
-
-
-def make_state(key: str) -> str:
-    return Fernet(key).encrypt(b"google-consent").decode()
-
-
-def state_ok(key: str, state: str) -> bool:
-    try:
-        return Fernet(key).decrypt(state.encode(), ttl=STATE_TTL) == b"google-consent"
-    except (InvalidToken, ValueError):
-        return False
 
 
 def _flow(secrets_path: str, redirect_uri: str) -> Flow:
@@ -34,6 +22,8 @@ def start_url(secrets_path: str, redirect_uri: str, state: str) -> str:
 
 
 def exchange(secrets_path: str, redirect_uri: str, code: str):
+    """(credentials, ID-token claims), the ID token verified against this web client."""
     flow = _flow(secrets_path, redirect_uri)
     flow.fetch_token(code=code)
-    return flow.credentials
+    creds = flow.credentials
+    return creds, id_token.verify_oauth2_token(creds.id_token, Request(), flow.client_config["client_id"])

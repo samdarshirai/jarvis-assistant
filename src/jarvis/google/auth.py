@@ -13,6 +13,8 @@ SCOPES = [
     "https://www.googleapis.com/auth/tasks",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
+    "openid",  # identity for sign-in: Google answers "email" with this URL, so ask for it by URL (oauthlib checks)
+    "https://www.googleapis.com/auth/userinfo.email",
 ]
 PROVIDER = "google"
 
@@ -56,8 +58,8 @@ def load_credentials(store: TokenStore, key: str):
     try:
         info = json.loads(Fernet(key).decrypt(blob))
     except (InvalidToken, ValueError) as e:
-        raise ReauthRequired("Stored Google token unreadable (key changed or corrupt); re-run python -m jarvis.google.auth") from e
-    creds = Credentials.from_authorized_user_info(info, SCOPES)
+        raise ReauthRequired("Stored Google token unreadable (key changed or corrupt); sign in again from the app") from e
+    creds = Credentials.from_authorized_user_info(info)  # the scopes it was granted: refresh asks for exactly those
     if not creds.valid:
         try:
             creds.refresh(Request())
