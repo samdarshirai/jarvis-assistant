@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        if (!voiceReady(context)) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel("boot", "Jarvis reminders", NotificationManager.IMPORTANCE_DEFAULT))
         val open = PendingIntent.getActivity(

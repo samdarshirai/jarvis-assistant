@@ -29,9 +29,16 @@ class ClientActionsEvent extends ServerEvent {
 }
 
 class ErrorEvent extends ServerEvent {
-  const ErrorEvent(this.message);
+  const ErrorEvent(this.message, {this.needsSetup = false});
   final String message;
+  final bool needsSetup; // a missing key (backend then closes with 4403): the session cannot work until it is added
 }
+
+/// Backend `{"type":"error","code":...}` before a 4403 close, in plain words.
+const setupMessages = {
+  'needs_deepgram': 'Add your Deepgram key in Settings to enable voice',
+  'needs_llm': 'Add your AI key in Settings to talk to Jarvis',
+};
 
 class AudioEvent extends ServerEvent {
   const AudioEvent(this.pcm);
@@ -59,7 +66,8 @@ ServerEvent? decodeServer(Object? raw) {
       case 'client_actions':
         return ClientActionsEvent(List<Map<String, dynamic>>.from(j['actions'] as List));
       case 'error':
-        return ErrorEvent(j['message'] as String);
+        final setup = setupMessages[j['code']];
+        return setup != null ? ErrorEvent(setup, needsSetup: true) : ErrorEvent(j['message'] as String);
       default:
         return null;
     }

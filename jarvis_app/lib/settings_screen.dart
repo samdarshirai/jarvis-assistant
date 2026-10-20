@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 
 import 'calendar_screen.dart' show ScreenShell;
+import 'api.dart';
+import 'keys_screen.dart';
 import 'theme.dart';
 
 /// Settings: re-authorise Google on the backend. [startAuth] asks the backend for the consent URL,
 /// [open] hands it to the phone's browser (Google blocks OAuth inside embedded WebViews).
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, required this.startAuth, required this.open, this.onReturn});
+  const SettingsScreen({super.key, required this.startAuth, required this.open, this.onReturn, this.api});
+  final ApiClient? api;
   final Future<String> Function() startAuth;
   final Future<void> Function(Uri url) open;
   final VoidCallback? onReturn; // after the browser step, so the dashboard can refetch
@@ -60,6 +63,15 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
   Widget build(BuildContext context) => ScreenShell(
         title: 'Settings',
         child: ListView(padding: const EdgeInsets.all(16), children: [
+          if (widget.api != null) ListTile(
+            leading: const Icon(Icons.key, color: amber),
+            title: const Text('API keys', style: TextStyle(color: cream)),
+            subtitle: const Text('AI provider, voice and web search', style: TextStyle(color: mutedText)),
+            onTap: () async {
+              await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => KeysScreen(api: widget.api!)));
+              widget.onReturn?.call();
+            },
+          ),
           const Text('Google', style: TextStyle(color: mutedText, fontSize: 12)),
           const SizedBox(height: 8),
           const Text('Calendar, tasks and email access can expire. Reconnect to sign in to Google again.',

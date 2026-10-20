@@ -6,30 +6,23 @@ import 'launch.dart';
 import 'push.dart';
 import 'wake.dart';
 
+bool _bridgesStarted = false;
+
+Future<void> _ready(bool voice) async {
+  await Permission.notification.request();
+  try { await PushBridge.init(); } catch (_) {}
+  if (!voice) return;
+  await [Permission.microphone, Permission.contacts, Permission.bluetoothConnect].request();
+  try { await WakeService.ensureRunning(); } catch (_) {}
+  if (_bridgesStarted) return;
+  _bridgesStarted = true;
+  try { await WakeService.bridgeWakeToSession(); } catch (_) {}
+  try { await LaunchBridge.init(); } catch (_) {}
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   WakeService.init();
-  await [Permission.microphone, Permission.notification, Permission.contacts, Permission.bluetoothConnect].request();
-  try {
-    await PushBridge.init(); // optional; never blocks startup
-  } catch (e) {
-    debugPrint('push unavailable: $e');
-  }
-  runApp(JarvisApp(onSessionEnded: WakeService.resume, onSessionStarted: WakeService.pause, fcmToken: PushBridge.token));
-  // The manual Talk button must work even without a wake word (missing model file or mic permission), so never crash startup.
-  try {
-    await WakeService.ensureRunning(); // also covers "service not running" after a reboot once the user opens the app
-  } catch (e) {
-    debugPrint('wake word unavailable: $e');
-  }
-  try {
-    await WakeService.bridgeWakeToSession(); // separate: a service start failure must not drop a saved cold-start wake
-  } catch (e) {
-    debugPrint('wake bridge unavailable: $e');
-  }
-  try {
-    await LaunchBridge.init();
-  } catch (e) {
-    debugPrint('assistant launch unavailable: $e');
-  }
+  runApp(JarvisApp(onSessionEnded: WakeService.resume, onSessionStarted: WakeService.pause,
+      fcmToken: PushBridge.token, onReady: _ready, stopWake: WakeService.stop));
 }

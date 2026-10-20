@@ -15,6 +15,10 @@ class FakeApi implements ApiClient {
   @override
   Duration get timeout => Duration.zero;
   @override
+  Future<Map<String, dynamic>> put(String path, Map<String, dynamic> body) => throw UnimplementedError();
+  @override
+  Future<Map<String, dynamic>> delete(String path) => throw UnimplementedError();
+  @override
   Future<Map<String, dynamic>> get(String path, [Map<String, String>? query]) async => {'tasks': tasks};
   @override
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) async {

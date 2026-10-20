@@ -209,6 +209,19 @@ void main() {
     });
   });
 
+  test('a needs-setup close speaks the missing-key message, not "connection lost"', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.c.start();
+      a.flushMicrotasks();
+      r.socket.ctrl.add(const ErrorEvent('Add your Deepgram key in Settings to enable voice', needsSetup: true));
+      r.socket.ctrl.close();
+      a.flushMicrotasks();
+      expect(r.speaker.said, ['Add your Deepgram key in Settings to enable voice']);
+      expect((r.c.phase, r.c.error), (Phase.idle, 'Add your Deepgram key in Settings to enable voice'));
+    });
+  });
+
   test('an unexpected server close says the connection was lost and ends', () {
     fakeAsync((a) {
       final r = Rig();

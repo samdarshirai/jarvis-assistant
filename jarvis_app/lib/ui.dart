@@ -12,7 +12,6 @@ import 'orb.dart';
 import 'phone.dart';
 import 'settings_screen.dart';
 import 'tasks_screen.dart';
-import 'config.dart';
 import 'confirm_card.dart';
 import 'dashboard.dart';
 import 'dashboard_cards.dart';
@@ -20,12 +19,27 @@ import 'session.dart';
 import 'theme.dart';
 
 class SessionScreen extends StatelessWidget {
-  const SessionScreen({super.key, required this.controller, this.dashboard, this.api, this.alarm, this.runPhoneActions});
+  const SessionScreen({super.key, required this.controller, this.dashboard, this.api, this.alarm, this.runPhoneActions,
+    this.startSignIn, this.voiceReady = true, this.onSettingsReturn, this.onNeedsSetup, this.open = openInBrowser});
   final SessionController controller;
   final DashboardController? dashboard;
   final ApiClient? api; // null: detail screens are not reachable (tests, unpaired)
   final Future<DateTime?> Function()? alarm;
   final Future<void> Function(List<Map<String, dynamic>> actions)? runPhoneActions;
+  final Future<Uri> Function()? startSignIn;
+  final bool voiceReady;
+  final VoidCallback? onSettingsReturn;
+  final VoidCallback? onNeedsSetup; // chat got 409 needs_setup: lock until /me says the LLM key is back
+  final Future<void> Function(Uri) open;
+
+  void _talk(BuildContext context, {String? text}) {
+    if (voiceReady) {
+      controller.start(speakText: text);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Add your Deepgram key in Settings > API keys to enable voice.')));
+    }
+  }
 
   void _push(BuildContext context, Widget screen) =>
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
@@ -36,7 +50,7 @@ class SessionScreen extends StatelessWidget {
     // the voice orb is the "ask Jarvis" path: leave the detail screen, then start a session
     void ask() {
       Navigator.of(context).pop();
-      controller.start();
+      _talk(context);
     }
 
     _push(
@@ -58,9 +72,10 @@ class SessionScreen extends StatelessWidget {
         ChatScreen(
             api: a,
             initialText: initialText,
+            onNeedsSetup: onNeedsSetup,
             onVoice: () {
               Navigator.of(context).pop();
-              controller.start();
+              _talk(context);
             },
             runPhoneActions: runPhoneActions ?? (_) async {}));
   }
@@ -71,13 +86,17 @@ class SessionScreen extends StatelessWidget {
     _push(
         context,
         SettingsScreen(
-            startAuth: () async => (await a.post('/google/auth/start'))['url'] as String,
-            open: openInBrowser,
-            onReturn: () => dashboard?.refresh()));
+            api: a,
+            startAuth: () async {
+              if (startSignIn == null) throw StateError('Sign-in unavailable');
+              return (await startSignIn!()).toString();
+            },
+            open: open,
+            onReturn: () { dashboard?.refresh(); onSettingsReturn?.call(); }));
   }
 
   void _brief(BuildContext context, String text) => _push(
-      context, BriefScreen(brief: text, speak: (t) => controller.start(speakText: t), stop: controller.stop));
+      context, BriefScreen(brief: text, speak: (t) => _talk(context, text: t), stop: controller.stop));
 
   @override
   Widget build(BuildContext context) => Scaffold(
@@ -131,7 +150,7 @@ class SessionScreen extends StatelessWidget {
                 if (dashboard != null)
                   DashboardSections(
                       controller: dashboard!,
-                      onPlayBrief: (text) => api == null ? controller.start(speakText: text) : _brief(context, text),
+                      onPlayBrief: (text) => api == null ? _talk(context, text: text) : _brief(context, text),
                       onOpen: (t) => _open(context, t),
                       onOpenEmail: openEmailInGmail,
                       onSettings: api == null ? null : () => _settings(context),
@@ -158,12 +177,13 @@ class SessionScreen extends StatelessWidget {
           right: 0,
           bottom: 20,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            const Text('Say "Hey Jarvis"', style: TextStyle(fontSize: 12, color: mutedText)),
+            Text(voiceReady ? 'Say "Hey Jarvis"' : 'Add a Deepgram key in Settings to enable voice',
+                style: const TextStyle(fontSize: 12, color: mutedText)),
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [
               api == null ? const SizedBox(width: 54) : _sideButton(Icons.chat_bubble, 'Chat', () => _chat(context)),
               const SizedBox(width: 16),
-              OrbButton(onTap: () => controller.start()),
+              OrbButton(onTap: () => _talk(context)),
               const SizedBox(width: 16),
               _sideButton(Icons.apps, 'What Jarvis can do',
                   () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const CapabilitiesScreen()))),
@@ -288,39 +308,4 @@ class _VoiceView extends StatelessWidget {
       ),
     ]);
   }
-}
-
-class PairingScreen extends StatefulWidget {
-  const PairingScreen({super.key, required this.onSaved});
-  final void Function(Config) onSaved;
-  @override
-  State<PairingScreen> createState() => _PairingScreenState();
-}
-
-class _PairingScreenState extends State<PairingScreen> {
-  final _url = TextEditingController(), _token = TextEditingController();
-
-  @override
-  Widget build(BuildContext context) => Scaffold(
-        body: CocoaBackground(
-          child: SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(children: [
-                Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Pair Jarvis', style: Theme.of(context).textTheme.headlineMedium)),
-                const SizedBox(height: 16),
-                TextField(controller: _url, decoration: const InputDecoration(labelText: 'Backend URL (https://…)')),
-                TextField(controller: _token, decoration: const InputDecoration(labelText: 'Device token'), obscureText: true),
-                const SizedBox(height: 16),
-                FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: amber, foregroundColor: amberInk),
-                    onPressed: () => widget.onSaved(Config(_url.text.trim(), _token.text.trim())),
-                    child: const Text('Pair')),
-              ]),
-            ),
-          ),
-        ),
-      );
 }

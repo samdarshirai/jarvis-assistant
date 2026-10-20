@@ -23,7 +23,9 @@ class _Card {
 
 /// Text chat with Jarvis: POST /chat, confirm cards inline, phone actions handed back to the caller.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, required this.api, required this.onVoice, required this.runPhoneActions, this.initialText});
+  const ChatScreen(
+      {super.key, required this.api, required this.onVoice, required this.runPhoneActions, this.initialText, this.onNeedsSetup});
+  final VoidCallback? onNeedsSetup; // the backend's 409 needs_setup: the LLM key is gone, so the app re-checks /me
   final String? initialText; // sent as the first message (voice quick-start chips)
   final ApiClient api;
   final VoidCallback onVoice;
@@ -37,7 +39,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _text = TextEditingController();
   final _scroll = ScrollController();
   final _msgs = <_Msg>[];
-  bool _busy = false;
+  bool _busy = false, _locked = false;
 
   @override
   void initState() {
@@ -58,14 +60,14 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _send() {
     final t = _text.text.trim();
-    if (t.isEmpty || _busy) return;
+    if (t.isEmpty || _busy || _locked) return;
     _text.clear();
     setState(() => _msgs.add(_Msg(t, mine: true)));
     _call('/chat', {'text': t});
   }
 
   void _decide(_Card c, bool yes) {
-    if (_busy || c.decision != null) return;
+    if (_busy || _locked || c.decision != null) return;
     setState(() => c.decision = yes);
     _call('/chat/confirm', {'interrupt_id': c.id, 'decision': yes ? 'yes' : 'no'});
   }
@@ -79,6 +81,17 @@ class _ChatScreenState extends State<ChatScreen> {
       final acts = r['client_actions'];
       if (acts is List && acts.isNotEmpty) {
         await widget.runPhoneActions(acts.whereType<Map>().map((m) => Map<String, dynamic>.from(m)).toList());
+      }
+    } on ApiError catch (e) {
+      if (!mounted) return;
+      if (e.status == 409 && e.body?['error'] == 'needs_setup') {
+        setState(() {
+          _locked = true;
+          _msgs.add(_Msg('Add your AI key in Settings > API keys to chat with Jarvis.'));
+        });
+        widget.onNeedsSetup?.call();
+      } else {
+        setState(() => _msgs.add(_Msg("Couldn't reach Jarvis.")));
       }
     } catch (_) {
       if (mounted) setState(() => _msgs.add(_Msg("Couldn't reach Jarvis.")));
