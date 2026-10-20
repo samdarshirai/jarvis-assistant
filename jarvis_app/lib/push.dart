@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'app.dart';
+import 'store.dart';
 
 String? speakTextOf(Map<String, dynamic> data) {
   final s = data['speak'];
@@ -13,6 +14,7 @@ class PushBridge {
 
   /// Push is optional: without google-services.json the app still works; only tap-to-play is unavailable.
   static Future<void> init() async {
+    if ((await const ConfigStore().load()).token == null || ready) return;
     try {
       await Firebase.initializeApp();
       ready = true;
@@ -29,5 +31,6 @@ class PushBridge {
     FirebaseMessaging.onMessageOpenedApp.listen(play); // app was in the background
   }
 
-  static Future<String?> token() async => ready ? FirebaseMessaging.instance.getToken() : null;
+  static Future<String?> token() async => ready && (await const ConfigStore().load()).token != null
+      ? FirebaseMessaging.instance.getToken() : null;
 }

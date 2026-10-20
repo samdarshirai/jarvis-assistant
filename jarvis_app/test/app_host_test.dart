@@ -5,9 +5,23 @@ import 'package:jarvis_app/app.dart';
 import 'session_rig.dart';
 
 void main() {
+  setUp(() => AppHost.ready = true);
   tearDown(() {
     AppHost.attach(null);
+    AppHost.ready = false;
     AppHost.now = DateTime.now;
+  });
+
+  test('a voice request before sign-in is discarded, never replayed after setup', () {
+    fakeAsync((a) {
+      final r = Rig();
+      AppHost.ready = false;
+      AppHost.startSession(speakText: 'untrusted entry');
+      AppHost.ready = true;
+      AppHost.attach(r.c);
+      a.flushMicrotasks();
+      expect(r.socket.sent, isEmpty);
+    });
   });
 
   test('a start requested before the controller exists runs once on attach', () {

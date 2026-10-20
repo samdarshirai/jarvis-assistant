@@ -40,6 +40,12 @@ void main() {
     expect((decodeServer('{"type":"error","message":"boom"}') as ErrorEvent).message, 'boom');
   });
 
+  test('needs_setup error codes become friendly messages', () {
+    final e = decodeServer('{"type":"error","code":"needs_deepgram"}') as ErrorEvent;
+    expect((e.message, e.needsSetup), ('Add your Deepgram key in Settings to enable voice', true));
+    expect((decodeServer('{"type":"error","code":"needs_llm"}') as ErrorEvent).message, contains('AI key'));
+  });
+
   test('garbage and unknown frames decode to null', () {
     for (final raw in ['', 'nope', '[]', '{"type":3}', '{"type":"mystery"}', '{"type":"state"}', 42, null]) {
       expect(decodeServer(raw), isNull, reason: '$raw');

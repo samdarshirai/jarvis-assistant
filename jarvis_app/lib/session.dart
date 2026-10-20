@@ -80,6 +80,7 @@ class SessionController extends ChangeNotifier {
   Timer? _timer;
   DateTime _playEnd = DateTime.fromMillisecondsSinceEpoch(0); // when buffered Jarvis audio finishes playing
   bool _ending = false;
+  String? _closeReason; // what to say when the server hangs up (a missing key) instead of "connection lost"
   int _gen = 0; // bumped by every teardown so an in-flight start() can tell it was cancelled
   Future<void> _actionsChain = Future.value();
   final List<String> _queuedSpeak = []; // push text that arrived while this session was still connecting
@@ -107,6 +108,7 @@ class SessionController extends ChangeNotifier {
     final gen = ++_gen;
     _queuedSpeak.clear();
     _ending = false;
+    _closeReason = null;
     error = null;
     card = null;
     userText = jarvisText = '';
@@ -195,8 +197,9 @@ class SessionController extends ChangeNotifier {
         notifyListeners();
       case ClientActionsEvent(:final actions):
         _actionsChain = _actionsChain.then((_) => _runActions(actions));
-      case ErrorEvent(:final message):
+      case ErrorEvent(:final message, :final needsSetup):
         error = message;
+        if (needsSetup) _closeReason = message;
         notifyListeners();
       case AudioEvent(:final pcm):
         final now = DateTime.now();
@@ -255,7 +258,7 @@ class SessionController extends ChangeNotifier {
   void _onClosed() {
     if (_ending || phase == Phase.idle) return;
     _ending = true;
-    speaker.say('Jarvis connection lost.');
+    speaker.say(_closeReason ?? 'Jarvis connection lost.');
     _teardown(closeSocket: false);
   }
 

@@ -9,16 +9,31 @@ import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.TimeZone
+
+/** Non-secret hint for native entry points; the Dart side checks the actual secure token and /me. */
+internal fun voiceReady(context: Context): Boolean =
+    context.getSharedPreferences("jarvis_readiness", Context.MODE_PRIVATE).getBoolean("voice", false)
 
 class MainActivity : FlutterActivity() {
     private var channel: MethodChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "jarvis/tz").setMethodCallHandler { call, result ->
+            if (call.method == "get") result.success(TimeZone.getDefault().id) else result.notImplemented()
+        }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "jarvis/readiness").setMethodCallHandler { call, result ->
+            if (call.method == "set") {
+                getSharedPreferences("jarvis_readiness", Context.MODE_PRIVATE).edit()
+                    .putBoolean("voice", call.arguments == true).apply()
+                result.success(null)
+            } else result.notImplemented()
+        }
         channel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "jarvis/launch").also { ch ->
             ch.setMethodCallHandler { call, result ->
                 if (call.method == "launchedByAssistant") {
-                    val started = intent?.getBooleanExtra(EXTRA_START, false) == true
+                    val started = voiceReady(this) && intent?.getBooleanExtra(EXTRA_START, false) == true
                     intent?.removeExtra(EXTRA_START)
                     result.success(started)
                 } else result.notImplemented()
@@ -68,7 +83,7 @@ class MainActivity : FlutterActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        if (intent.getBooleanExtra(EXTRA_START, false)) {
+        if (voiceReady(this) && intent.getBooleanExtra(EXTRA_START, false)) {
             intent.removeExtra(EXTRA_START)
             channel?.invokeMethod("start", null)
         }

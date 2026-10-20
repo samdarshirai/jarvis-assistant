@@ -9,6 +9,11 @@ import 'package:record/record.dart';
 
 import 'app.dart';
 import 'oww.dart';
+import 'store.dart';
+
+/// No sign-in token: the wake word does nothing. The app stops the service when /me says voice is not set up,
+/// and a backend `needs_deepgram` close covers a key removed elsewhere (no /me round trip on every wake).
+Future<bool> voiceConfigured() async => (await const ConfigStore().load()).token != null;
 
 const _wakeKey = 'wake';
 
@@ -34,6 +39,7 @@ class WakeTaskHandler extends TaskHandler {
   /// Never throws: a missing model file or mic permission must not leave an unhandled error and a notification that lies.
   Future<void> _listen() async {
     if (_listening) return; // resume can arrive while the detector already runs (e.g. after a manual Talk session)
+    if (!await voiceConfigured()) return;
     try {
       await _ort.load();
       final oww = _oww = Oww(_ort.call);
@@ -76,6 +82,7 @@ class WakeTaskHandler extends TaskHandler {
 
   Future<void> _onWake() async {
     await _pause();
+    if (!await voiceConfigured()) return;
     await FlutterForegroundTask.saveData(key: _wakeKey, value: DateTime.now().millisecondsSinceEpoch);
     final n = FlutterLocalNotificationsPlugin();
     await n.initialize(settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
@@ -128,6 +135,7 @@ class WakeService {
   }
 
   static Future<void> ensureRunning() async {
+    if (!await voiceConfigured()) return;
     if (await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.startService(
       serviceId: 100,
@@ -140,7 +148,13 @@ class WakeService {
 
   static void resume() {
     _clearWakeNotification();
+    if (!AppHost.ready) return;
     FlutterForegroundTask.sendDataToTask('resume');
+  }
+
+  static Future<void> stop() async {
+    await _clearWakeNotification();
+    if (await FlutterForegroundTask.isRunningService) await FlutterForegroundTask.stopService();
   }
 
   /// A session is starting (wake, Talk, assistant or push): the wake word lets go of the mic and the entry notification goes away.

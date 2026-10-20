@@ -21,6 +21,10 @@ class FakeApi implements ApiClient {
 
   @override
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) => throw UnimplementedError();
+  @override
+  Future<Map<String, dynamic>> put(String path, Map<String, dynamic> body) => throw UnimplementedError();
+  @override
+  Future<Map<String, dynamic>> delete(String path) => throw UnimplementedError();
 }
 
 final _now = DateTime(2026, 10, 7, 10, 30); // Wednesday; Monday is 5 Oct

@@ -1,6 +1,7 @@
 class Config {
   const Config(this.url, this.token);
-  final String url, token;
+  final String url;
+  final String? token; // null until Google sign-in
 
   Uri _uri(String path, {required bool ws}) {
     var u = url.trim().replaceAll(RegExp(r'/+$'), '');

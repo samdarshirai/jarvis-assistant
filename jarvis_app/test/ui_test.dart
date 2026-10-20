@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:jarvis_app/config.dart';
 import 'package:jarvis_app/dashboard.dart';
 import 'package:jarvis_app/protocol.dart';
-import 'package:jarvis_app/theme.dart';
 import 'package:jarvis_app/ui.dart';
 
 import 'dash_fixture.dart';
@@ -93,17 +91,6 @@ void main() {
     }
     r.c.stop();
     await t.pump();
-  });
-
-  testWidgets('pairing screen is on the cocoa background and still saves', (t) async {
-    Config? saved;
-    await t.pumpWidget(MaterialApp(theme: jarvisTheme(), home: PairingScreen(onSaved: (c) => saved = c)));
-    expect(find.byType(CocoaBackground), findsOneWidget);
-    await t.enterText(find.byType(TextField).first, ' https://x.test ');
-    await t.enterText(find.byType(TextField).last, ' tok ');
-    await t.tap(find.text('Pair'));
-    expect(saved?.url, 'https://x.test');
-    expect(saved?.token, 'tok');
   });
 
   testWidgets('with an api, tapping Inbox opens the mail screen and the chat button opens chat', (t) async {

@@ -17,8 +17,9 @@ class FakeApi extends ApiClient {
   }
 }
 
-Widget app(FakeApi api, {VoidCallback? onVoice, List<List<Map<String, dynamic>>>? ran}) => MaterialApp(
-    home: ChatScreen(api: api, onVoice: onVoice ?? () {}, runPhoneActions: (a) async => ran?.add(a)));
+Widget app(FakeApi api, {VoidCallback? onVoice, List<List<Map<String, dynamic>>>? ran, VoidCallback? onNeedsSetup}) => MaterialApp(
+    home: ChatScreen(
+        api: api, onVoice: onVoice ?? () {}, runPhoneActions: (a) async => ran?.add(a), onNeedsSetup: onNeedsSetup));
 
 Future<void> send(WidgetTester t, String s) async {
   await t.enterText(find.byType(TextField), s);
@@ -44,6 +45,17 @@ void main() {
     expect(ran.single, [{'type': 'alarm'}]);
     await t.tap(find.byIcon(Icons.mic));
     expect(voice, 1);
+  });
+
+  testWidgets('409 needs_setup locks chat and asks the app to re-check setup', (t) async {
+    var needs = 0;
+    final api = FakeApi((p, b) async => throw ApiError(409, {'error': 'needs_setup', 'missing': 'llm'}, '/chat'));
+    await t.pumpWidget(app(api, onNeedsSetup: () => needs++));
+    await send(t, 'hi');
+    expect(find.textContaining('Add your AI key'), findsOneWidget);
+    expect(needs, 1);
+    await send(t, 'again');
+    expect(api.calls.length, 1);
   });
 
   testWidgets('send disabled while in flight with Thinking bubble; error bubble after', (t) async {
