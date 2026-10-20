@@ -693,3 +693,26 @@ def test_ssrf_suite_through_put_llm(env):
     assert net.lookups.count("rebind.example.com") == 2  # every request re-resolved and re-checked
     assert [h_ for _, h_, _ in net.connections] == ["rebind.example.com"]  # only the public first answer was used
     assert SecretStore(env.pool, FERNET).all(env.a) == before
+
+
+EMBEDDED = [f"{prefix}{v4}" for prefix in ("64:ff9b::", "::", "::ffff:0:") for v4 in ("169.254.169.254", "127.0.0.1")]
+
+
+def test_ssrf_ipv6_forms_embedding_a_private_ipv4_are_refused(env):
+    """NAT64, IPv4-compatible and SIIT addresses reach the embedded IPv4 through a translator: it must be global."""
+    c, net, h = env.c, env.net, env.h("a")
+    before = SecretStore(env.pool, FERNET).all(env.a)
+    for i, ip in enumerate(EMBEDDED):
+        net.dns[f"embed{i}.example.com"] = [ip]
+        for url in (f"https://embed{i}.example.com/v1", f"https://[{ip}]/v1"):
+            net.connections.clear()
+            r = c.put("/settings/llm", headers=h, json={"base_url": url, "api_key": KEYS["a"]["llm"],
+                                                        "model_fast": "a/fast", "model_strong": "a/strong"})
+            assert r.status_code == 422 and r.json()["error"] == "bad_url", (url, r.status_code, r.text)
+            assert net.connections == [], url
+    assert SecretStore(env.pool, FERNET).all(env.a) == before
+    # the same forms around a public IPv4 are still fine
+    net.dns["nat64-public.example.com"] = [f"64:ff9b::{PUBLIC_IP}"]
+    r = c.put("/settings/llm", headers=h, json={"base_url": "https://nat64-public.example.com/v1",
+                                                "api_key": KEYS["a"]["llm"], "model_fast": "a/fast"})
+    assert r.status_code == 200, r.text
