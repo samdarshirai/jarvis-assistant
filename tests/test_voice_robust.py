@@ -84,7 +84,7 @@ def test_dropped_socket_mid_card_leaves_the_confirmation_pending_for_other_chann
         from jarvis.tenant import thread_config
         state = c.portal.call(h.graph.aget_state, thread_config(1, voice=True))
         assert state.interrupts and calls == []
-        assert h.svc.current is None
+        assert h.svc.sessions == {}
 
 
 def test_oversized_frame_closes_1009():
@@ -208,3 +208,105 @@ def test_oversized_text_frame_is_a_bad_frame_and_the_session_survives():
         ws.send_json({"type": "speak", "text": "Still alive."})
         until_state(ws, "listening")
         assert h.tts.spoken == ["Still alive."]
+
+
+@pytest.mark.parametrize("failure", ["stt_open", "stt_events", "stt_send", "tts", "graph", "abandoned_graph"])
+def test_voice_errors_never_log_upstream_exception_text(caplog, failure):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    secret, chained = "dg-voice-synthetic-secret", "synthetic-llm-key"
+    try:
+        raise RuntimeError(chained)
+    except RuntimeError as cause:
+        error = RuntimeError(secret)
+        error.__cause__ = cause
+
+    class BrokenSTT(FakeSTT):
+        async def open(self):
+            if failure == "stt_open":
+                raise error
+            stream = await super().open()
+            if failure == "stt_send":
+                stream.send = AsyncMock(side_effect=error)
+            elif failure == "stt_events":
+                async def events():
+                    raise error
+                    yield  # an async iterator, like the upstream stream
+                stream.events = events
+            return stream
+
+    class BrokenTTS(FakeTTS):
+        async def synth(self, sentences):
+            raise error
+            yield
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    h = build(chat_scripts("Hi."), stt_script=[FINAL("hello")],
+              stt=BrokenSTT([FINAL("hello")]), tts=BrokenTTS() if failure == "tts" else None)
+    if failure in ("graph", "abandoned_graph"):
+        async def invoke(inp, cfg):
+            entered.set()
+            if failure == "abandoned_graph":
+                await release.wait()
+            raise error
+        h.rt.graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(interrupts=())), ainvoke=invoke)
+
+    async def finish_abandoned():
+        while h.svc.sessions:
+            await asyncio.sleep(0.01)
+        release.set()
+        await asyncio.gather(*h.svc.steps, return_exceptions=True)
+        await asyncio.sleep(0)  # run the completed-step logging callback
+
+    seen = []
+    with caplog.at_level("ERROR", logger="jarvis.voice.ws"), TestClient(h.app) as c:
+        with c.websocket_connect("/voice", headers=AUTH) as ws:
+            if failure in ("stt_open", "stt_events", "stt_send"):
+                if failure == "stt_send":
+                    seen.append(read(ws))
+                    ping(ws)
+                with pytest.raises(WebSocketDisconnect) as e:
+                    for _ in range(20):
+                        seen.append(read(ws))
+                assert e.value.code == 1011
+            else:
+                seen.append(read(ws))
+                ping(ws)
+                if failure == "abandoned_graph":
+                    c.portal.call(asyncio.wait_for, entered.wait(), 5)
+                else:
+                    seen.extend(until_state(ws, "listening"))
+        if failure == "abandoned_graph":
+            c.portal.call(asyncio.wait_for, finish_abandoned(), 5)
+    records = [r for r in caplog.records if r.name == "jarvis.voice.ws"]
+    assert records
+    assert all(r.exc_info is None and r.stack_info is None for r in records)
+    for value in (secret, chained):
+        assert value not in caplog.text
+        assert value not in str(seen)
+        assert value not in str(h.audit.records)
+
+
+def test_rejected_deepgram_tts_response_keeps_key_out_of_logs_and_socket(caplog, monkeypatch):
+    import httpx
+    from jarvis.voice.tts import DeepgramTTS
+
+    secret = "dg-upstream-echo-synthetic-secret"
+    client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda request: httpx.Response(401, json={"error": f"Rejected token {secret}"})))
+    monkeypatch.setattr("jarvis.voice.tts.httpx.AsyncClient", lambda **kw: client)
+    h = build(chat_scripts("Hi."), stt_script=[FINAL("hello")])
+    h.rt.secrets["deepgram_key"] = secret
+    h.svc.tts_factory = DeepgramTTS
+    with caplog.at_level("ERROR", logger="jarvis.voice.ws"), TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+        ping(ws)
+        seen = until_state(ws, "listening")
+    assert texts(seen, "error") == [{"type": "error", "message": "Speech output failed; the reply is in the transcript."}]
+    records = [r for r in caplog.records if r.name == "jarvis.voice.ws"]
+    assert records and all(r.exc_info is None for r in records)
+    assert secret not in caplog.text
+    assert secret not in str(seen)
+    assert secret not in str(h.audit.records)

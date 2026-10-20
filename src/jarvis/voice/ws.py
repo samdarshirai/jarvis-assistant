@@ -8,11 +8,12 @@ from langgraph.types import Command
 from starlette.websockets import WebSocket
 
 from jarvis.agent.graph import turn_replies
-from jarvis.tenant import thread_config
+from jarvis.tenant import UnknownUser, thread_config
 from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.voice import protocol as P
 from jarvis.voice.confirm import match_confirmation
-from jarvis.voice.tts import split_sentences
+from jarvis.voice.stt import DeepgramSTT
+from jarvis.voice.tts import DeepgramTTS, split_sentences
 
 log = logging.getLogger(__name__)
 
@@ -32,8 +33,9 @@ def is_tap_only(payload: dict) -> bool:
 
 class VoiceSession:
     def __init__(self, ws: WebSocket, graph, devices, device_id: int, stt, tts, lock: asyncio.Lock, steps: set,
-                 cfg: dict):
+                 cfg: dict, *, user_id: int, token: str):
         self.ws, self.graph, self.devices, self.device_id, self.stt, self.tts = ws, graph, devices, device_id, stt, tts
+        self.user_id, self.token = user_id, token  # the token is re-verified before every graph step
         self.lock, self.steps = lock, steps
         self.cfg = cfg  # the user's one thread (FR-1), voice flag set: selects the fast tier
         self.state = "listening"
@@ -73,7 +75,7 @@ class VoiceSession:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("tts failed")
+                log.error("tts failed")
                 await self.send("error", message="Speech output failed; the reply is in the transcript.")
         await self.set_state("listening")
 
@@ -97,7 +99,7 @@ class VoiceSession:
             await self._failed()
 
     async def _failed(self) -> None:
-        log.exception("voice turn failed")
+        log.error("voice turn failed")
         await self.send("error", message=FAIL_TEXT)
         await self._say([FAIL_TEXT])
         with contextlib.suppress(Exception):  # buttons may be gone: re-offer a still-pending confirmation
@@ -110,10 +112,25 @@ class VoiceSession:
         """Run `decide` (read pending -> decide -> graph.ainvoke) as one step under the lock shared with Telegram,
         and return the follow-up it chose (speech, card) to run after the lock is released.
 
-        Waiting for the lock can be cancelled: nothing has happened yet. Once the lock is held the step is its own
-        task, shielded from the turn: barge-in, a new final, `cancel`, disconnect or replacement only abandon
-        waiting for it. The step always finishes, audits and checkpoints, and holds the lock until then."""
+        Waiting for the lock or authorization can be cancelled: nothing has happened yet. Once authorized the
+        step is its own task, shielded from the turn: barge-in, a new final, `cancel`, disconnect or replacement only abandon
+        waiting for it. The step always finishes, audits and checkpoints, and holds the lock until then.
+
+        A revoked device or a user disabled mid-session (by the CLI, another process: verify reads the DB) runs no
+        step; the session is closed instead."""
         await self.lock.acquire()
+        try:
+            device = await asyncio.to_thread(self.devices.verify, self.token)
+        except Exception:
+            self.lock.release()
+            log.error("device verification failed")
+            return self._unauthorized
+        except BaseException:  # cancellation while verifying starts no graph work
+            self.lock.release()
+            raise
+        if device is None:
+            self.lock.release()
+            return self._unauthorized
 
         async def run():
             try:
@@ -124,12 +141,19 @@ class VoiceSession:
         t = asyncio.create_task(run())
         self.steps.add(t)  # a strong reference, so an abandoned step is not garbage collected
         t.add_done_callback(self._step_done)
-        return await asyncio.shield(t)
+        # wait() does not cancel the step when this turn is cancelled. Unlike shield() on Python 3.14,
+        # it also leaves abandoned error logging to _step_done instead of logging the raw exception.
+        await asyncio.wait({t})
+        return t.result()
+
+    async def _unauthorized(self) -> None:
+        await self.send("error", message="This device is no longer signed in.")
+        await self.close(P.CLOSE_UNAUTHORIZED)
 
     def _step_done(self, t: asyncio.Task) -> None:
         self.steps.discard(t)
         if not t.cancelled() and t.exception() is not None:  # also marks it retrieved when nobody waits any more
-            log.error("graph step failed", exc_info=t.exception())
+            log.error("graph step failed")
 
     async def _utterance(self, text: str) -> None:
         await self.set_state("thinking")
@@ -215,7 +239,7 @@ class VoiceSession:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("stt failed")
+            log.error("stt failed")
             await self._stt_failed()
 
     async def _stt_failed(self) -> None:
@@ -241,7 +265,7 @@ class VoiceSession:
         try:
             await self.stt.send(data)
         except Exception:  # the upstream STT socket died: same path as a failed event stream
-            log.exception("stt send failed")
+            log.error("stt send failed")
             await self._stt_failed()
             return False
         return True
@@ -298,44 +322,57 @@ class VoiceSession:
 
 
 class VoiceService:
-    def __init__(self, graph, devices, stt, tts, lock: asyncio.Lock | None = None, *, user_id: int):
-        self.graph, self.devices, self.stt, self.tts = graph, devices, stt, tts
-        self.user_id = user_id  # owner-only until per-user voice sessions
-        self.lock = lock or asyncio.Lock()  # shared with Telegram: one graph step at a time on the thread
+    def __init__(self, tenants, devices, stt_factory=DeepgramSTT, tts_factory=DeepgramTTS):
+        self.tenants, self.devices = tenants, devices
+        self.stt_factory, self.tts_factory = stt_factory, tts_factory  # (deepgram_key) -> STT / TTS
         self.steps: set[asyncio.Task] = set()  # in-flight graph steps, including ones a cancelled turn abandoned
-        self.current: VoiceSession | None = None
+        self.sessions: dict[int, VoiceSession] = {}  # device id -> its one live session
 
     async def handle(self, ws: WebSocket) -> None:
-        if self.stt is None or self.tts is None:
-            await ws.close(code=P.CLOSE_UNAVAILABLE)
-            return
         auth = ws.headers.get("authorization", "")
         token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        device = await asyncio.to_thread(self.devices.verify, token) if token else None
-        if device is None or device.user_id != self.user_id:
+        device = await asyncio.to_thread(self.devices.verify, token) if token else None  # None for a disabled user
+        try:
+            rt = await self.tenants.get(device.user_id) if device else None
+        except UnknownUser:
+            rt = None
+        if rt is None:
             await ws.close(code=P.CLOSE_UNAUTHORIZED)  # before accept: no audio is ever read from a stranger
             return
+        # the user's own Deepgram key only: never the operator's
+        key = rt.secrets.get("deepgram_key")
+        missing = P.NEEDS_DEEPGRAM if not key else P.NEEDS_LLM if rt.graph is None else None
         await ws.accept()
+        if missing:
+            await ws.send_text(P.frame("error", code=missing))
+            await ws.close(code=P.CLOSE_NEEDS_SETUP)
+            return
+        uid = device.user_id
         try:
-            stream = await self.stt.open()
+            stream = await self.stt_factory(key).open()
         except Exception:
-            log.exception("could not open stt")
+            log.error("could not open stt")
             await ws.send_text(P.frame("error", message="Speech recognition is unavailable."))
             await ws.close(code=P.CLOSE_UPSTREAM)
             return
-        session = VoiceSession(ws, self.graph, self.devices, device.device_id, stream, self.tts, self.lock, self.steps,
-                               thread_config(self.user_id, voice=True))
-        old, self.current = self.current, session
+        session = VoiceSession(ws, rt.graph, self.devices, device.device_id, stream, self.tts_factory(key),
+                               self.tenants.lock(uid), self.steps, thread_config(uid, voice=True),
+                               user_id=uid, token=token)
+        old = self.sessions.pop(device.device_id, None)
+        self.sessions[device.device_id] = session
         if old:
             await old.close(P.CLOSE_REPLACED)
         try:
             await session.run()
         finally:
-            if self.current is session:
-                self.current = None
+            if self.sessions.get(device.device_id) is session:
+                del self.sessions[device.device_id]
             with contextlib.suppress(Exception):
                 await ws.close()
 
-    async def deliver(self, actions: list[dict]) -> bool:
-        s = self.current
-        return bool(s) and await s.send("client_actions", actions=actions)
+    async def deliver(self, user_id: int, actions: list[dict]) -> bool:
+        """Push to that user's most recently connected session; False when they have none (or it is gone)."""
+        for s in reversed([s for s in self.sessions.values() if s.user_id == user_id]):
+            if await s.send("client_actions", actions=actions):
+                return True
+        return False

@@ -4,6 +4,8 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from starlette.websockets import WebSocketDisconnect
 
+from jarvis.tenant import thread_config
+from jarvis.voice.devices import DeviceAuth
 from tests.voice_helpers import AUTH, FINAL, build, chat_scripts, ping, read, until, until_state, texts, audio
 
 
@@ -18,13 +20,36 @@ def test_missing_or_bad_token_is_closed_before_accept():
     assert h.stt.streams == []  # no audio pipeline was opened for a stranger
 
 
-def test_voice_not_configured_closes_1013():
-    h = build(chat_scripts("Hi."), with_voice=False)
+def test_voice_uses_users_deepgram_key():
+    h = build(chat_scripts("Hi."))
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+    assert h.keys == [("stt", "dg-1"), ("tts", "dg-1")]
+
+
+def _refused(h):
+    """Connect and return (frames before the close, close code)."""
+    seen = []
     with TestClient(h.app) as c:
         with pytest.raises(WebSocketDisconnect) as e:
-            with c.websocket_connect("/voice", headers=AUTH):
-                pass
-        assert e.value.code == 1013
+            with c.websocket_connect("/voice", headers=AUTH) as ws:
+                for _ in range(5):
+                    seen.append(read(ws))
+    return seen, e.value.code
+
+
+def test_voice_without_deepgram_key_closes_4403():
+    h = build(chat_scripts("Hi."), with_voice=False)
+    seen, code = _refused(h)
+    assert seen == [("text", {"type": "error", "code": "needs_deepgram"})] and code == 4403
+    assert h.keys == [] and h.stt.streams == []
+
+
+def test_voice_without_llm_key_closes_4403_needs_llm():
+    h = build(chat_scripts("Hi."), with_llm=False)
+    seen, code = _refused(h)
+    assert seen == [("text", {"type": "error", "code": "needs_llm"})] and code == 4403
+    assert h.stt.streams == []
 
 
 def test_audio_turn_streams_transcript_reply_and_audio_in_order():
@@ -132,7 +157,7 @@ def test_disconnect_cancels_turn_in_flight():
             _stalled_turn(h, ws)
         c.portal.call(asyncio.sleep, 0.2)
         assert h.tts.cancelled is True
-        assert h.svc.current is None
+        assert h.svc.sessions == {}
 
 
 def test_replacement_cancels_turn_in_flight():
@@ -149,7 +174,7 @@ def test_replacement_cancels_turn_in_flight():
                 assert e.value.code == 4000
         c.portal.call(asyncio.sleep, 0.2)  # w1's handler only unwinds once its client side has left
         assert h.tts.cancelled is True
-        assert h.svc.current is None
+        assert h.svc.sessions == {}
 
 
 def test_bye_emits_no_error_frame():
@@ -164,12 +189,71 @@ def test_bye_emits_no_error_frame():
         assert texts(seen, "error") == []
 
 
-def test_another_users_device_is_closed_before_accept():
+def test_device_of_an_unknown_user_is_closed_before_accept():
     h = build(chat_scripts("Hi."))
-    h.svc.user_id = 2  # the service is the owner's (user 2); the device belongs to user 1
+    h.devices.tokens["good"] = DeviceAuth(1, 99)
     with TestClient(h.app) as c:
         with pytest.raises(WebSocketDisconnect) as e:
             with c.websocket_connect("/voice", headers=AUTH):
                 pass
         assert e.value.code == 4401
     assert h.stt.streams == []
+
+
+AUTH2 = {"authorization": "Bearer good2"}
+
+
+def two_users(scripts, stt_script=()):
+    """User 1 (token "good") and user 2 (token "good2") on one graph and saver: only the thread tells them apart."""
+    h = build(scripts, stt_script=stt_script)
+    h.tenants.add(2, h.graph, {"deepgram_key": "dg-2"})
+    h.devices.tokens["good2"] = DeviceAuth(2, 2)
+    return h
+
+
+def test_voice_sessions_of_two_users_use_own_threads():
+    h = two_users(chat_scripts("Hi one.", "chat", "Hi two."), [FINAL("i am one"), FINAL("i am two")])
+    with TestClient(h.app) as c:
+        with c.websocket_connect("/voice", headers=AUTH) as w1, c.websocket_connect("/voice", headers=AUTH2) as w2:
+            read(w1)
+            read(w2)
+            ping(w1)
+            until_state(w1, "listening")
+            ping(w2)
+            until_state(w2, "listening")
+            assert sorted(h.svc.sessions) == [1, 2]  # different devices: neither replaced the other
+
+        def said(uid):
+            msgs = c.portal.call(h.graph.aget_state, thread_config(uid, voice=True)).values["messages"]
+            return [m.content for m in msgs]
+        assert said(1) == ["i am one", "Hi one."] and said(2) == ["i am two", "Hi two."]
+    assert ("stt", "dg-2") in h.keys and h.tenants.lock(1) is not h.tenants.lock(2)
+
+
+def test_deliver_reaches_only_target_user():
+    h = two_users(chat_scripts("Hi."))
+    act = [{"type": "set_timer", "seconds": 60}]
+    with TestClient(h.app) as c:
+        with c.websocket_connect("/voice", headers=AUTH) as w1, c.websocket_connect("/voice", headers=AUTH2) as w2:
+            read(w1)
+            read(w2)
+            assert c.portal.call(h.svc.deliver, 2, act) is True
+            assert read(w2) == ("text", {"type": "client_actions", "actions": act})
+            w1.send_json({"type": "nonsense"})
+            assert read(w1)[1]["type"] == "error"  # user 1 got nothing before its own reply
+        c.portal.call(asyncio.sleep, 0.2)
+        assert c.portal.call(h.svc.deliver, 2, act) is False  # nobody connected any more
+        assert c.portal.call(h.svc.deliver, 3, act) is False
+
+
+def test_disabled_user_session_closed():
+    h = build(chat_scripts("Hi."), stt_script=[FINAL("hello")])
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+        del h.devices.tokens["good"]  # the user was disabled (or the device revoked) by the CLI mid-session
+        ping(ws)
+        with pytest.raises(WebSocketDisconnect) as e:
+            for _ in range(10):
+                read(ws)
+        assert e.value.code == 4401
+        assert c.portal.call(h.graph.aget_state, thread_config(1, voice=True)).values == {}  # the graph never ran

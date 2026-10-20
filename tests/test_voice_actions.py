@@ -40,8 +40,8 @@ def test_turn_without_actions_sends_no_frame():
 def test_deliver_reaches_the_connected_session_and_reports_false_without_one():
     h = build({"fast": [AIMessage("chat"), AIMessage("Hi.")]})
     with TestClient(h.app) as c:
-        assert c.portal.call(h.svc.deliver, [{"type": "set_timer", "seconds": 60}]) is False
+        assert c.portal.call(h.svc.deliver, 1, [{"type": "set_timer", "seconds": 60}]) is False
         with c.websocket_connect("/voice", headers=AUTH) as ws:
             read(ws)
-            assert c.portal.call(h.svc.deliver, [{"type": "set_timer", "seconds": 60}]) is True
+            assert c.portal.call(h.svc.deliver, 1, [{"type": "set_timer", "seconds": 60}]) is True
             assert read(ws) == ("text", {"type": "client_actions", "actions": [{"type": "set_timer", "seconds": 60}]})

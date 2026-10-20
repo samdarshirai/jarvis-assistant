@@ -105,7 +105,7 @@ def test_socket_drop_mid_tool_does_not_cut_the_step():
                 tap(ws, present_card(ws))
                 assert entered.wait(5)
             c.portal.call(asyncio.sleep, 0.2)  # the session has torn down while the tool still runs
-            assert h.svc.current is None
+            assert h.svc.sessions == {}
             release.set()
             settle(c, h)
         finally:
@@ -131,7 +131,7 @@ def test_replacement_mid_tool_does_not_cut_the_step():
                 assert e.value.code == 4000
                 first.__exit__(None, None, None)  # w1's handler unwinds once its client side has left
                 c.portal.call(asyncio.sleep, 0.2)
-                assert h.svc.current is not None  # w2 is the live session
+                assert list(h.svc.sessions) == [1]  # w2 is the live session
                 release.set()
                 settle(c, h)
         finally:
@@ -159,8 +159,8 @@ def test_concurrent_voice_tap_and_telegram_button_run_the_tool_once():
     calls = []
     h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("put gym at seven")])
     slow = SlowReads(h.graph)
-    h.svc.graph = slow
-    ch = TelegramChannel(slow, OWNER, lock=h.svc.lock, user_id=1)
+    h.rt.graph = slow
+    ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         card = present_card(ws)
         tc = chat()
@@ -176,7 +176,7 @@ def test_telegram_text_waits_for_a_running_voice_step():
     calls = []
     t, entered, release = blocking_tool(calls)
     h = build(gym_scripts(AIMessage("chat"), AIMessage("Hi from Telegram.")), [t], [FINAL("put gym at seven")])
-    ch = TelegramChannel(h.graph, OWNER, lock=h.svc.lock, user_id=1)
+    ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
     with TestClient(h.app) as c:
         try:
             with c.websocket_connect("/voice", headers=AUTH) as ws:
@@ -197,6 +197,23 @@ def test_telegram_text_waits_for_a_running_voice_step():
                                                     "HumanMessage", "AIMessage"]
         assert view[2].content == OK and view[4].content == "hello"
         assert_ran_once_and_audited(c, h, calls)
+
+
+def test_telegram_shared_thread_with_owner_voice():
+    calls = []
+    h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("hello")])
+    ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
+    with TestClient(h.app) as c:
+        tc = chat()
+        c.portal.call(ch.on_text, text_update(tc, "put gym at seven"), None)  # proposed on Telegram
+        iid = ids(tc)[0].partition(":")[2]
+        with c.websocket_connect("/voice", headers=AUTH) as ws:
+            read(ws)
+            ping(ws)
+            seen = until_state(ws, "listening")
+            assert texts(seen, "confirm_card")[0]["interrupt_id"] == iid  # voice sees the same pending card
+            assert calls == []
+    assert h.tenants.lock(1) is h.rt.lock  # both channels take the same per-user lock
 
 
 # --- I2: a spoken yes/no only answers a card this session presented ---
@@ -224,7 +241,7 @@ def test_spoken_yes_meant_for_a_card_resolved_elsewhere_does_not_approve_the_nex
                "strong": [call("create_task", {"summary": "Mum"}, id="c2")]},
               [tool("create_event", "calendar", calls), tool("create_task", "tasks", calls)],
               [FINAL("gym and remind me about mum"), FINAL("yes")])
-    ch = TelegramChannel(h.graph, OWNER, user_id=1)
+    ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         card_a = present_card(ws)
         tc = chat()
@@ -235,3 +252,112 @@ def test_spoken_yes_meant_for_a_card_resolved_elsewhere_does_not_approve_the_nex
         seen = until_state(ws, "listening")
         assert calls == [("create_event", {"summary": "Gym"})]
         assert texts(seen, "confirm_card")[0]["interrupt_id"] == card_b_id
+
+
+@pytest.mark.parametrize("kind", ["utterance", "confirm"])
+@pytest.mark.parametrize("deny", ["revoke", "disable"])
+def test_queued_voice_step_rechecks_authorization_before_graph_access(pool, kind, deny):
+    from unittest.mock import AsyncMock
+    from jarvis.users import UserStore
+    from jarvis.voice.devices import Devices
+
+    users = UserStore(pool)
+    uid = users.add("owner@example.com", "Europe/Berlin", is_owner=True).id
+    calls = []
+    h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("put gym at seven")])
+    h.svc.devices = Devices(pool)
+    did, token = h.svc.devices.create(uid)
+
+    class ObservedLock(asyncio.Lock):
+        async def acquire(self):
+            if self.locked():
+                self.queued.set()
+            return await super().acquire()
+
+    lock = ObservedLock()
+    lock.queued = asyncio.Event()
+    h.tenants._locks[uid] = lock
+    h.rt.lock = lock
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers={"authorization": f"Bearer {token}"}) as ws:
+        if kind == "confirm":
+            card = present_card(ws)
+        else:
+            read(ws)
+        # Observe the public graph seam after setup: denied work must not even read pending state.
+        state = AsyncMock(wraps=h.graph.aget_state)
+        invoke = AsyncMock(wraps=h.graph.ainvoke)
+        h.graph.aget_state, h.graph.ainvoke = state, invoke
+        c.portal.call(lock.acquire)
+        try:
+            if kind == "confirm":
+                tap(ws, card)
+            else:
+                ping(ws)
+            c.portal.call(asyncio.wait_for, lock.queued.wait(), 5)
+            if deny == "disable":
+                users.set_disabled(uid, True)
+            else:
+                h.svc.devices.revoke(did)
+        finally:
+            c.portal.call(lock.release)
+        close_code = None
+        try:
+            for _ in range(20):
+                k, frame = read(ws)
+                if k == "text" and frame == {"type": "state", "state": "listening"}:
+                    break
+        except WebSocketDisconnect as e:
+            close_code = e.code
+        assert close_code == 4401
+        state.assert_not_awaited()
+        invoke.assert_not_awaited()
+        assert calls == []
+        assert not lock.locked()
+
+
+@pytest.mark.parametrize("outcome", ["cancel", "error"])
+def test_voice_verification_interrupted_releases_lock_without_graph_access(caplog, outcome):
+    from unittest.mock import AsyncMock
+
+    h = build(gym_scripts(), stt_script=[FINAL("book gym")])
+    entered, release = threading.Event(), threading.Event()
+    verify = h.devices.verify
+    count = 0
+
+    def gated_verify(token):
+        nonlocal count
+        count += 1
+        if count > 1:
+            entered.set()
+            assert release.wait(5)
+            if outcome == "error":
+                raise RuntimeError("synthetic-device-credential")
+        return verify(token)
+
+    h.devices.verify = gated_verify
+    state = AsyncMock(wraps=h.graph.aget_state)
+    h.graph.aget_state = state
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+        ping(ws)
+        try:
+            assert entered.wait(5)
+            if outcome == "cancel":
+                ws.send_json({"type": "cancel"})
+                until_state(ws, "listening")
+            else:
+                release.set()
+                code = None
+                try:
+                    for _ in range(20):
+                        k, frame = read(ws)
+                        if k == "text" and frame == {"type": "state", "state": "listening"}:
+                            break
+                except WebSocketDisconnect as e:
+                    code = e.code
+                assert code == 4401
+            assert not h.tenants.lock(1).locked()
+            state.assert_not_awaited()
+            assert "synthetic-device-credential" not in caplog.text
+        finally:
+            release.set()
