@@ -24,6 +24,8 @@ String keyErrorText(Object e) {
     'model_not_found' => 'The provider does not offer this model',
     'bad_url' => 'That base URL is not allowed: it must be a public https address',
     'unreachable' => 'Could not reach the provider at that base URL',
+    'no_models' => 'Enter a fast and a strong model id under Advanced',
+    'bad_request' => 'Check the model ids (up to 5, comma-separated) and the key',
     _ => e.status == 422 ? 'That key was not accepted' : 'The key could not be saved (HTTP ${e.status})',
   };
   return model == null ? '$what.' : '$what (model: $model).';
@@ -64,11 +66,13 @@ class _LlmFormState extends State<LlmForm> {
       _msg = null;
     });
     try {
+      // only ids the user typed: a prefilled server default must not be frozen into their settings
+      final fast = _fast.text.trim(), strong = _strong.text.trim();
       await widget.api.put('/settings/llm', {
         'base_url': _url.text.trim(),
         'api_key': _key.text.trim(),
-        if (_fast.text.trim().isNotEmpty) 'model_fast': _fast.text.trim(),
-        if (_strong.text.trim().isNotEmpty) 'model_strong': _strong.text.trim(),
+        if (fast.isNotEmpty && fast != (widget.modelFast ?? '')) 'model_fast': fast,
+        if (strong.isNotEmpty && strong != (widget.modelStrong ?? '')) 'model_strong': strong,
       });
       if (!mounted) return;
       _key.clear();
@@ -173,6 +177,12 @@ class _KeysScreenState extends State<KeysScreen> {
 
   void _reload() => setState(() => _gen++);
 
+  /// The refetch rebuilds the forms (and their inline message), so confirm the save in a snackbar.
+  void _saved(String text) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text)));
+    _reload();
+  }
+
   Future<void> _delete(String name) async {
     try {
       await widget.api.delete('/settings/$name');
@@ -183,32 +193,33 @@ class _KeysScreenState extends State<KeysScreen> {
     if (mounted) _reload();
   }
 
-  Widget _status(String title, String? last4, {String? remove}) => Row(children: [
+  // "set" comes from /me.setup: a key under 8 characters is set but has no last 4
+  Widget _status(String title, bool set, String? last4, {String? remove}) => Row(children: [
         Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Text(title, style: const TextStyle(color: mutedText, fontSize: 12)),
-          Text(last4 == null ? 'Not set' : 'Set, ends in $last4', style: const TextStyle(color: cream)),
+          Text(!set ? 'Not set' : last4 == null ? 'Set' : 'Set, ends in $last4', style: const TextStyle(color: cream)),
         ])),
-        if (remove != null && last4 != null)
+        if (remove != null && set)
           IconButton(
               tooltip: 'Remove $title key', icon: const Icon(Icons.delete_outline, color: cream), onPressed: () => _delete(remove)),
       ]);
 
   Widget _body(Map<String, dynamic> me) {
-    final k = (me['keys'] as Map?) ?? const {};
+    final k = (me['keys'] as Map?) ?? const {}, setup = (me['setup'] as Map?) ?? const {};
     return ListView(padding: const EdgeInsets.all(16), children: [
-      _status('AI provider', k['llm_key_last4'] as String?),
+      _status('AI provider', setup['llm'] == true, k['llm_key_last4'] as String?),
       if (k['llm_base_url'] != null) Text('Base URL: ${k['llm_base_url']}', style: const TextStyle(color: mutedText)),
       if (k['model_fast'] != null) Text('Models: ${k['model_fast']}, ${k['model_strong']}', style: const TextStyle(color: mutedText)),
       const SizedBox(height: 8),
       LlmForm(api: widget.api, baseUrl: k['llm_base_url'] as String?,
-          modelFast: k['model_fast'] as String?, modelStrong: k['model_strong'] as String?, onSaved: _reload),
+          modelFast: k['model_fast'] as String?, modelStrong: k['model_strong'] as String?, onSaved: () => _saved('AI key works. Saved.')),
       const Divider(height: 32),
-      _status('Deepgram', k['deepgram_last4'] as String?, remove: 'deepgram'),
-      KeyField(api: widget.api, name: 'deepgram', label: 'Deepgram', howTo: deepgramHowTo, onSaved: _reload),
+      _status('Deepgram', setup['deepgram'] == true, k['deepgram_last4'] as String?, remove: 'deepgram'),
+      KeyField(api: widget.api, name: 'deepgram', label: 'Deepgram', howTo: deepgramHowTo, onSaved: () => _saved('Deepgram key saved.')),
       const Divider(height: 32),
-      _status('Tavily', k['tavily_last4'] as String?, remove: 'tavily'),
-      KeyField(api: widget.api, name: 'tavily', label: 'Tavily', howTo: tavilyHowTo, onSaved: _reload),
+      _status('Tavily', setup['tavily'] == true, k['tavily_last4'] as String?, remove: 'tavily'),
+      KeyField(api: widget.api, name: 'tavily', label: 'Tavily', howTo: tavilyHowTo, onSaved: () => _saved('Tavily key saved.')),
       if (_error != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text(_error!, style: const TextStyle(color: danger))),
     ]);
   }
