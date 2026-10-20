@@ -75,7 +75,7 @@ class VoiceSession:
             except asyncio.CancelledError:
                 raise
             except Exception:
-                log.exception("tts failed")
+                log.error("tts failed")
                 await self.send("error", message="Speech output failed; the reply is in the transcript.")
         await self.set_state("listening")
 
@@ -99,7 +99,7 @@ class VoiceSession:
             await self._failed()
 
     async def _failed(self) -> None:
-        log.exception("voice turn failed")
+        log.error("voice turn failed")
         await self.send("error", message=FAIL_TEXT)
         await self._say([FAIL_TEXT])
         with contextlib.suppress(Exception):  # buttons may be gone: re-offer a still-pending confirmation
@@ -112,15 +112,25 @@ class VoiceSession:
         """Run `decide` (read pending -> decide -> graph.ainvoke) as one step under the lock shared with Telegram,
         and return the follow-up it chose (speech, card) to run after the lock is released.
 
-        Waiting for the lock can be cancelled: nothing has happened yet. Once the lock is held the step is its own
-        task, shielded from the turn: barge-in, a new final, `cancel`, disconnect or replacement only abandon
+        Waiting for the lock or authorization can be cancelled: nothing has happened yet. Once authorized the
+        step is its own task, shielded from the turn: barge-in, a new final, `cancel`, disconnect or replacement only abandon
         waiting for it. The step always finishes, audits and checkpoints, and holds the lock until then.
 
         A revoked device or a user disabled mid-session (by the CLI, another process: verify reads the DB) runs no
         step; the session is closed instead."""
-        if await asyncio.to_thread(self.devices.verify, self.token) is None:
-            return self._unauthorized
         await self.lock.acquire()
+        try:
+            device = await asyncio.to_thread(self.devices.verify, self.token)
+        except Exception:
+            self.lock.release()
+            log.error("device verification failed")
+            return self._unauthorized
+        except BaseException:  # cancellation while verifying starts no graph work
+            self.lock.release()
+            raise
+        if device is None:
+            self.lock.release()
+            return self._unauthorized
 
         async def run():
             try:
@@ -131,7 +141,10 @@ class VoiceSession:
         t = asyncio.create_task(run())
         self.steps.add(t)  # a strong reference, so an abandoned step is not garbage collected
         t.add_done_callback(self._step_done)
-        return await asyncio.shield(t)
+        # wait() does not cancel the step when this turn is cancelled. Unlike shield() on Python 3.14,
+        # it also leaves abandoned error logging to _step_done instead of logging the raw exception.
+        await asyncio.wait({t})
+        return t.result()
 
     async def _unauthorized(self) -> None:
         await self.send("error", message="This device is no longer signed in.")
@@ -140,7 +153,7 @@ class VoiceSession:
     def _step_done(self, t: asyncio.Task) -> None:
         self.steps.discard(t)
         if not t.cancelled() and t.exception() is not None:  # also marks it retrieved when nobody waits any more
-            log.error("graph step failed", exc_info=t.exception())
+            log.error("graph step failed")
 
     async def _utterance(self, text: str) -> None:
         await self.set_state("thinking")
@@ -226,7 +239,7 @@ class VoiceSession:
         except asyncio.CancelledError:
             raise
         except Exception:
-            log.exception("stt failed")
+            log.error("stt failed")
             await self._stt_failed()
 
     async def _stt_failed(self) -> None:
@@ -252,7 +265,7 @@ class VoiceSession:
         try:
             await self.stt.send(data)
         except Exception:  # the upstream STT socket died: same path as a failed event stream
-            log.exception("stt send failed")
+            log.error("stt send failed")
             await self._stt_failed()
             return False
         return True
@@ -338,7 +351,7 @@ class VoiceService:
         try:
             stream = await self.stt_factory(key).open()
         except Exception:
-            log.exception("could not open stt")
+            log.error("could not open stt")
             await ws.send_text(P.frame("error", message="Speech recognition is unavailable."))
             await ws.close(code=P.CLOSE_UPSTREAM)
             return

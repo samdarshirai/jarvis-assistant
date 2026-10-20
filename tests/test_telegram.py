@@ -1,4 +1,6 @@
 import asyncio
+
+import pytest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -49,7 +51,7 @@ def make_channel(scripts, calls, extra=()):
 def owner_channel(graph, uid=1):
     tenants = FakeTenants()
     tenants.add(uid, graph)
-    return TelegramChannel(tenants, uid, OWNER)
+    return TelegramChannel(tenants, uid, OWNER, users=tenants.users)
 
 
 def rt(ch):
@@ -150,7 +152,7 @@ async def test_telegram_without_llm_key_asks_for_one():
 
 
 def test_owner_filter_rejects_strangers():
-    ch = TelegramChannel(FakeTenants(), 1, OWNER)
+    ch = TelegramChannel(FakeTenants(), 1, OWNER, users=FakeTenants().users)
 
     def upd(chat_id):
         return Update.de_json({"update_id": 1, "message": {"message_id": 1, "date": 0,
@@ -226,7 +228,7 @@ async def test_edit_markup_error_does_not_block_action():
 
 
 def test_build_registers_handlers_without_network():
-    app = TelegramChannel(FakeTenants(), 1, OWNER).build("123:abc")
+    app = TelegramChannel(FakeTenants(), 1, OWNER, users=FakeTenants().users).build("123:abc")
     assert len(app.handlers[0]) == 2 and len(app.handlers[1]) == 1
 
 
@@ -301,7 +303,7 @@ async def test_empty_reply_sends_fallback():
 
 
 def test_text_handler_ignores_edited_messages():
-    app = TelegramChannel(FakeTenants(), 1, OWNER).build("123:abc")
+    app = TelegramChannel(FakeTenants(), 1, OWNER, users=FakeTenants().users).build("123:abc")
     h = app.handlers[0][0]
 
     def upd(key):
@@ -485,3 +487,118 @@ async def test_non_owner_undo_tap_is_dropped():
     ch.undo = AsyncMock(return_value=True)
     await ch.on_button(button_update(chat(), "undo:abc", chat_id=99), None)
     ch.undo.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["text", "confirm", "undo"])
+@pytest.mark.parametrize("when", ["disabled", "warm", "queued"])
+async def test_disabled_owner_cannot_use_telegram_even_with_cached_runtime(pool, action, when):
+    from jarvis.users import UserStore
+    from tests.test_tenant import tenants as real_tenants
+
+    users = UserStore(pool)
+    owner = users.add("owner@example.com", "Europe/Berlin", is_owner=True)
+    calls = []
+    graph = rt(pending_channel(calls)).graph
+    iid = None
+    if action == "confirm":
+        result = await graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(owner.id))
+        iid = result["__interrupt__"][0].id
+    if when == "disabled":
+        users.set_disabled(owner.id, True)
+    tenants = real_tenants(pool)
+    runtime = await tenants.get(owner.id)  # deliberately keep this cached across the DB disable
+    runtime.graph = SimpleNamespace(aget_state=AsyncMock(wraps=graph.aget_state),
+                                    ainvoke=AsyncMock(wraps=graph.ainvoke))
+    undo = AsyncMock(return_value=True)
+    ch = TelegramChannel(tenants, owner.id, OWNER, undo=undo)
+    c = chat()
+    update = text_update(c) if action == "text" else button_update(c, f"yes:{iid}" if action == "confirm" else "undo:event-123")
+    handler = ch.on_text if action == "text" else ch.on_button
+    try:
+        if when == "queued":
+            class ObservedLock(asyncio.Lock):
+                async def acquire(self):
+                    if self.locked():
+                        self.queued.set()
+                    return await super().acquire()
+
+            lock = ObservedLock()
+            lock.queued = asyncio.Event()
+            tenants._locks[owner.id] = lock
+            await lock.acquire()
+            task = asyncio.create_task(handler(update, None))
+            try:
+                await asyncio.wait_for(lock.queued.wait(), 1)
+                users.set_disabled(owner.id, True)
+            finally:
+                lock.release()
+            await task
+            assert not lock.locked()
+        else:
+            users.set_disabled(owner.id, True)
+            await handler(update, None)
+        runtime.graph.aget_state.assert_not_awaited()
+        runtime.graph.ainvoke.assert_not_awaited()
+        undo.assert_not_awaited()
+        assert calls == []
+        assert sent(c) == [("This account is disabled.", {})]
+        if when != "disabled":
+            assert not runtime.user.disabled  # proves a cached user field cannot authorize this update
+    finally:
+        await tenants.close()
+
+
+@pytest.mark.parametrize("failure", ["graph", "reoffer", "undo", "markup"])
+async def test_telegram_errors_never_log_upstream_exception_text(caplog, failure):
+    secret, chained = "sk-telegram-synthetic-secret", "synthetic-oauth-token"
+    try:
+        raise RuntimeError(chained)
+    except RuntimeError as cause:
+        error = RuntimeError(secret)
+        error.__cause__ = cause
+    graph = SimpleNamespace(aget_state=AsyncMock(return_value=SimpleNamespace(interrupts=())),
+                            ainvoke=AsyncMock(side_effect=error))
+    ch = owner_channel(graph)
+    c = chat()
+    with caplog.at_level("ERROR", logger="jarvis.channels.telegram"):
+        if failure == "undo":
+            ch.undo = AsyncMock(side_effect=error)
+            await ch.on_button(button_update(c, "undo:event-123"), None)
+        elif failure == "markup":
+            caplog.set_level("WARNING", logger="jarvis.channels.telegram")
+            await ch.on_button(button_update(c, "yes:stale", edit=AsyncMock(side_effect=TelegramError(secret))), None)
+        else:
+            if failure == "reoffer":
+                graph.aget_state.side_effect = [SimpleNamespace(interrupts=()), error]
+            await ch.on_text(text_update(c, "hello"), None)
+    records = [r for r in caplog.records if r.name == "jarvis.channels.telegram"]
+    assert records
+    assert all(r.exc_info is None and r.stack_info is None for r in records)
+    for value in (secret, chained):
+        assert value not in caplog.text
+        assert value not in str(sent(c))
+
+
+async def test_telegram_rejected_llm_response_keeps_key_out_of_logs_reply_and_audit(caplog, monkeypatch):
+    import httpx
+    from jarvis.llm import LLMCreds, LLMProvider, guarded_http_client
+    from tests.test_llm import resolver
+
+    secret = "sk-upstream-echo-synthetic-secret"
+    client = guarded_http_client(resolve=resolver("93.184.216.34"), transport=httpx.MockTransport(
+        lambda request: httpx.Response(401, json={"error": {"message": f"Rejected API key {secret}", "type": "invalid_api_key"}})))
+    monkeypatch.setattr("jarvis.llm.guarded_http_client", lambda: client)
+    audit = MemoryAudit()
+    provider = LLMProvider(LLMCreds("https://api.example.com/v1", secret, ["test"], ["test"]), audit)
+    graph = build_graph(provider, Registry(), audit, InMemorySaver(), "Europe/Berlin")
+    ch, c = owner_channel(graph), chat()
+    try:
+        with caplog.at_level("ERROR", logger="jarvis.channels.telegram"):
+            await ch.on_text(text_update(c, "hi"), None)
+    finally:
+        await provider.aclose()
+    records = [r for r in caplog.records if r.name == "jarvis.channels.telegram"]
+    assert records and all(r.exc_info is None for r in records)
+    assert secret not in caplog.text
+    assert sent(c) == [(FAIL_TEXT, {})]
+    assert audit.records and secret not in str(audit.records)

@@ -56,6 +56,9 @@ async def lifespan(app: FastAPI):
 
                 async def undo(event_id: str) -> bool:
                     rt = await tenants.get(owner_id)  # current runtime: the owner may have reconnected Google
+                    user = await asyncio.to_thread(UserStore(pool).get, owner_id)
+                    if user is None or user.disabled:
+                        return False
                     return await undo_event(rt.calendar, rt.proactive, rt.audit, event_id)
 
                 # Each user's voice session runs on their runtime and their Deepgram key; tenants.lock(uid) is shared by

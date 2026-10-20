@@ -106,12 +106,15 @@ class FakeTenants:
 
     def __init__(self):
         self.runtimes: dict[int, SimpleNamespace] = {}
+        self._users = {}
+        self.users = SimpleNamespace(get=self._users.get)
         self._locks: dict[int, asyncio.Lock] = {}
 
     def add(self, uid, graph, secrets=None, disabled=False):
         rt = SimpleNamespace(user=SimpleNamespace(id=uid, disabled=disabled), secrets=dict(secrets or {}),
                              graph=graph, lock=self.lock(uid))
         self.runtimes[uid] = rt
+        self._users[uid] = SimpleNamespace(id=uid, disabled=disabled)
         return rt
 
     def lock(self, uid):
