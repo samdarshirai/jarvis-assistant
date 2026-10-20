@@ -4,6 +4,8 @@ The app is Android only (Flutter, package `com.jarvis.jarvis_app`, Android 14+).
 
 **Implemented:** Telegram chat, Calendar (with reminders, invites and conflict warnings), Tasks and a Shopping list, Gmail, memory/notes/web research, Pixel voice app, morning brief, proactive alerts and email-to-calendar. All sub-projects built.
 
+Multi-user: the device-token steps below are the owner's old pairing path. Friends sign in with Google from the app wizard instead; owner setup is in `docs/DEPLOY-RAILWAY.md`.
+
 Sources: `ACCEPTANCE.md`, `docs/HANDOFF.md`.
 
 ## A. Backend on laptop

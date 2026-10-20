@@ -113,3 +113,25 @@ Server-only check without the phone: `python -m jarvis.voice.client wss://<host>
 | 81 | Morning brief pill opens the brief screen; Play, then tap a later sentence | Brief is spoken; tapping a sentence restarts from it |
 | 82 | Prod through Caddy: `curl -H "Authorization: Bearer <token>" https://<host>/tasks` (and /calendar /mail /notes) | 200 JSON; without the header 401 |
 | 83 | "Email <your address> saying lunch tomorrow works, ok?" | Draft has a clear subject, greeting, polished body and sign-off; meaning unchanged, no invented facts. "Send exactly what I said" keeps raw wording |
+
+# Manual acceptance (multi-tenant BYOK)
+
+Prerequisites: `docs/DEPLOY-RAILWAY.md` "Multi-user prerequisites" done (redirect URI, scopes, In production, `JARVIS_OWNER_EMAIL`, APK built with `--dart-define-from-file=jarvis.env.json`). Add the friend: `python -m jarvis.users add friend@gmail.com`. Needs a fresh phone (or cleared app data), a friend Google account and an LLM key. Not run yet.
+
+| # | Do | Expect |
+|---|----|--------|
+| 84 | Owner: after deploy with `JARVIS_OWNER_EMAIL`, open the already-paired phone, repeat rows 4, 21 and 44; `python -m jarvis.users list` | Existing token, Google access, memories, notes and conversation still work; list shows the owner with `llm_key=yes`; Telegram still answers the owner |
+| 85 | Friend, fresh phone: open the APK | Wizard step 1 (Sign in with Google); no token stored |
+| 86 | Sign in with an email that was not added | Browser page "That Google account is not on the list. Ask the owner to add your email."; the app stays on step 1 |
+| 87 | Sign in with the added friend account | "Unverified app" warning (Advanced, Continue), consent for Calendar, Gmail, Tasks; the browser returns to the app via `jarvis://signin`; wizard moves to the LLM key step with chat locked |
+| 88 | Enter a wrong LLM key | HTTP 422 `rejected_key`, shown as a key-rejected message; nothing saved (`GET /me` shows `setup.llm` false) |
+| 89 | Try a key with no credit, then a model id that does not exist, then an unreachable host | `out_of_credit`, `model_not_found` (names the failing model), `unreachable` / `bad_url`; each blocks saving |
+| 90 | Enter a valid key and models | Saved; `/me` shows only the last 4 characters; chat unlocks |
+| 91 | Chat: "what's on my calendar today", "add task buy bread" + Confirm | Answers from the friend's calendar, not the owner's; confirm card and audit row under the friend (`SELECT DISTINCT user_id FROM audit_log` shows separate ids) |
+| 92 | Voice (Talk) with no Deepgram key | Server sends `needs_deepgram` and closes 4403; the app tells the friend to add a Deepgram key in Settings. Add it: voice works. Remove it: the message returns |
+| 93 | Owner and friend use their phones at once, each asking "my calendar" and "what do you remember" | Each sees only their own data; a friend with no LLM key gets 409 `needs_setup`, never the operator's key |
+| 94 | `python -m jarvis.users disable friend@gmail.com` while the friend is chatting | The next request returns 401 and the app returns to sign-in; the owner is unaffected. `enable`, then sign in again works |
+| 95 | Friend: trigger a conflict alert or wait for the brief | Arrives as a push on the friend's phone only; nothing reaches the owner's Telegram |
+| 96 | Use the friend's phone more than 7 days after sign-in | Chat and calendar still work without a new sign-in (Google and device tokens survive the week) |
+| 97 | `python -m jarvis.users delete friend@gmail.com`, then again with `--yes` | First run lists row counts and deletes nothing; second removes the user, their data and their conversation |
+| 98 | Two phones signed in as the same friend | Both work; their requests serialise on the one per-user lock |
