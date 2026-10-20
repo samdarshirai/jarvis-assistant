@@ -33,3 +33,12 @@ def pool():
                   " RESTART IDENTITY CASCADE")
     yield p
     p.close()
+
+
+@pytest.fixture
+def uids(pool):
+    """Two users: store tests run as the first; isolation tests check the second never sees the first's rows."""
+    from jarvis.users import UserStore
+
+    users = UserStore(pool)
+    return users.add("a@example.com", "Europe/Berlin").id, users.add("b@example.com", "Europe/Berlin").id

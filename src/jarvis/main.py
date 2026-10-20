@@ -15,7 +15,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from jarvis.agent.graph import build_graph
 from jarvis.appapi import AppService
-from jarvis.audit import Audit
+from jarvis.audit import Audit, purge_all as purge_audit
 from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
@@ -30,7 +30,7 @@ from jarvis.memory import MemoryStore
 from jarvis.notes import NoteStore
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
-from jarvis.proactive.store import ProactiveStore
+from jarvis.proactive.store import ProactiveStore, purge_all as purge_proactive
 from jarvis.timeutil import now_local
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
@@ -40,6 +40,7 @@ from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.research_tools import register_research_tools
 from jarvis.tools.task_tools import register_task_tools
+from jarvis.users import ensure_owner
 from jarvis.web import WebSearch, DdgSearch
 from jarvis.voice.devices import Devices
 from jarvis.voice.stt import DeepgramSTT
@@ -63,7 +64,7 @@ def cached_service(build, ttl: float = 1800.0, clock=time.monotonic):
     return get
 
 
-def build_registry(svc, tz: str, pool=None, tavily_key: str = "") -> Registry:
+def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int | None = None) -> Registry:
     registry = Registry()
     gmail = GmailClient(svc("gmail", "v1"))
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz, gmail.sent_to)
@@ -71,8 +72,8 @@ def build_registry(svc, tz: str, pool=None, tavily_key: str = "") -> Registry:
     register_gmail_tools(registry, gmail)
     register_phone_tools(registry)
     if pool is not None:
-        register_memory_tools(registry, MemoryStore(pool))
-        register_note_tools(registry, NoteStore(pool))
+        register_memory_tools(registry, MemoryStore(pool, user_id))
+        register_note_tools(registry, NoteStore(pool, user_id))
     register_research_tools(registry, WebSearch(tavily_key) if tavily_key else DdgSearch())
     return registry
 
@@ -83,16 +84,20 @@ async def lifespan(app: FastAPI):
     pool = make_pool(s.database_url)
     try:
         init_schema(pool)
-        audit = Audit(pool)
-        audit.purge(90)
-        proactive_store = ProactiveStore(pool)
-        proactive_store.purge(90)
-        store = PgTokenStore(pool)
+        # Owner-only wiring until the per-user runtime lands: everything below runs as the owner.
+        owner_id = ensure_owner(pool, s)
+        if owner_id is None:
+            raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")
+        audit = Audit(pool, owner_id)
+        purge_audit(pool, 90)
+        proactive_store = ProactiveStore(pool, owner_id)
+        purge_proactive(pool, 90)
+        store = PgTokenStore(pool, owner_id)
 
         def svc(name: str, version: str):
             return cached_service(lambda: build_service(name, version, store, s.fernet_key))
 
-        registry = build_registry(svc, s.timezone, pool, s.tavily_api_key)
+        registry = build_registry(svc, s.timezone, pool, s.tavily_api_key, owner_id)
         calendar = CalendarClient(svc("calendar", "v3"), s.timezone)
         tasks_client = TasksClient(svc("tasks", "v1"))
         gmail = GmailClient(svc("gmail", "v1"))
@@ -105,7 +110,7 @@ async def lifespan(app: FastAPI):
         async with AsyncPostgresSaver.from_conn_string(s.database_url) as saver:
             await saver.setup()
             graph = build_graph(llm, registry, audit, saver, s.timezone,
-                                memories=MemoryStore(pool).all)
+                                memories=MemoryStore(pool, owner_id).all)
             # One lock for both channels on the shared thread "owner": "read pending -> decide -> ainvoke" is one step.
             # ponytail: one global lock, fine for a single owner; per-thread locks if more threads ever appear.
             lock = asyncio.Lock()
@@ -116,8 +121,8 @@ async def lifespan(app: FastAPI):
                 lock=lock)
             app.state.voice = voice
             app.state.google_store = store
-            app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool), s.timezone, weather_city=s.weather_city, store=proactive_store)
-            app.state.app_api = app_api = AppService(devices, calendar, tasks_client, gmail, NoteStore(pool), graph,
+            app.state.dashboard = DashboardService(devices, calendar, tasks_client, gmail, NoteStore(pool, owner_id), s.timezone, weather_city=s.weather_city, store=proactive_store)
+            app.state.app_api = app_api = AppService(devices, calendar, tasks_client, gmail, NoteStore(pool, owner_id), graph,
                                                      lock, audit, s.timezone)
             tg = TelegramChannel(graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
                                  lock=lock, undo=undo).build(s.telegram_bot_token)

@@ -4,8 +4,8 @@ from jarvis.notes import MAX_BODY, MAX_TITLE, NoteStore
 
 
 @pytest.fixture
-def store(pool):
-    return NoteStore(pool)
+def store(pool, uids):
+    return NoteStore(pool, uids[0])
 
 
 def test_create_get_roundtrip(store):
@@ -88,3 +88,13 @@ def test_search_never_raises_on_odd_queries(store, q):
 def test_recent_has_a_120_char_snippet(store):
     store.create("long", "x" * 300)
     assert store.recent()[0]["snippet"] == "x" * 120
+
+
+def test_note_store_isolated_between_users(pool, uids):
+    a, b = NoteStore(pool, uids[0]), NoteStore(pool, uids[1])
+    n = a.create("Secret plan", "meeting notes")
+    assert b.get(n["id"]) is None
+    assert "error" in b.append(n["id"], "x")
+    assert b.delete(n["id"]) is False
+    assert b.recent() == [] and b.search("meeting") == [] and b.search("plan") == []
+    assert a.get(n["id"])["body"] == "meeting notes" and len(a.search("meeting")) == 1

@@ -1,6 +1,6 @@
 from datetime import date
 
-from jarvis.audit import Audit
+from jarvis.audit import Audit, purge_all
 
 
 def test_record_roundtrip(pool):
@@ -18,6 +18,17 @@ def test_purge_removes_only_old_rows(pool):
     a.record("tool", "old")
     with pool.connection() as c:
         c.execute("UPDATE audit_log SET ts = now() - interval '91 days' WHERE name = 'old'")
-    assert a.purge(90) == 1
+    assert purge_all(pool, 90) == 1
     with pool.connection() as c:
         assert c.execute("SELECT name FROM audit_log").fetchall() == [("new",)]
+
+
+def test_audit_isolated_between_users(pool, uids):
+    a, b = uids
+    system = Audit(pool)
+    Audit(pool, a).record("tool", "x")
+    system.for_user(b).record("tool", "y")
+    system.record("system", "startup")
+    with pool.connection() as c:
+        assert c.execute("SELECT user_id, name FROM audit_log ORDER BY id").fetchall() == [
+            (a, "x"), (b, "y"), (None, "startup")]

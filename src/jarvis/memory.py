@@ -14,8 +14,8 @@ def _row(r) -> dict:
 
 
 class MemoryStore:
-    def __init__(self, pool):
-        self.pool = pool
+    def __init__(self, pool, user_id: int):
+        self.pool, self.user_id = pool, user_id
 
     def add(self, text: str) -> dict:
         text = " ".join(text.split())
@@ -26,29 +26,33 @@ class MemoryStore:
                              "Shorten it, or save a note instead."}
         with self.pool.connection() as conn:
             row = conn.execute(
-                "INSERT INTO memories (text) SELECT %s::text WHERE (SELECT count(*) FROM memories) < %s RETURNING id",
-                (text, MAX_MEMORIES)).fetchone()
+                "INSERT INTO memories (user_id, text) SELECT %s, %s::text"
+                " WHERE (SELECT count(*) FROM memories WHERE user_id = %s) < %s RETURNING id",
+                (self.user_id, text, self.user_id, MAX_MEMORIES)).fetchone()
         if row is None:
             return {"error": f"Memory is full ({MAX_MEMORIES}). Ask the user which memory to forget first."}
         return {"id": row[0], "text": text}
 
     def get(self, memory_id: int) -> dict | None:
         with self.pool.connection() as conn:
-            r = conn.execute("SELECT id, text FROM memories WHERE id = %s", (memory_id,)).fetchone()
+            r = conn.execute("SELECT id, text FROM memories WHERE id = %s AND user_id = %s",
+                             (memory_id, self.user_id)).fetchone()
         return _row(r) if r else None
 
     def remove(self, memory_id: int) -> bool:
         with self.pool.connection() as conn:
-            return conn.execute("DELETE FROM memories WHERE id = %s", (memory_id,)).rowcount == 1
+            return conn.execute("DELETE FROM memories WHERE id = %s AND user_id = %s",
+                                (memory_id, self.user_id)).rowcount == 1
 
     def all(self) -> list[dict]:
         with self.pool.connection() as conn:
-            return [_row(r) for r in conn.execute("SELECT id, text FROM memories ORDER BY id").fetchall()]
+            return [_row(r) for r in conn.execute("SELECT id, text FROM memories WHERE user_id = %s ORDER BY id",
+                                                    (self.user_id,)).fetchall()]
 
     def search(self, query: str) -> list[dict]:
         with self.pool.connection() as conn:
-            rows = conn.execute("SELECT id, text FROM memories WHERE text ILIKE %s ORDER BY id",
-                                (like_pattern(query),)).fetchall()
+            rows = conn.execute("SELECT id, text FROM memories WHERE user_id = %s AND text ILIKE %s ORDER BY id",
+                                (self.user_id, like_pattern(query))).fetchall()
         return [_row(r) for r in rows]
 
 

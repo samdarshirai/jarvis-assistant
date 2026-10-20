@@ -117,3 +117,12 @@ def test_get_retries_dead_socket_but_post_does_not():
 
     assert run("GET") == 2
     assert run("POST") == 1
+
+
+def test_pg_token_store_isolated_between_users(pool, uids):
+    a, b = auth.PgTokenStore(pool, uids[0]), auth.PgTokenStore(pool, uids[1])
+    a.put("google", b"a-blob")
+    assert b.get("google") is None
+    b.put("google", b"b-blob")
+    a.put("google", b"a-blob-2")
+    assert (a.get("google"), b.get("google")) == (b"a-blob-2", b"b-blob")

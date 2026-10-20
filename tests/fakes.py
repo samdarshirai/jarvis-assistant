@@ -103,7 +103,7 @@ class FakeTTS:
 class FakeProactiveStore:
     """In-memory twin of ProactiveStore (same methods) for job tests."""
 
-    def __init__(self):
+    def __init__(self, user_id=None):
         self.mail: dict[str, tuple] = {}
         self.alerts: set[str] = set()
         self.autos: dict[str, str] = {}
@@ -138,9 +138,6 @@ class FakeProactiveStore:
 
     def set_state(self, key, value):
         self.state[key] = value
-
-    def purge(self, days=90):
-        pass
 
 
 class FakeNotifier:

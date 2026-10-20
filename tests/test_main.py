@@ -37,10 +37,10 @@ def mock_lifespan_deps(monkeypatch):
     monkeypatch.setattr("jarvis.main.init_schema", lambda pool: None)
 
     mock_audit = MagicMock()
-    mock_audit.purge = MagicMock()
-    monkeypatch.setattr("jarvis.main.Audit", lambda pool: mock_audit)
+    monkeypatch.setattr("jarvis.main.Audit", lambda pool, user_id=None: mock_audit)
+    monkeypatch.setattr("jarvis.main.ensure_owner", lambda pool, s: 1)
 
-    monkeypatch.setattr("jarvis.main.PgTokenStore", lambda pool: MagicMock())
+    monkeypatch.setattr("jarvis.main.PgTokenStore", lambda pool, user_id: MagicMock())
     monkeypatch.setattr(
         "jarvis.main.build_service", lambda name, ver, store, key: MagicMock()
     )
@@ -51,7 +51,7 @@ def mock_lifespan_deps(monkeypatch):
     monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
-    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool: MagicMock())
+    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool, user_id: MagicMock())
     monkeypatch.setattr("jarvis.main.start_proactive", lambda *a, **k: MagicMock())
 
     # Mock AsyncPostgresSaver
@@ -96,10 +96,10 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
     monkeypatch.setattr("jarvis.main.init_schema", lambda pool: None)
 
     mock_audit = MagicMock()
-    mock_audit.purge = MagicMock()
-    monkeypatch.setattr("jarvis.main.Audit", lambda pool: mock_audit)
+    monkeypatch.setattr("jarvis.main.Audit", lambda pool, user_id=None: mock_audit)
+    monkeypatch.setattr("jarvis.main.ensure_owner", lambda pool, s: 1)
 
-    monkeypatch.setattr("jarvis.main.PgTokenStore", lambda pool: MagicMock())
+    monkeypatch.setattr("jarvis.main.PgTokenStore", lambda pool, user_id: MagicMock())
     monkeypatch.setattr(
         "jarvis.main.build_service", lambda name, ver, store, key: MagicMock()
     )
@@ -110,7 +110,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
     monkeypatch.setattr("jarvis.main.register_task_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.register_gmail_tools", lambda *args: None)
     monkeypatch.setattr("jarvis.main.Registry", lambda: MagicMock())
-    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool: MagicMock())
+    monkeypatch.setattr("jarvis.main.ProactiveStore", lambda pool, user_id: MagicMock())
     monkeypatch.setattr("jarvis.main.start_proactive", lambda *a, **k: MagicMock())
 
     # Make build_graph raise

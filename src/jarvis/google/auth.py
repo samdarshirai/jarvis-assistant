@@ -38,20 +38,21 @@ class TokenStore(Protocol):
 
 
 class PgTokenStore:
-    def __init__(self, pool):
-        self.pool = pool
+    def __init__(self, pool, user_id: int):
+        self.pool, self.user_id = pool, user_id
 
     def get(self, provider):
         with self.pool.connection() as c:
-            row = c.execute("SELECT blob FROM oauth_tokens WHERE provider = %s", (provider,)).fetchone()
+            row = c.execute("SELECT blob FROM oauth_tokens WHERE user_id = %s AND provider = %s",
+                            (self.user_id, provider)).fetchone()
         return bytes(row[0]) if row else None
 
     def put(self, provider, blob):
         with self.pool.connection() as c:
             c.execute(
-                "INSERT INTO oauth_tokens (provider, blob) VALUES (%s, %s)"
-                " ON CONFLICT (provider) DO UPDATE SET blob = EXCLUDED.blob",
-                (provider, blob),
+                "INSERT INTO oauth_tokens (user_id, provider, blob) VALUES (%s, %s, %s)"
+                " ON CONFLICT (user_id, provider) DO UPDATE SET blob = EXCLUDED.blob",
+                (self.user_id, provider, blob),
             )
 
 
@@ -95,13 +96,17 @@ def main() -> None:
 
     from jarvis.config import get_settings
     from jarvis.db import init_schema, make_pool
+    from jarvis.users import ensure_owner
 
     s = get_settings()
     pool = make_pool(s.database_url)
     init_schema(pool)
+    owner = ensure_owner(pool, s)
+    if owner is None:
+        raise SystemExit("Set JARVIS_OWNER_EMAIL first: this consent is stored for the owner.")
     flow = InstalledAppFlow.from_client_secrets_file(s.google_client_secrets, SCOPES)
     creds = flow.run_local_server(port=0)
-    save_credentials(PgTokenStore(pool), s.fernet_key, creds)
+    save_credentials(PgTokenStore(pool, owner), s.fernet_key, creds)
     print("Google authorization stored.")
 
 

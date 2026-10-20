@@ -123,13 +123,13 @@ async def test_notes_and_memory_use_the_fast_tier_in_voice():
     assert out["messages"][-1].content == "ok"
 
 
-async def test_remember_goes_through_the_gate_then_shows_up_in_the_next_prompt(pool):
+async def test_remember_goes_through_the_gate_then_shows_up_in_the_next_prompt(pool, uids):
     from langgraph.types import Command
 
     from jarvis.memory import MemoryStore
     from jarvis.tools.memory_tools import register_memory_tools
 
-    store = MemoryStore(pool)
+    store = MemoryStore(pool, uids[0])
     reg = Registry()
     register_memory_tools(reg, store)
     call = AIMessage("", tool_calls=[{"name": "remember", "args": {"text": "I like window seats"}, "id": "c1",
