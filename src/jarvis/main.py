@@ -39,7 +39,6 @@ async def lifespan(app: FastAPI):
     pool = make_pool(s.database_url)
     try:
         init_schema(pool)
-        # Owner-only wiring until per-user channels land: everything below runs as the owner's runtime.
         owner_id = ensure_owner(pool, s)
         if owner_id is None:
             raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")
