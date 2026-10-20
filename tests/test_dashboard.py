@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from jarvis.dashboard import DashboardService
 from jarvis.google.auth import ReauthRequired
+from jarvis.users import UserStore
 from jarvis.voice.devices import Devices
 from tests.test_appapi import Tagged, tenants
 
@@ -74,7 +75,7 @@ class Store:
 def svc(cal=None, tasks=None, gmail=None, store=None, **kw):
     """The payload of a stand-in runtime holding these sources."""
     r = SimpleNamespace(calendar=cal or Cal(), tasks=tasks or Tasks(), gmail=gmail or Gmail(), notes=Notes(), tz=TZ,
-                        proactive=store or Store())
+                        proactive=store or Store(), user=SimpleNamespace(is_owner=True))
     return SimpleNamespace(payload=lambda now=None, coords=None: DashboardService(None, None, **kw).payload(r, now, coords))
 
 
@@ -142,5 +143,20 @@ async def test_dashboard_scoped(pool, uids, monkeypatch):
     pb = await s.payload(rb, NOW)
     assert [n["title"] for n in pa["notes"]] == ["A note"] and [n["title"] for n in pb["notes"]] == ["B note"]
     assert {i["id"] for i in pa["unread"]["items"]} == {"A"} and {i["id"] for i in pb["unread"]["items"]} == {"B"}
-    assert seen == [("Server City", (52.5, 13.4)), ("Pune", None)]  # B never gets A's location
+    assert seen == [("", (52.5, 13.4)), ("Pune", None)]  # B never gets A's location; friends never the server city
     assert ra.proactive.get_state("last_location") == "52.5000,13.4000" and rb.proactive.get_state("last_location") is None
+
+
+async def test_server_weather_city_is_the_owners_only(pool, uids, monkeypatch):
+    seen = []
+    monkeypatch.setattr("jarvis.dashboard.weather.fetch", lambda city, tz, now, coords: seen.append((city, coords)) or None)
+    devices, t = Devices(pool), tenants(pool)
+    s = DashboardService(devices, t, weather_city="Owner City")
+    owner = UserStore(pool).add("owner@example.com", "Europe/Berlin", is_owner=True).id
+    ro, rf = [await s.authenticate(f"Bearer {devices.create(u)[1]}") for u in (owner, uids[0])]
+    for r in (ro, rf):
+        r.calendar = r.tasks = r.gmail = Tagged("x")
+    await s.payload(ro, NOW)
+    pf = await s.payload(rf, NOW)
+    assert seen == [("Owner City", None), ("", None)]  # a friend without a city or a phone fix gets no weather line
+    assert "Owner City" not in str(pf)

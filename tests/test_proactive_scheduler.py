@@ -96,6 +96,18 @@ async def test_each_user_gets_own_brief_in_own_timezone(monkeypatch):
     assert berlin.proactive.alerts == {"brief:2026-10-21"} and ny.proactive.alerts == {"brief:2026-10-21"}
 
 
+async def test_server_weather_city_is_the_owners_only(monkeypatch):
+    weather_calls = []
+    monkeypatch.setattr("jarvis.proactive.brief.weather.fetch",
+                        lambda city, tz, now, coords=None: weather_calls.append(city) or None)
+    owner = runtime(user(1, owner=True), llm=FakeProvider({"fast": [AIMessage("Good morning. Owner.")]}))
+    friend = runtime(user(2), llm=FakeProvider({"fast": [AIMessage("Good morning. Friend.")]}))
+    tick, n, _ = harness(owner, friend)
+    await tick("brief", WED.replace(hour=5, minute=40), s=settings(weather_city="Owner City"))
+    assert weather_calls == ["Owner City", ""]  # the friend never inherits the operator's city
+    assert "Owner City" not in str(n[2].calls) and n[2].calls
+
+
 async def test_brief_once_per_day_and_survives_restart_within_window():
     store = FakeProactiveStore()  # stands in for the user's Postgres rows, which outlive a restart
     rt = runtime(user(1), store=store, llm=FakeProvider({"fast": [AIMessage("Good morning.")]}))

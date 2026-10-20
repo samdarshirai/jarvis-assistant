@@ -111,7 +111,7 @@ def per_user_jobs(s) -> dict:
         if not due or not await asyncio.to_thread(rt.proactive.claim_alert, f"brief:{now.date().isoformat()}"):
             return
         await run_brief(rt.calendar, rt.tasks, rt.gmail, llm, notifier, rt.audit, tz, now=now,
-                        weather_city=await state("weather_city") or s.weather_city,
+                        weather_city=await state("weather_city") or (s.weather_city if rt.user.is_owner else ""),
                         location=lambda: weather.load_coords(rt.proactive))
 
     return {"brief": brief, "mail": mail, "sweep": alerts}

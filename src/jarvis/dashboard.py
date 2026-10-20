@@ -35,7 +35,8 @@ class DashboardService:
             await asyncio.to_thread(weather.save_coords, store, *coords)  # the 7:30 brief reuses the latest fix
         else:
             coords = await asyncio.to_thread(weather.load_coords, store)
-        city = await asyncio.to_thread(store.get_state, "weather_city") or self.weather_city
+        # the server's city is the owner's: a friend without their own city or a phone fix gets no weather line
+        city = await asyncio.to_thread(store.get_state, "weather_city") or (self.weather_city if rt.user.is_owner else "")
 
         async def get(fn, *args):
             nonlocal reauth
