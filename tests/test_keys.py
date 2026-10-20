@@ -248,3 +248,58 @@ async def test_unauthenticated_401(pool, uids):
 def test_caddy_proxies_account_and_settings_routes():
     line = next(l for l in (Path(__file__).parents[1] / "Caddyfile").read_text().splitlines() if "@public path" in l)
     assert {"/me", "/settings/*"} <= set(line.split())
+
+
+# --- fix round 1 ---
+async def test_non_ascii_key_is_rejected_key_not_500(pool, uids, caplog):
+    caplog.set_level(logging.DEBUG)
+    uid = uids[0]
+    c, _ = await setup(pool, uid, partial(llm_check.test_models, resolve=public, transport=failing(200)))
+    bad = "sk-or-v1-SÉCRETkeyé7f3a"
+    r = await c.put("/settings/llm", json={"base_url": "https://api.example.com/v1", "api_key": bad})
+    assert r.status_code == 422 and r.json() == {"error": "rejected_key", "model": None}
+    assert secrets(pool, uid) == {} and "SÉCRET" not in r.text and "SÉCRET" not in caplog.text
+
+
+async def test_llm_save_waits_for_the_users_advisory_lock(pool, uids):
+    uid = uids[0]
+    c, _ = await setup(pool, uid)
+    with pool.connection() as held:  # another save of this user's config, mid-transaction
+        held.execute("SELECT pg_advisory_xact_lock(%s)", (uid,))
+        put = asyncio.create_task(c.put("/settings/llm", json={"base_url": "https://api.example.com/v1", "api_key": KEY}))
+        await asyncio.sleep(0.3)
+        assert not put.done() and secrets(pool, uid) == {}
+    assert (await put).status_code == 200 and secrets(pool, uid)["llm_key"] == KEY
+    bodies = [{"base_url": f"https://api{i}.example.com/v1", "api_key": f"{KEY}{i}", "model_fast": f"f/{i}",
+               "model_strong": f"s/{i}"} for i in range(2)]
+    await asyncio.gather(*(c.put("/settings/llm", json=b) for b in bodies))
+    s = secrets(pool, uid)
+    i = s["llm_key"][-1]
+    assert s == {"llm_base_url": f"https://api{i}.example.com/v1", "llm_key": f"{KEY}{i}",
+                 "model_fast": f"f/{i}", "model_strong": f"s/{i}"}  # one whole config, never a mix
+
+
+async def test_port_zero_and_numeric_ip_hosts_rejected(pool, uids):
+    uid = uids[0]
+    check = Checker(pool, uid)
+    c, _ = await setup(pool, uid, check)
+    for url in ("https://api.example.com:0/v1", "https://2130706433/v1", "https://0x7f000001/v1", "https://0x7f.1/v1",
+                "https://0177.0.0.1/v1", "https://127.1/v1"):
+        r = await c.put("/settings/llm", json={"base_url": url, "api_key": KEY})
+        assert r.status_code == 422 and r.json()["error"] == "bad_url", url
+    assert check.calls == []
+    r = await c.put("/settings/llm", json={"base_url": "https://api.example.com:8443/v1", "api_key": KEY})
+    assert r.status_code == 200 and secrets(pool, uid)["llm_base_url"] == "https://api.example.com:8443/v1"
+
+
+async def test_model_ids_capped_and_shaped(pool, uids):
+    uid = uids[0]
+    check = Checker(pool, uid)
+    c, _ = await setup(pool, uid, check)
+    base = {"base_url": "https://api.example.com/v1", "api_key": KEY}
+    for fast in (",".join(f"m/{i}" for i in range(6)), "a b", "m;rm", "x" * 101, "ok/1,bad|x", "a\nb"):
+        r = await c.put("/settings/llm", json={**base, "model_fast": fast})
+        assert r.status_code == 422 and r.json() == {"error": "bad_request"}, fast
+    assert check.calls == [] and secrets(pool, uid) == {}
+    ok = ",".join(["openai/gpt-4.1:free", "a@b+c", "x" * 100, "d", "e"])
+    assert (await c.put("/settings/llm", json={**base, "model_fast": ok})).status_code == 200

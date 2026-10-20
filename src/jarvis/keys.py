@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import re
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -14,6 +15,9 @@ from jarvis.tenant import auth_runtime
 from jarvis.users import SecretStore, UserStore, _put_secret
 
 OPTIONAL = {"deepgram": "deepgram_key", "tavily": "tavily_key"}
+MAX_MODELS = 5  # per tier: each one is a paid test call on every PUT
+_model_id = re.compile(r"[A-Za-z0-9._:/@+-]{1,100}")
+_numeric_label = re.compile(r"0x[0-9a-f]*|[0-9]+")  # no real TLD looks like this; inet_aton-style IPs (2130706433, 0x7f.1) do
 
 
 def last4(value: str | None) -> str | None:
@@ -31,10 +35,16 @@ def clean_base_url(raw: str) -> str:
         ip = ipaddress.ip_address(host)
     except ValueError:
         ip = None
-    if not host or host == "localhost" or host.endswith(".localhost") or (ip and not ip.is_global):
+    if (not host or host == "localhost" or host.endswith(".localhost") or (ip and not ip.is_global)
+            or (ip is None and _numeric_label.fullmatch(host.rsplit(".", 1)[-1])) or parts.port == 0):
         raise ValueError("The endpoint must be a public host.")
     netloc = f"[{host}]" if ip and ip.version == 6 else host
-    return parts._replace(netloc=netloc + (f":{parts.port}" if parts.port else "")).geturl()
+    return parts._replace(netloc=netloc + (f":{parts.port}" if parts.port is not None else "")).geturl()
+
+
+def _models_ok(raw: str) -> bool:
+    ids = [m.strip() for m in raw.split(",") if m.strip()]
+    return len(ids) <= MAX_MODELS and all(_model_id.fullmatch(m) for m in ids)
 
 
 def _fail(error: str, model: str | None = None) -> JSONResponse:
@@ -87,6 +97,8 @@ class Keys:
             url = clean_base_url(base_url)
         except ValueError:
             return _fail("bad_url")
+        if not (_models_ok(model_fast) and _models_ok(model_strong)):
+            return JSONResponse({"error": "bad_request"}, status_code=422)
         new = {"llm_base_url": url, "llm_key": api_key, "model_fast": model_fast.strip(), "model_strong": model_strong.strip()}
         creds = creds_for(new, self.tenants.s)
         if not (creds.fast and creds.strong):
@@ -97,9 +109,12 @@ class Keys:
             return _fail(e.code, e.model)
         except httpx.InvalidURL:
             return _fail("bad_url")
+        except UnicodeError:  # a non-ASCII key can't go in a header; the exception text is never used (it quotes the key)
+            return _fail("rejected_key")
 
         def save():
             with self.tenants.pool.connection() as c:  # one transaction: never half a config
+                c.execute("SELECT pg_advisory_xact_lock(%s)", (rt.user.id,))  # concurrent PUTs: one whole config wins
                 for name, value in new.items():
                     if value:
                         _put_secret(c, self._store().fernet, rt.user.id, name, value)
