@@ -73,10 +73,9 @@ async def lifespan(app: FastAPI):
                         pool, UserStore(pool), devices, s.fernet_key, client_secrets=s.google_web_client_secrets,
                         redirect_uri=s.public_base_url.rstrip("/") + "/auth/callback",
                         invalidate=lambda uid: loop.call_soon_threadsafe(tenants.invalidate, uid))
-                app.state.dashboard = DashboardService(devices, owner.calendar, owner.tasks, owner.gmail, owner.notes,
-                                                       owner.tz, weather_city=s.weather_city, store=owner.proactive)
-                app.state.app_api = app_api = AppService(devices, owner.calendar, owner.tasks, owner.gmail, owner.notes,
-                                                         owner.graph, owner.lock, owner.audit, owner.tz, user_id=owner_id)
+                # The app and dashboard look the caller's runtime up per request (auth_runtime), not the owner's.
+                app.state.dashboard = DashboardService(devices, tenants, weather_city=s.weather_city)
+                app.state.app_api = app_api = AppService(devices, tenants)
                 tg = TelegramChannel(owner.graph, s.telegram_owner_chat_id, deliver_actions=voice.deliver,
                                      lock=owner.lock, undo=undo, user_id=owner_id).build(s.telegram_bot_token)
                 try:
@@ -185,27 +184,33 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         svc = getattr(app.state, "dashboard", None)
         if svc is None:  # lifespan has not built it yet
             return JSONResponse({"error": "unavailable"}, status_code=503)
-        if not await svc.authorized(request.headers.get("authorization", "")):
+        rt = await svc.authenticate(request.headers.get("authorization", ""))
+        if rt is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         try:
             lat, lon = float(request.query_params["lat"]), float(request.query_params["lon"])
             coords = (lat, lon) if -90 <= lat <= 90 and -180 <= lon <= 180 else None
         except (KeyError, ValueError):
             coords = None
-        return await svc.payload(coords=coords)
+        return await svc.payload(rt, coords=coords)
 
     @app.exception_handler(RequestValidationError)
     async def bad_request(request: Request, exc: RequestValidationError):
         return JSONResponse({"error": "bad_request"}, status_code=422)
 
     async def guarded(request: Request):
-        """(service, error response): 503 until the lifespan built it, 401 on a bad device token."""
+        """(service, caller's runtime, error response): 503 until the lifespan built it, 401 on a bad device token
+        or a disabled user."""
         svc = getattr(app.state, "app_api", None)
         if svc is None:
-            return None, JSONResponse({"error": "unavailable"}, status_code=503)
-        if not await svc.authorized(request.headers.get("authorization", "")):
-            return None, JSONResponse({"error": "unauthorized"}, status_code=401)
-        return svc, None
+            return None, None, JSONResponse({"error": "unavailable"}, status_code=503)
+        rt = await svc.authenticate(request.headers.get("authorization", ""))
+        if rt is None:
+            return None, None, JSONResponse({"error": "unauthorized"}, status_code=401)
+        return svc, rt, None
+
+    def llm_or_409(rt):
+        return None if rt.llm_ready else JSONResponse({"error": "needs_setup", "missing": "llm"}, status_code=409)
 
     def found(body):
         return JSONResponse({"error": "not_found"}, status_code=404) if body is None else body
@@ -252,66 +257,66 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
 
     @app.get("/calendar")
     async def calendar(request: Request, days: int = 7):
-        svc, err = await guarded(request)
+        svc, rt, err = await guarded(request)
         if err:
             return err
         try:
             start = date.fromisoformat(request.query_params["from"]) if "from" in request.query_params else None
         except ValueError:
             return JSONResponse({"error": "bad_request"}, status_code=422)
-        return await svc.calendar_events(start or now_local(svc.tz).date(), days)
+        return await svc.calendar_events(rt, start or now_local(rt.tz).date(), days)
 
     @app.get("/tasks")
     async def tasks(request: Request):
-        svc, err = await guarded(request)
-        return err or await svc.task_list()
+        svc, rt, err = await guarded(request)
+        return err or await svc.task_list(rt)
 
     @app.post("/tasks")
     async def add_task(request: Request, body: TaskIn):
-        svc, err = await guarded(request)
+        svc, rt, err = await guarded(request)
         if err:
             return err
-        task = await svc.create_task(body.title, body.due)
+        task = await svc.create_task(rt, body.title, body.due)
         return JSONResponse({"error": "unavailable"}, status_code=502) if task is None else {"task": task}
 
     @app.post("/tasks/{task_id}/complete")
     async def complete_task(request: Request, task_id: str):
-        svc, err = await guarded(request)
+        svc, rt, err = await guarded(request)
         if err:
             return err
-        if not await svc.complete_task(task_id):
+        if not await svc.complete_task(rt, task_id):
             return JSONResponse({"error": "unavailable"}, status_code=502)
         return {"ok": True}
 
     @app.get("/mail")
     async def mail(request: Request, limit: int = 20):
-        svc, err = await guarded(request)
-        return err or await svc.mail_list(limit)
+        svc, rt, err = await guarded(request)
+        return err or await svc.mail_list(rt, limit)
 
     @app.get("/mail/{message_id}")
     async def mail_item(request: Request, message_id: str):
-        svc, err = await guarded(request)
-        return err or found(await svc.mail_item(message_id))
+        svc, rt, err = await guarded(request)
+        return err or found(await svc.mail_item(rt, message_id))
 
     @app.get("/notes")
     async def notes(request: Request):
-        svc, err = await guarded(request)
-        return err or await svc.note_list()
+        svc, rt, err = await guarded(request)
+        return err or await svc.note_list(rt)
 
     @app.get("/notes/{note_id}")
     async def note(request: Request, note_id: int):
-        svc, err = await guarded(request)
-        return err or found(await svc.note_item(note_id))
+        svc, rt, err = await guarded(request)
+        return err or found(await svc.note_item(rt, note_id))
 
     @app.post("/chat")
     async def chat(request: Request, body: ChatIn):
-        svc, err = await guarded(request)
-        return err or await svc.chat(body.text)
+        svc, rt, err = await guarded(request)
+        return err or llm_or_409(rt) or await svc.chat(rt, body.text)
 
     @app.post("/chat/confirm")
     async def chat_confirm(request: Request, body: ConfirmIn):
-        svc, err = await guarded(request)
-        return err or await svc.confirm(body.interrupt_id, body.decision)
+        svc, rt, err = await guarded(request)
+        return err or llm_or_409(rt) or await svc.confirm(rt, body.interrupt_id, body.decision)
 
     @app.websocket("/voice")
     async def voice(ws: WebSocket):

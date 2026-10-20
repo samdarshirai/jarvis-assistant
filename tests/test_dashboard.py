@@ -1,9 +1,12 @@
 import time
+from types import SimpleNamespace
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from jarvis.dashboard import DashboardService
 from jarvis.google.auth import ReauthRequired
+from jarvis.voice.devices import Devices
+from tests.test_appapi import Tagged, tenants
 
 TZ = "Europe/Berlin"
 NOW = datetime(2026, 10, 5, 14, 0, tzinfo=ZoneInfo(TZ))
@@ -57,13 +60,22 @@ class Notes:
         return NOTES[:limit]
 
 
-class Devices:
-    def verify(self, token):
-        return 1 if token == "good" else None
+class Store:
+    def __init__(self, **state):
+        self.state = state
+
+    def get_state(self, key):
+        return self.state.get(key)
+
+    def set_state(self, key, value):
+        self.state[key] = value
 
 
-def svc(cal=None, tasks=None, gmail=None, **kw):
-    return DashboardService(Devices(), cal or Cal(), tasks or Tasks(), gmail or Gmail(), Notes(), TZ, **kw)
+def svc(cal=None, tasks=None, gmail=None, store=None, **kw):
+    """The payload of a stand-in runtime holding these sources."""
+    r = SimpleNamespace(calendar=cal or Cal(), tasks=tasks or Tasks(), gmail=gmail or Gmail(), notes=Notes(), tz=TZ,
+                        proactive=store or Store())
+    return SimpleNamespace(payload=lambda now=None, coords=None: DashboardService(None, None, **kw).payload(r, now, coords))
 
 
 async def test_payload_shapes_every_section():
@@ -109,14 +121,26 @@ async def test_a_hung_source_times_out_to_null():
     assert p["events"] is None and p["tasks"]
 
 
-async def test_authorized_needs_a_known_bearer_token():
-    s = svc()
-    assert await s.authorized("Bearer good") is True
-    assert await s.authorized("bearer good") is True
-    for bad in ("Bearer nope", "Bearer ", "good", ""):
-        assert await s.authorized(bad) is False
-
-
 async def test_task_with_no_title_gets_placeholder():
     p = await svc(tasks=Tasks([{"id": "x", "title": None, "due": None, "status": "needsAction"}])).payload(NOW)
     assert p["tasks"][0]["title"] == "(no title)"
+
+
+async def test_dashboard_scoped(pool, uids, monkeypatch):
+    seen = []
+    monkeypatch.setattr("jarvis.dashboard.weather.fetch", lambda city, tz, now, coords: seen.append((city, coords)) or None)
+    devices, t = Devices(pool), tenants(pool)
+    s = DashboardService(devices, t, weather_city="Server City")
+    ha, hb = (f"Bearer {devices.create(u)[1]}" for u in uids)
+    ra, rb = await s.authenticate(ha), await s.authenticate(hb)
+    assert await s.authenticate("Bearer nope") is None
+    for r, tag in ((ra, "A"), (rb, "B")):
+        r.calendar = r.tasks = r.gmail = Tagged(tag)
+        r.notes.create(f"{tag} note")
+    rb.proactive.set_state("weather_city", "Pune")
+    pa = await s.payload(ra, NOW, (52.5, 13.4))
+    pb = await s.payload(rb, NOW)
+    assert [n["title"] for n in pa["notes"]] == ["A note"] and [n["title"] for n in pb["notes"]] == ["B note"]
+    assert {i["id"] for i in pa["unread"]["items"]} == {"A"} and {i["id"] for i in pb["unread"]["items"]} == {"B"}
+    assert seen == [("Server City", (52.5, 13.4)), ("Pune", None)]  # B never gets A's location
+    assert ra.proactive.get_state("last_location") == "52.5000,13.4000" and rb.proactive.get_state("last_location") is None
