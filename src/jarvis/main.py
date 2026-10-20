@@ -2,6 +2,7 @@ import asyncio
 import html
 import logging
 from contextlib import asynccontextmanager
+from functools import partial
 
 from datetime import date
 from typing import Annotated, Literal

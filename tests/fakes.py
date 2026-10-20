@@ -106,11 +106,13 @@ class FakeTTS:
 class FakeTenants:
     """Tenants twin: get(uid) returns a minimal runtime (user, secrets, graph, lock); lock(uid) is that runtime's lock."""
 
-    def __init__(self):
-        self.runtimes: dict[int, SimpleNamespace] = {}
-        self._users = {}
+    def __init__(self, runtimes: dict | None = None):
+        self.runtimes: dict[int, SimpleNamespace] = runtimes if runtimes is not None else {}
+        self._users = {uid: rt.user for uid, rt in self.runtimes.items()}
         self.users = SimpleNamespace(get=self._users.get)
-        self._locks: dict[int, asyncio.Lock] = {}
+        self._locks: dict[int, asyncio.Lock] = {
+            uid: getattr(rt, "lock", None) or asyncio.Lock() for uid, rt in self.runtimes.items()
+        }
 
     def add(self, uid, graph, secrets=None, disabled=False):
         rt = SimpleNamespace(user=SimpleNamespace(id=uid, disabled=disabled), secrets=dict(secrets or {}),
@@ -195,17 +197,3 @@ class FakeUsers:
 
     def enabled(self):
         return [u for u in self.users if not u.disabled]
-
-
-class FakeTenants:
-    """Tenants twin holding prebuilt runtimes; an unknown id raises like Tenants.get does."""
-
-    def __init__(self, runtimes: dict):
-        self.runtimes = runtimes
-
-    async def get(self, user_id):
-        from jarvis.tenant import UnknownUser
-
-        if user_id not in self.runtimes:
-            raise UnknownUser(user_id)
-        return self.runtimes[user_id]
