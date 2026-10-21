@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   google_sub TEXT UNIQUE,
+  display_name TEXT,
   tz TEXT NOT NULL,
   is_owner BOOLEAN NOT NULL DEFAULT false,
   disabled BOOLEAN NOT NULL DEFAULT false,
@@ -123,7 +124,7 @@ def init_schema(pool: ConnectionPool) -> None:
         have = set(conn.execute("SELECT table_name, column_name FROM information_schema.columns"
                                 " WHERE table_schema = current_schema()").fetchall())
         adds = [(t, "user_id", "INTEGER REFERENCES users(id) ON DELETE CASCADE") for t in DATA_TABLES]
-        for t, col, decl in [*adds, ("auth_attempts", "finish_code_hash", "TEXT")]:
+        for t, col, decl in [*adds, ("auth_attempts", "finish_code_hash", "TEXT"), ("users", "display_name", "TEXT")]:
             if (t, col) not in have:
                 conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {col} {decl}")
         finish_user_columns(conn)

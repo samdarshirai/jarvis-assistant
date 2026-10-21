@@ -149,10 +149,12 @@ void main() {
     final links = StreamController<Uri>();
     final store = MemStore({'token': 'owner-token'});
     final opened = <Uri>[];
+    final nextAccount = Completer<Map<String, dynamic>>();
+    var switched = false;
     final api = RecApi({
-      'GET /me': meBody(),
+      'GET /me': (Map<String, dynamic>? _) => switched ? nextAccount.future : meBody(displayName: 'First User'),
       'POST /auth/start': {'nonce': 'reconnect', 'url': 'https://accounts.google.com/reconnect'},
-      'POST /auth/claim': {'token': 'new-token'},
+      'POST /auth/claim': (Map<String, dynamic>? _) { switched = true; return {'token': 'new-token'}; },
       'PUT /me': {'ok': true},
     });
     await t.pumpWidget(JarvisApp(store: store, apiFor: (_) => api, links: links.stream,
@@ -168,6 +170,10 @@ void main() {
     links.add(Uri.parse('jarvis://signin?nonce=reconnect&code=finish'));
     for (var i = 0; i < 8; i++) { await t.pump(); }
     expect((await store.load()).token, 'new-token');
+    expect(find.text('First User'), findsNothing);
+    nextAccount.complete(meBody(displayName: 'Second User'));
+    for (var i = 0; i < 8; i++) { await t.pump(); }
+    expect(find.text('Second User'), findsOneWidget);
     expect(api.paths, isNot(contains('POST /google/auth/start')));
     expect(api.calls.lastWhere((c) => c.$2 == '/auth/claim').$3!['code'], 'finish');
     await links.close(); // before unmounting: after the app cancels its subscription, close() never completes

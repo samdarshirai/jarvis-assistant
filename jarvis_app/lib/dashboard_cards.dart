@@ -29,8 +29,10 @@ enum HomeTarget { calendar, mail, notes, tasks, alarms }
 
 class DashboardSections extends StatelessWidget {
   const DashboardSections(
-      {super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now, this.onOpen, this.onOpenEmail, this.onSettings});
+      {super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now, this.onOpen, this.onOpenEmail, this.onSettings, this.displayName});
   final DashboardController controller;
+  final String? displayName;
+  String? get _name => displayName?.trim().isEmpty == false ? displayName : null;
   final void Function(String text) onPlayBrief;
   final void Function(HomeTarget target)? onOpen;
   final void Function(String? messageId)? onOpenEmail;
@@ -104,16 +106,16 @@ class DashboardSections extends StatelessWidget {
               height: 42,
               alignment: Alignment.center,
               decoration: const BoxDecoration(shape: BoxShape.circle, color: darkPill),
-              child: const Text('S', style: TextStyle(color: amber, fontWeight: FontWeight.w700, fontSize: 18)),
+              child: _name == null ? const Icon(Icons.person_outline_rounded, color: amber) : Text(_name!.characters.first.toUpperCase(), style: TextStyle(color: amber, fontWeight: FontWeight.w700, fontSize: 18)),
             ),
           ),
         ),
       ]);
 
   Widget _greeting(DateTime n) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('${greeting(n)},', style: condensed(48, weight: FontWeight.w200, color: cream)),
+        Text('${greeting(n)}${_name == null ? '' : ','}', style: condensed(48, weight: FontWeight.w200, color: cream)),
         const SizedBox(height: 2),
-        Text('Sam', style: condensed(60, color: cream)),
+        if (_name != null) Text(_name!, softWrap: true, style: condensed(60, color: cream)),
         const SizedBox(height: 10),
         Row(children: [
           const Icon(Icons.calendar_today, size: 14, color: mutedText),

@@ -82,7 +82,7 @@ async def test_me_never_returns_secret_values(pool, uids, caplog):
     c, _ = await setup(pool, uid)
     r = await c.get("/me")
     assert r.status_code == 200 and r.json() == {
-        "email": "a@example.com", "tz": "Europe/Berlin",
+        "email": "a@example.com", "tz": "Europe/Berlin", "display_name": None,
         "setup": {"google": False, "llm": False, "deepgram": False, "tavily": False},
         "keys": {"llm_base_url": None, "llm_key_last4": None, "model_fast": None, "model_strong": None,
                  "deepgram_last4": None, "tavily_last4": None}}
@@ -335,3 +335,29 @@ async def test_model_ids_capped_and_shaped(pool, uids):
     assert check.calls == [] and secrets(pool, uid) == {}
     ok = ",".join(["openai/gpt-4.1:free", "a@b+c", "x" * 100, "d", "e"])
     assert (await c.put("/settings/llm", json={**base, "model_fast": ok})).status_code == 200
+
+
+async def test_display_name_persists_and_is_isolated(pool, uids):
+    c, _ = await setup(pool, uids[0])
+    assert (await c.get('/me')).json()['display_name'] is None
+    for name in ("  Élodie O’Connor-Smith  ", "李 小龍", "👩🏽‍💻", "a" * 100):
+        r = await c.put('/me', json={'display_name': name})
+        assert r.status_code == 200
+        assert r.json()['display_name'] == name.strip()
+        other_device, _ = await setup(pool, uids[0])
+        assert (await other_device.get('/me')).json()['display_name'] == name.strip()
+    other_user, _ = await setup(pool, uids[1])
+    assert (await other_user.get('/me')).json()['display_name'] is None
+    assert (await c.put('/me', json={'tz': 'UTC'})).json()['display_name'] == 'a' * 100
+
+
+async def test_display_name_validation_is_atomic(pool, uids):
+    c, _ = await setup(pool, uids[0])
+    assert (await c.put('/me', json={'display_name': 'Alex'})).status_code == 200
+    for name in (None, 12, '', '   ', 'a' * 101, 'a\nb', 'Alex\n', 'a\rb', 'a\u2028b', 'a\u0085b', '\x00'):
+        assert (await c.put('/me', json={'display_name': name, 'tz': 'UTC'})).status_code == 422
+        user = UserStore(pool).get(uids[0])
+        assert user.display_name == 'Alex' and user.tz == 'Europe/Berlin'
+    assert (await c.put('/me', json={'display_name': 'New', 'tz': 'Mars/Olympus'})).status_code == 422
+    assert UserStore(pool).get(uids[0]).display_name == 'Alex'
+    assert (await c.put('/me', json={})).status_code == 422

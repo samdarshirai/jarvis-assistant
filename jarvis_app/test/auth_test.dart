@@ -27,6 +27,7 @@ class RecApi extends ApiClient {
     calls.add((method, path, body));
     var r = routes['$method $path'];
     if (r is Function) r = r(body) as Object;
+    if (r is Future<Map<String, dynamic>>) r = await r;
     if (r is Exception) throw r;
     if (r == null) throw ApiError(404, null, path);
     return r as Map<String, dynamic>;
@@ -43,8 +44,9 @@ class RecApi extends ApiClient {
   Future<Map<String, dynamic>> delete(String path) => _do('DELETE', path);
 }
 
-Map<String, dynamic> meBody({bool llm = true, String? deepgram = 'wxyz', String? tavily = 'tavy'}) => {
+Map<String, dynamic> meBody({String? displayName = 'Alex', bool llm = true, String? deepgram = 'wxyz', String? tavily = 'tavy'}) => {
       'email': 'a@b.test',
+      'display_name': displayName,
       'tz': 'Asia/Kolkata',
       'setup': {'google': true, 'llm': llm, 'deepgram': deepgram != null, 'tavily': tavily != null},
       'keys': {

@@ -167,7 +167,8 @@ class FcmIn(BaseModel):
 
 
 class MeIn(BaseModel):
-    tz: Annotated[str, StringConstraints(max_length=100)]
+    tz: Annotated[str, StringConstraints(max_length=100)] | None = None
+    display_name: str | None = None
 
 
 class StartIn(BaseModel):
@@ -385,7 +386,7 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     @app.put("/me")
     async def put_me(request: Request, body: MeIn):
         svc, rt, err = await guarded(request, "keys")
-        return err or await svc.set_tz(rt, body.tz)
+        return err or await svc.update_me(rt, body.model_dump(exclude_unset=True))
 
     @app.put("/settings/llm")
     async def put_llm(request: Request, body: LLMIn):

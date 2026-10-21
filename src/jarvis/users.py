@@ -18,7 +18,7 @@ MAX_USERS = 100
 SECRET_NAMES = ("llm_base_url", "llm_key", "model_fast", "model_strong", "deepgram_key", "tavily_key")
 CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")  # LangGraph's Postgres saver
 LEGACY_THREAD = "owner"  # the single conversation thread from before users existed
-_COLS = "id, email, google_sub, tz, is_owner, disabled"
+_COLS = "id, email, google_sub, tz, is_owner, disabled, display_name"
 _email_shape = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 
 
@@ -30,6 +30,7 @@ class User:
     tz: str
     is_owner: bool
     disabled: bool
+    display_name: str | None = None
 
 
 def thread_id(user_id: int) -> str:

@@ -19,10 +19,11 @@ import 'session.dart';
 import 'theme.dart';
 
 class SessionScreen extends StatelessWidget {
-  const SessionScreen({super.key, required this.controller, this.dashboard, this.api, this.alarm, this.runPhoneActions,
+  const SessionScreen({super.key, required this.controller, this.dashboard, this.displayName, this.api, this.alarm, this.runPhoneActions,
     this.startSignIn, this.voiceReady = true, this.onSettingsReturn, this.onNeedsSetup, this.open = openInBrowser});
   final SessionController controller;
   final DashboardController? dashboard;
+  final String? displayName;
   final ApiClient? api; // null: detail screens are not reachable (tests, unpaired)
   final Future<DateTime?> Function()? alarm;
   final Future<void> Function(List<Map<String, dynamic>> actions)? runPhoneActions;
@@ -150,6 +151,7 @@ class SessionScreen extends StatelessWidget {
                 if (dashboard != null)
                   DashboardSections(
                       controller: dashboard!,
+                      displayName: displayName,
                       onPlayBrief: (text) => api == null ? _talk(context, text: text) : _brief(context, text),
                       onOpen: (t) => _open(context, t),
                       onOpenEmail: openEmailInGmail,

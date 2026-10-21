@@ -233,3 +233,18 @@ def test_ensure_owner_requires_owner_email_when_legacy_rows_exist(scratch):
     with pytest.raises(ValueError, match="JARVIS_OWNER_EMAIL"):
         ensure_owner(scratch, settings())
     assert UserStore(scratch).list() == []
+
+
+def test_display_name_schema_upgrade_and_reinitialization(pool, uids):
+    users = UserStore(pool)
+    assert users.get(uids[0]).display_name is None
+    with pool.connection() as c:
+        c.execute('ALTER TABLE users DROP COLUMN display_name')
+    init_schema(pool)
+    assert users.get(uids[0]).display_name is None
+    with pool.connection() as c:
+        c.execute('UPDATE users SET display_name = %s WHERE id = %s', ('Élodie', uids[0]))
+    init_schema(pool)
+    init_schema(pool)
+    assert users.get(uids[0]).display_name == 'Élodie'
+    assert users.get(uids[1]).display_name is None

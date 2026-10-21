@@ -46,6 +46,100 @@ FilledButton _button(WidgetTester t, String label) => t.widget<FilledButton>(
 
 void main() {
   testWidgets(
+    'name is required before keys; failed save preserves text and retries',
+    (t) async {
+      final me = meBody(displayName: null, llm: false);
+      var attempts = 0;
+      final api = RecApi({
+        'PUT /me': (Map<String, dynamic>? body) {
+          if (++attempts == 1) return ApiError(503, null, '/me');
+          me['display_name'] = body!['display_name'];
+          return me;
+        },
+      });
+      await _pump(
+        t,
+        OnboardingScreen(
+          me: me,
+          api: api,
+          signIn: () async {},
+          onDone: () async {},
+        ),
+      );
+      expect(find.text('What should Jarvis call you?'), findsOneWidget);
+      await _tap(t, 'Continue');
+      expect(attempts, 0);
+      await t.enterText(
+        find.widgetWithText(TextField, 'Your name'),
+        '  Élodie  ',
+      );
+      await _tap(t, 'Continue');
+      expect(
+        find.textContaining('Your name could not be saved'),
+        findsOneWidget,
+      );
+      expect(
+        t
+            .widget<TextField>(find.widgetWithText(TextField, 'Your name'))
+            .controller!
+            .text,
+        '  Élodie  ',
+      );
+      expect(find.widgetWithText(TextField, 'API key'), findsNothing);
+      await _tap(t, 'Continue');
+      expect(api.calls.last.$3, {'display_name': 'Élodie'});
+      expect(find.widgetWithText(TextField, 'API key'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'existing unnamed account with complete keys saves and proceeds home',
+    (t) async {
+      final me = meBody(displayName: null);
+      var done = 0;
+      final api = RecApi({
+        'PUT /me': (Map<String, dynamic>? body) {
+          me['display_name'] = body!['display_name'];
+          return me;
+        },
+      });
+      await _pump(
+        t,
+        OnboardingScreen(
+          me: me,
+          api: api,
+          signIn: () async {},
+          onDone: () async {
+            done++;
+          },
+        ),
+      );
+      await t.enterText(find.widgetWithText(TextField, 'Your name'), '李');
+      await _tap(t, 'Continue');
+      expect(done, 1);
+    },
+  );
+
+  testWidgets(
+    'authenticated unnamed account routes to name even with complete keys',
+    (t) async {
+      await t.pumpWidget(
+        JarvisApp(
+          store: MemStore({'token': 'tok'}),
+          apiFor: (_) => RecApi({'GET /me': meBody(displayName: null)}),
+          links: const Stream.empty(),
+        ),
+      );
+      await t.pump();
+      await t.pump();
+      expect(find.text('What should Jarvis call you?'), findsOneWidget);
+      expect(find.byType(SessionScreen), findsNothing);
+      expect(AppHost.ready, isFalse);
+      await t.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
     'Google explains all required services; cancellation permits retry',
     (t) async {
       var started = 0;
@@ -305,9 +399,12 @@ void main() {
         expect(find.byType(SessionScreen), findsOneWidget);
       } else {
         expect(find.byType(SessionScreen), findsNothing);
-        final step = firstMissingStep(me['setup'] as Map);
+        final step = firstMissingStep(
+          me['setup'] as Map,
+          displayName: me['display_name'] as String?,
+        );
         expect(
-          find.textContaining('Step ${step.index + 1} of 5'),
+          find.textContaining('Step ${step.index + 1} of 6'),
           findsOneWidget,
         );
         expect(AppHost.controller, isNull);

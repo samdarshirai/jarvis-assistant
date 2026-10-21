@@ -4,12 +4,15 @@ import 'api.dart';
 import 'keys_screen.dart';
 import 'theme.dart';
 
-enum OnboardingStep { google, llm, deepgram, tavily, ready }
+enum OnboardingStep { google, name, llm, deepgram, tavily, ready }
 
 const rejectionHint = 'Not on the list? Ask the owner to add your email.';
 
-OnboardingStep firstMissingStep(Map setup) {
+OnboardingStep firstMissingStep(Map setup, {String? displayName}) {
   if (setup['google'] != true) return OnboardingStep.google;
+  if (displayName == null || displayName.trim().isEmpty) {
+    return OnboardingStep.name;
+  }
   if (setup['llm'] != true) return OnboardingStep.llm;
   if (setup['deepgram'] != true) return OnboardingStep.deepgram;
   if (setup['tavily'] != true) return OnboardingStep.tavily;
@@ -37,11 +40,65 @@ class OnboardingScreen extends StatefulWidget {
 
 class _OnboardingScreenState extends State<OnboardingScreen> {
   late Map<String, dynamic> _me = widget.me;
-  late OnboardingStep _step = firstMissingStep(_setup);
+  late OnboardingStep _step = firstMissingStep(
+    _setup,
+    displayName: _me['display_name'] as String?,
+  );
   Map get _setup => (_me['setup'] as Map?) ?? const {};
   Map get _keys => (_me['keys'] as Map?) ?? const {};
   bool _opened = false, _busy = false;
   String? _error;
+  final _name = TextEditingController();
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _saveName() async {
+    final name = _name.text.trim();
+    if (name.isEmpty ||
+        name.runes.length > 100 ||
+        RegExp(r'[\n\r\v\f\x1c-\x1e\x85\u2028\u2029\x00]')
+            .hasMatch(_name.text)) {
+      setState(
+        () => _error = 'Enter a name of 1–100 characters without line breaks.',
+      );
+      return;
+    }
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      final me = await widget.api!.put('/me', {'display_name': name});
+      if (me['display_name'] is! String ||
+          (me['display_name'] as String).trim().isEmpty ||
+          me['setup'] is! Map) {
+        throw const FormatException('Missing profile');
+      }
+      if (!mounted) return;
+      setState(() => _me = me);
+      final next = firstMissingStep(
+        _setup,
+        displayName: me['display_name'] as String,
+      );
+      if (next == OnboardingStep.ready) {
+        await widget.onDone();
+      } else {
+        setState(() => _step = next);
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => _error = 'Your name could not be saved. Check your connection and try Continue again.',
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
 
   Future<void> _signIn() async {
     setState(() {
@@ -86,7 +143,10 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     await _refresh();
     if (!mounted) return;
     if (_error == null) {
-      final next = firstMissingStep(_setup);
+      final next = firstMissingStep(
+        _setup,
+        displayName: _me['display_name'] as String?,
+      );
       if (finish && next == OnboardingStep.ready) {
         await widget.onDone();
       } else {
@@ -147,17 +207,26 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   static const _labels = [
     'Connect Google',
+    'Your name',
     'AI key',
     'Deepgram key',
     'Tavily key',
     'Ready',
   ];
 
+  List<bool> get _completed => [
+    _setup['google'] == true,
+    (_me['display_name'] as String?)?.trim().isNotEmpty == true,
+    _setup['llm'] == true,
+    _setup['deepgram'] == true,
+    _setup['tavily'] == true,
+  ];
+
   Widget _progress() => Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
       Text(
-        'Step ${_step.index + 1} of 5 • ${_labels[_step.index]}',
+        'Step ${_step.index + 1} of ${_labels.length} • ${_labels[_step.index]}',
         style: const TextStyle(
           color: cream,
           fontSize: 13,
@@ -188,8 +257,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         spacing: 14,
         runSpacing: 8,
         children: [
-          for (var i = 0; i < 4; i++)
-            if (_setup[['google', 'llm', 'deepgram', 'tavily'][i]] == true)
+          for (var i = 0; i < _completed.length; i++)
+            if (_completed[i])
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -334,6 +403,12 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'Your calendar, inbox and to-dos. One assistant to bring them together.',
         Icons.auto_awesome_rounded,
       ),
+      OnboardingStep.name => (
+        'A LITTLE INTRODUCTION',
+        'What should Jarvis call you?',
+        'Choose the name you’d like to see in Jarvis.',
+        Icons.person_outline_rounded,
+      ),
       OnboardingStep.llm => (
         'THE MIND',
         'Make it thoughtful.',
@@ -421,6 +496,8 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     children: [
                       if (_step == OnboardingStep.google)
                         _primary('Continue to Google', _signIn)
+                      else if (_step == OnboardingStep.name)
+                        _primary('Continue', _saveName)
                       else if (_step == OnboardingStep.ready)
                         _primary(
                           'Start using Jarvis',
@@ -493,7 +570,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               ),
                             ),
                           ),
-                        if (_error != null && widget.api != null)
+                        if (_error != null &&
+                            widget.api != null &&
+                            _step != OnboardingStep.name)
                           TextButton(
                             onPressed: _busy ? null : () => _continue(),
                             child: const Text('Retry setup check'),
@@ -580,6 +659,20 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                               style: TextStyle(color: mutedText, height: 1.5),
                             ),
                           const SizedBox(height: 16),
+                        ] else if (_step == OnboardingStep.name) ...[
+                          TextField(
+                            controller: _name,
+                            enabled: !_busy,
+                            decoration: const InputDecoration(
+                              labelText: 'Your name',
+                            ),
+                            textCapitalization: TextCapitalization.words,
+                            autofillHints: const [AutofillHints.name],
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) {
+                              if (!_busy) _saveName();
+                            },
+                          ),
                         ] else if (_step == OnboardingStep.ready) ...[
                           _readySummary(),
                           const SizedBox(height: 24),

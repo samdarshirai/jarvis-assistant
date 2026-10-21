@@ -69,7 +69,7 @@ class Keys:
         pool = self.tenants.pool
         user, sec = UserStore(pool).get(uid), self._store().all(uid)
         creds = creds_for(sec, self.tenants.s)
-        return {"email": user.email, "tz": user.tz,
+        return {"email": user.email, "tz": user.tz, "display_name": user.display_name,
                 "setup": {"google": PgTokenStore(pool, uid).get(PROVIDER) is not None, "llm": creds is not None,
                           "deepgram": bool(sec.get("deepgram_key")), "tavily": bool(sec.get("tavily_key"))},
                 "keys": {"llm_base_url": creds and creds.base_url, "llm_key_last4": last4(sec.get("llm_key")),
@@ -84,14 +84,34 @@ class Keys:
         await AppService._audit(rt, name, args, {"ok": True})  # names and the endpoint only, never a key value
         return await self.me(rt)
 
-    async def set_tz(self, rt, tz: str):
-        tz = tz.strip()
-        try:
-            ZoneInfo(tz)
-        except Exception:  # not found, or not a zone name at all ("", "../x", a directory)
-            return JSONResponse({"error": "bad_timezone"}, status_code=422)
-        await asyncio.to_thread(UserStore(self.tenants.pool).set_tz, rt.user.id, tz)
-        return await self._changed(rt, "set_timezone", {"tz": tz})
+    async def update_me(self, rt, fields: dict):
+        updates = {}
+        if "tz" in fields:
+            tz = fields["tz"]
+            try:
+                tz = tz.strip()
+                ZoneInfo(tz)
+            except Exception:
+                return JSONResponse({"error": "bad_timezone"}, status_code=422)
+            updates["tz"] = tz
+        if "display_name" in fields:
+            raw = fields["display_name"]
+            # Reject line breaks before trimming, including Unicode line separators.
+            if (not isinstance(raw, str) or any(c in raw for c in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029")
+                    or not 1 <= len(raw.strip()) <= 100 or "\x00" in raw):
+                return JSONResponse({"error": "bad_display_name"}, status_code=422)
+            updates["display_name"] = raw.strip()
+        if not updates:
+            return JSONResponse({"error": "bad_request"}, status_code=422)
+
+        def save():
+            with self.tenants.pool.connection() as c:
+                assignments = ", ".join(f"{column} = %s" for column in updates)
+                c.execute(f"UPDATE users SET {assignments} WHERE id = %s", (*updates.values(), rt.user.id))
+
+        await asyncio.to_thread(save)
+        return await self._changed(rt, "set_timezone" if set(updates) == {"tz"} else "update_profile",
+                                   {"tz": updates["tz"]} if set(updates) == {"tz"} else {"fields": list(updates)})
 
     async def set_llm(self, rt, base_url: str, api_key: str, model_fast: str | None = None,
                       model_strong: str | None = None):

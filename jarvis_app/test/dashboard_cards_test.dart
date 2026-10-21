@@ -22,6 +22,23 @@ Future<DashboardController> _loaded(WidgetTester t,
 }
 
 void main() {
+  testWidgets('saved names, Unicode initials and long names wrap', (t) async {
+    final c = await _loaded(t);
+    t.view.physicalSize = const Size(320, 900);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    for (final name in ['Élodie', 'e\u0301milie', '👩🏽‍💻 Developer', 'Alexandria' * 10]) {
+      await t.pumpWidget(MaterialApp(theme: jarvisTheme(), home: Scaffold(
+        body: SingleChildScrollView(child: DashboardSections(
+          controller: c, displayName: name, onPlayBrief: (_) {}, now: () => _now)),
+      )));
+      await t.pump();
+      expect(find.text(name), findsOneWidget);
+      expect(find.text(name.characters.first.toUpperCase()), findsOneWidget);
+      expect(t.takeException(), isNull);
+    }
+  });
+
   test('helpers', () {
     expect(greeting(DateTime(2026, 1, 1, 8)), 'Good morning');
     expect(greeting(DateTime(2026, 1, 1, 13)), 'Good afternoon');
@@ -35,7 +52,8 @@ void main() {
 
   testWidgets('shows every section with its data', (t) async {
     await _loaded(t, alarm: DateTime(2026, 10, 6, 6, 30));
-    expect(find.text('Good morning,'), findsOneWidget);
+    expect(find.text('Good morning'), findsOneWidget);
+    expect(find.byIcon(Icons.person_outline_rounded), findsOneWidget);
     expect(find.text('Monday, 5 October'), findsOneWidget);
     expect(find.text('Morning brief'), findsOneWidget);
     expect(find.textContaining('09:00 Standup'), findsOneWidget);

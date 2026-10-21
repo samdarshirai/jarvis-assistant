@@ -141,7 +141,15 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
 
   /// Decides wizard or home for [c]: no token is sign-in, a token with missing credentials resumes setup.
   Future<void> _route(Config c) async {
+    if (!mounted) return;
     final generation = ++_routeGeneration;
+    if (_config?.token != c.token) {
+      setState(() {
+        _me = const {};
+        _setupError = null;
+        if (_config != null) _bind(c, false, false);
+      });
+    }
     var ready = false, voiceReady = false;
     String? setupError;
     if (c.token != null) {
@@ -151,13 +159,14 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
         if (setup == null) throw const FormatException('Missing setup');
         if (generation != _routeGeneration) return;
         _me = me;
-        ready = firstMissingStep(setup) == OnboardingStep.ready;
+        ready = firstMissingStep(setup, displayName: me['display_name'] as String?) == OnboardingStep.ready;
         voiceReady = ready;
       } on ApiError catch (e) {
         if (e.status != 401) {
           setupError = 'Could not check your setup. Check your connection and try again.';
         } else {
           if (generation != _routeGeneration) return;
+          _me = const {};
           c = Config(c.url, null); // revoked: sign in again
           await _store.saveToken(null).catchError((Object _) {});
         }
@@ -198,6 +207,12 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
       if (token == null) return; // not a sign-in this install started: ignore silently
       _routeGeneration++; // a late /me for the previous token must not replace this sign-in
       final c = Config(_store.url, token);
+      if (!mounted) return;
+      setState(() {
+        _me = const {};
+        _setupError = null;
+        _bind(c, false, false);
+      });
       try {
         final tz = await widget.tz();
         if (tz != null) await widget.apiFor(c).put('/me', {'tz': tz});
@@ -273,6 +288,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
           onDone: () => _route(c));
     }
     return SessionScreen(
+        displayName: _me['display_name'] as String?,
         controller: _controller!,
         dashboard: _dashboard,
         api: widget.apiFor(c),
