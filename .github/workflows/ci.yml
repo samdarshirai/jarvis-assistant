@@ -25,6 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # gh release create
+    env:
+      PLAY_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}  # only to gate the Play step; secrets aren't readable in `if`
     defaults:
       run:
         working-directory: jarvis_app
@@ -64,6 +66,19 @@ jobs:
             || { echo "::error::keystore unreadable: re-check ANDROID_KEYSTORE_B64, _PASSWORD and _KEY_ALIAS"; exit 1; }
 
       - run: flutter build apk --release --dart-define-from-file=jarvis.env.json --build-number=${{ github.run_number }}
+      # Play wants a bundle, not an APK. Same signing, same build number.
+      - run: flutter build appbundle --release --dart-define-from-file=jarvis.env.json --build-number=${{ github.run_number }}
+
+      - name: Upload to Play (internal track)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.PLAY_JSON != ''
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.samdarshi.jarvis
+          releaseFiles: jarvis_app/build/app/outputs/bundle/release/app-release.aab
+          track: internal
+          status: completed
+
       - uses: actions/upload-artifact@v4
         with:
           name: jarvis-apk
