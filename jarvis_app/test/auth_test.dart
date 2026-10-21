@@ -43,7 +43,7 @@ class RecApi extends ApiClient {
   Future<Map<String, dynamic>> delete(String path) => _do('DELETE', path);
 }
 
-Map<String, dynamic> meBody({bool llm = true, String? deepgram = 'wxyz', String? tavily}) => {
+Map<String, dynamic> meBody({bool llm = true, String? deepgram = 'wxyz', String? tavily = 'tavy'}) => {
       'email': 'a@b.test',
       'tz': 'Asia/Kolkata',
       'setup': {'google': true, 'llm': llm, 'deepgram': deepgram != null, 'tavily': tavily != null},

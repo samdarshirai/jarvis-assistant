@@ -90,7 +90,8 @@ class JarvisApp extends StatefulWidget {
 class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   ConfigStore get _store => widget.store;
   Config? _config; // null while loading; a null token shows the wizard
-  bool _ready = false; // signed in and /me says the LLM key is set: chat and voice unlock
+  bool _ready = false; // signed in and /me confirms every required key
+  Map<String, dynamic> _me = const {};
   bool _voiceReady = false;
   String? _setupError;
   int _routeGeneration = 0;
@@ -138,17 +139,20 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) _dashboard?.refresh();
   }
 
-  /// Decides wizard or home for [c]: no token is sign-in, a token without an LLM key is the key step.
+  /// Decides wizard or home for [c]: no token is sign-in, a token with missing credentials resumes setup.
   Future<void> _route(Config c) async {
     final generation = ++_routeGeneration;
     var ready = false, voiceReady = false;
     String? setupError;
     if (c.token != null) {
       try {
-        final setup = (await widget.apiFor(c).get('/me'))['setup'] as Map?;
+        final me = await widget.apiFor(c).get('/me');
+        final setup = me['setup'] as Map?;
         if (setup == null) throw const FormatException('Missing setup');
-        ready = setup['llm'] == true;
-        voiceReady = ready && setup['deepgram'] == true;
+        if (generation != _routeGeneration) return;
+        _me = me;
+        ready = firstMissingStep(setup) == OnboardingStep.ready;
+        voiceReady = ready;
       } on ApiError catch (e) {
         if (e.status != 401) {
           setupError = 'Could not check your setup. Check your connection and try again.';
@@ -252,7 +256,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
           key: const ValueKey('signin'),
           signIn: () async => widget.open(await _startSignIn()),
           error: _signInError,
-          onDone: () {});
+          onDone: () async {});
     }
     if (_setupError != null) {
       return Scaffold(body: CocoaBackground(child: Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -262,9 +266,9 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
     }
     if (!_ready) {
       return OnboardingScreen(
-          key: const ValueKey('setup'),
-          step: OnboardingStep.llm,
-          signIn: () async {},
+          key: ValueKey('setup-$_routeGeneration'),
+          me: _me,
+          signIn: () async => widget.open(await _startSignIn()),
           api: widget.apiFor(c),
           onDone: () => _route(c));
     }
@@ -274,10 +278,13 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
         api: widget.apiFor(c),
         startSignIn: _startSignIn,
         voiceReady: _voiceReady,
-        onSettingsReturn: () => _route(c),
+        onSettingsReturn: () async {
+          await _route(c);
+          if (mounted && !_ready) _navigator.currentState?.popUntil((r) => r.isFirst);
+        },
         onNeedsSetup: () { // /me without an LLM key swaps home for the key step
           _navigator.currentState?.popUntil((r) => r.isFirst);
-          _messenger.currentState?.showSnackBar(const SnackBar(content: Text('Add your AI key to keep using Jarvis.')));
+          _messenger.currentState?.showSnackBar(const SnackBar(content: Text('Complete your API key setup to keep using Jarvis.')));
           _route(c);
         },
         open: widget.open,

@@ -16,7 +16,7 @@ Future<void> _pump(WidgetTester t, RecApi api) async {
 
 void main() {
   testWidgets('shows_last4_never_full_key', (t) async {
-    await _pump(t, RecApi({'GET /me': meBody()}));
+    await _pump(t, RecApi({'GET /me': meBody(tavily: null)}));
     expect(find.text('Set, ends in abcd'), findsOneWidget); // LLM
     expect(find.text('Set, ends in wxyz'), findsOneWidget); // Deepgram
     expect(find.text('Not set'), findsOneWidget); // Tavily
@@ -26,10 +26,10 @@ void main() {
     }
   });
 
-  testWidgets('delete_optional_key', (t) async {
+  testWidgets('delete_required_key', (t) async {
     var deleted = false;
     final api = RecApi({
-      'GET /me': (Map<String, dynamic>? _) => meBody(deepgram: deleted ? null : 'wxyz'),
+      'GET /me': (Map<String, dynamic>? _) => meBody(deepgram: deleted ? null : 'wxyz', tavily: null),
       'DELETE /settings/deepgram': (Map<String, dynamic>? _) {
         deleted = true;
         return <String, dynamic>{'ok': true};

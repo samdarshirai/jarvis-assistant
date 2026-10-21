@@ -68,8 +68,13 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             title: const Text('API keys', style: TextStyle(color: cream)),
             subtitle: const Text('AI provider, voice and web search', style: TextStyle(color: mutedText)),
             onTap: () async {
-              await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => KeysScreen(api: widget.api!)));
-              widget.onReturn?.call();
+              var removed = false;
+              await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => KeysScreen(
+                api: widget.api!, onRequiredKeyRemoved: () {
+                  removed = true;
+                  widget.onReturn?.call();
+                })));
+              if (!removed) widget.onReturn?.call();
             },
           ),
           const Text('Google', style: TextStyle(color: mutedText, fontSize: 12)),

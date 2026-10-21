@@ -63,15 +63,15 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
   });
 
-  testWidgets('no Deepgram key keeps chat available and voice entry points off', (t) async {
+  testWidgets('no Deepgram key returns to required setup', (t) async {
     await t.pumpWidget(app(MemStore({'token': 'tok'}), RecApi({'GET /me': meBody(deepgram: null)})));
     await t.pump();
     await t.pump();
-    expect(find.byType(SessionScreen), findsOneWidget);
-    expect(find.byTooltip('Chat'), findsOneWidget);
+    expect(find.byType(SessionScreen), findsNothing);
+    expect(find.widgetWithText(TextField, 'Deepgram key'), findsOneWidget);
     expect(AppHost.controller, isNull);
     expect(wake, 0);
-    expect(find.textContaining('Add a Deepgram key'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Deepgram key'), findsOneWidget);
     await t.pumpWidget(const SizedBox());
   });
 
@@ -129,13 +129,10 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.byTooltip('Remove Deepgram key'));
     await t.pumpAndSettle();
-    await t.pageBack();
-    await t.pumpAndSettle();
     expect(AppHost.controller, isNull);
     expect(stopped, 1);
-    await t.pageBack();
-    await t.pump(const Duration(seconds: 1));
-    expect(find.textContaining('Add a Deepgram key'), findsOneWidget);
+    expect(find.byType(OnboardingScreen), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'Deepgram key'), findsOneWidget);
     await t.pumpWidget(const SizedBox());
   });
 
@@ -144,7 +141,7 @@ void main() {
     await t.pumpWidget(app(store, RecApi({'GET /me': ApiError(401, null, '/me')})));
     await t.pump();
     await t.pump();
-    expect(find.text('Sign in with Google'), findsWidgets);
+    expect(find.text('Continue to Google'), findsOneWidget);
     expect(await store.read('token'), isNull);
   });
 
@@ -266,7 +263,7 @@ void main() {
   }
 
   testWidgets('a failed push registration is silent', (t) async {
-    final api = RecApi({'GET /me': meBody(deepgram: null), 'PUT /device/fcm': ApiError(503, null, '/device/fcm')});
+    final api = RecApi({'GET /me': meBody(), 'PUT /device/fcm': ApiError(503, null, '/device/fcm')});
     await t.pumpWidget(JarvisApp(
         store: MemStore({'token': 'tok'}),
         apiFor: (_) => api,
