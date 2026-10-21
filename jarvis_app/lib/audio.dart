@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
 
 import 'session.dart';
@@ -21,9 +22,14 @@ class RecordMic implements Mic {
 
   @override
   Future<Stream<Uint8List>> start() async {
+    // Asked again on every Talk: startup may have been dismissed. Permanently denied: Android shows no dialog, so open Settings.
+    if (!await Permission.microphone.request().isGranted) {
+      await openAppSettings();
+      throw 'Microphone permission is off - allow it in Settings, then tap Talk again';
+    }
     // Call-app routing: with a headset, mic and replies both go through it (the ack already plays there).
     final headset = await _headset();
-    final stream = await _rec.startStream(RecordConfig(
+    final config = RecordConfig(
       encoder: AudioEncoder.pcm16bits,
       sampleRate: 16000,
       numChannels: 1,
@@ -35,7 +41,19 @@ class RecordMic implements Mic {
         audioManagerMode: AudioManagerMode.modeInCommunication,
         speakerphone: !headset, // communication mode otherwise plays through the earpiece
       ),
-    ));
+    );
+    // The wake-word service releases the mic asynchronously after onStarted; "PCM reader failed to initialize" means it still held it.
+    // ponytail: fixed 3 tries x 300 ms, not an ack from the service.
+    Stream<Uint8List> stream;
+    for (var i = 0;; i++) {
+      try {
+        stream = await _rec.startStream(config);
+        break;
+      } on PlatformException {
+        if (i == 2) rethrow;
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+      }
+    }
     return headset ? _undouble(stream) : stream;
   }
 
