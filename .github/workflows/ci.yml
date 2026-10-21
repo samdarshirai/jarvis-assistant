@@ -61,6 +61,7 @@ jobs:
           printf '{"JARVIS_URL": "%s"}\n' "$JARVIS_URL" > jarvis.env.json
           [ -z "$GOOGLE_SERVICES_B64" ] || echo "$GOOGLE_SERVICES_B64" | base64 -d > android/app/google-services.json
           # Fail fast (seconds, not after the Gradle build) when a signing secret is missing or mangled.
+          [ -n "$JARVIS_URL" ] || { echo "::error::JARVIS_URL secret is empty: the app would have no backend"; exit 1; }
           [ -n "$KEY_ALIAS" ] || { echo "::error::ANDROID_KEY_ALIAS secret is empty"; exit 1; }
           keytool -list -keystore "$RUNNER_TEMP/upload.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null \
             || { echo "::error::keystore unreadable: re-check ANDROID_KEYSTORE_B64, _PASSWORD and _KEY_ALIAS"; exit 1; }
