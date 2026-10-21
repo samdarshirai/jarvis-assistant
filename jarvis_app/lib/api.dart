@@ -13,7 +13,7 @@ class ApiError extends HttpException {
 /// Thin device-token JSON client for the Jarvis REST endpoints (/calendar, /tasks, /mail, /notes, /chat, /me, /settings).
 /// Tests inject a fake by implementing this class.
 class ApiClient {
-  const ApiClient(this.config, {this.timeout = const Duration(seconds: 20)});
+  const ApiClient(this.config, {this.timeout = const Duration(seconds: 90)});
   final Config config;
   final Duration timeout;
 
