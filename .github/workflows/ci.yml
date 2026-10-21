@@ -23,6 +23,8 @@ jobs:
 
   app:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # gh release create
     defaults:
       run:
         working-directory: jarvis_app
@@ -61,8 +63,18 @@ jobs:
           keytool -list -keystore "$RUNNER_TEMP/upload.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null \
             || { echo "::error::keystore unreadable: re-check ANDROID_KEYSTORE_B64, _PASSWORD and _KEY_ALIAS"; exit 1; }
 
-      - run: flutter build apk --release --dart-define-from-file=jarvis.env.json
+      - run: flutter build apk --release --dart-define-from-file=jarvis.env.json --build-number=${{ github.run_number }}
       - uses: actions/upload-artifact@v4
         with:
           name: jarvis-apk
           path: jarvis_app/build/app/outputs/flutter-apk/app-release.apk
+
+      # Every green main build becomes a release; the run number is the Android versionCode, so each installs as an update.
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk jarvis-${{ github.run_number }}.apk
+          gh release create "build-${{ github.run_number }}" "jarvis-${{ github.run_number }}.apk" \
+            --title "Build ${{ github.run_number }}" --notes "${{ github.sha }}" --target "${{ github.sha }}"
