@@ -24,5 +24,13 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   WakeService.init();
   runApp(JarvisApp(onSessionEnded: WakeService.resume, onSessionStarted: WakeService.pause,
-      fcmToken: PushBridge.token, pushInit: PushBridge.init, fcmRefresh: PushBridge.refreshes, onReady: _ready, stopWake: WakeService.stop));
+      fcmToken: PushBridge.token, pushInit: PushBridge.init, fcmRefresh: PushBridge.refreshes, onReady: _ready, stopWake: WakeService.stop,
+      onWakeChanged: (on) async {
+        if (on) {
+          await WakeService.ensureRunning();
+        } else {
+          await WakeService.stop();
+        }
+        WakeService.refreshGate();
+      }));
 }

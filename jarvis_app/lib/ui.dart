@@ -10,6 +10,7 @@ import 'mail_screen.dart';
 import 'notes_screen.dart';
 import 'orb.dart';
 import 'phone.dart';
+import 'prefs.dart';
 import 'memory_screen.dart';
 import 'settings_screen.dart';
 import 'shopping_screen.dart';
@@ -22,7 +23,10 @@ import 'theme.dart';
 
 class SessionScreen extends StatelessWidget {
   const SessionScreen({super.key, required this.controller, this.dashboard, this.displayName, this.api, this.alarm, this.runPhoneActions,
-    this.startSignIn, this.voiceReady = true, this.onSettingsReturn, this.onNeedsSetup, this.open = openInBrowser});
+    this.startSignIn, this.voiceReady = true, this.onSettingsReturn, this.onNeedsSetup, this.open = openInBrowser,
+    this.prefs, this.onWakeChanged});
+  final Prefs? prefs;
+  final Future<void> Function()? onWakeChanged;
   final SessionController controller;
   final DashboardController? dashboard;
   final String? displayName;
@@ -92,6 +96,8 @@ class SessionScreen extends StatelessWidget {
         context,
         SettingsScreen(
             api: a,
+            prefs: prefs,
+            onWakeChanged: onWakeChanged,
             startAuth: () async {
               if (startSignIn == null) throw StateError('Sign-in unavailable');
               return (await startSignIn!()).toString();

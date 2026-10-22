@@ -6,7 +6,9 @@ import 'package:jarvis_app/api.dart';
 import 'package:jarvis_app/app.dart';
 import 'package:jarvis_app/config.dart';
 import 'package:jarvis_app/onboarding_screen.dart';
+import 'package:jarvis_app/prefs.dart';
 import 'package:jarvis_app/ui.dart';
+import 'package:jarvis_app/wake_choice_screen.dart';
 
 import 'auth_test.dart' show MemStore, RecApi, meBody;
 import 'dash_fixture.dart';
@@ -82,6 +84,29 @@ void main() {
     expect(find.byType(SessionScreen), findsOneWidget);
     expect(find.text('Standup'), findsOneWidget);
     expect(wake, 1);
+    await t.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('first run shows the wake choice, then home', (t) async {
+    bool? changed;
+    await t.pumpWidget(JarvisApp(
+        store: MemStore({'token': 'tok'}),
+        apiFor: (_) => RecApi({'GET /me': meBody()}),
+        links: const Stream.empty(),
+        prefs: Prefs(store: MemStore()),
+        onWakeChanged: (on) async => changed = on,
+        tz: () async => 'Asia/Kolkata',
+        dashboardFetch: (_) async => sampleDashboard(),
+        alarm: () async => null));
+    await t.pump();
+    await t.pump();
+    expect(find.byType(WakeChoiceScreen), findsOneWidget);
+    expect(find.byType(SessionScreen), findsNothing);
+    await t.tap(find.text('Continue'));
+    await t.pump();
+    await t.pump();
+    expect(find.byType(SessionScreen), findsOneWidget);
+    expect(changed, true);
     await t.pumpWidget(const SizedBox());
   });
 

@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:jarvis_app/prefs.dart';
 import 'package:jarvis_app/settings_screen.dart';
 import 'package:jarvis_app/theme.dart';
 import 'package:jarvis_app/keys_screen.dart';
 
-import 'auth_test.dart' show RecApi, meBody;
+import 'auth_test.dart' show MemStore, RecApi, meBody;
 
 Future<void> _pump(WidgetTester t, SettingsScreen s) async {
   t.view.physicalSize = const Size(320, 800);
@@ -28,6 +29,24 @@ void main() {
     await t.tap(find.text('Reconnect Google'));
     await t.pumpAndSettle();
     expect(opened, Uri.parse('https://accounts.google.com/x?y=1'));
+  });
+
+  testWidgets('wake switch, night rows and hints show; toggling calls onWakeChanged once', (t) async {
+    final prefs = Prefs(store: MemStore());
+    await prefs.load();
+    var changed = 0;
+    await _pump(t, SettingsScreen(prefs: prefs, onWakeChanged: () async => changed++,
+        startAuth: () async => '', open: (_) async {}));
+    expect(find.text('Hey Jarvis wake word'), findsOneWidget);
+    expect(find.text('11:00 PM'), findsOneWidget);
+    expect(find.text('7:00 AM'), findsOneWidget);
+    expect(find.text('Night hours: Jarvis shows replies as text and makes no sound.'), findsOneWidget);
+    expect(find.text('Double-tap on Pixel'), findsOneWidget);
+    expect(find.text('Settings > System > Gestures > Quick Tap, then choose Jarvis.'), findsOneWidget);
+    await t.tap(find.byType(Switch));
+    await t.pumpAndSettle();
+    expect(prefs.wakeEnabled, false);
+    expect(changed, 1);
   });
 
   testWidgets('backend failure shows an error and nothing opens', (t) async {

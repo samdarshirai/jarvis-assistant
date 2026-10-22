@@ -3,12 +3,15 @@ import 'package:flutter/material.dart';
 import 'calendar_screen.dart' show ScreenShell;
 import 'api.dart';
 import 'keys_screen.dart';
+import 'prefs.dart';
 import 'theme.dart';
 
 /// Settings: re-authorise Google on the backend. [startAuth] asks the backend for the consent URL,
 /// [open] hands it to the phone's browser (Google blocks OAuth inside embedded WebViews).
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key, required this.startAuth, required this.open, this.onReturn, this.api});
+  const SettingsScreen({super.key, required this.startAuth, required this.open, this.onReturn, this.api, this.prefs, this.onWakeChanged});
+  final Prefs? prefs; // null: no wake or night settings (tests)
+  final Future<void> Function()? onWakeChanged; // the wake switch moved: start or stop the service
   final ApiClient? api;
   final Future<String> Function() startAuth;
   final Future<void> Function(Uri url) open;
@@ -59,6 +62,45 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     }
   }
 
+  Future<void> _pickNight(bool start) async {
+    final p = widget.prefs!;
+    final m = start ? p.nightStart : p.nightEnd;
+    final t = await showTimePicker(context: context, initialTime: TimeOfDay(hour: m ~/ 60, minute: m % 60));
+    if (t == null) return;
+    final v = t.hour * 60 + t.minute;
+    await (start ? p.setNight(v, p.nightEnd) : p.setNight(p.nightStart, v));
+  }
+
+  List<Widget> _wakeSection(BuildContext context, Prefs p) {
+    String fmt(int m) => TimeOfDay(hour: m ~/ 60, minute: m % 60).format(context);
+    return [
+      SwitchListTile(
+          contentPadding: EdgeInsets.zero,
+          activeThumbColor: amber,
+          title: const Text('Hey Jarvis wake word', style: TextStyle(color: cream)),
+          value: p.wakeEnabled,
+          onChanged: (v) async {
+            await p.setWakeEnabled(v);
+            await widget.onWakeChanged?.call();
+          }),
+      ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Night starts', style: TextStyle(color: cream)),
+          trailing: Text(fmt(p.nightStart), style: const TextStyle(color: amber)),
+          onTap: () => _pickNight(true)),
+      ListTile(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Night ends', style: TextStyle(color: cream)),
+          trailing: Text(fmt(p.nightEnd), style: const TextStyle(color: amber)),
+          onTap: () => _pickNight(false)),
+      const Text('Night hours: Jarvis shows replies as text and makes no sound.', style: TextStyle(color: mutedText, fontSize: 12)),
+      const SizedBox(height: 16),
+      const Text('Double-tap on Pixel', style: TextStyle(color: cream)),
+      const Text('Settings > System > Gestures > Quick Tap, then choose Jarvis.', style: TextStyle(color: mutedText, fontSize: 12)),
+      const SizedBox(height: 24),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) => ScreenShell(
         title: 'Settings',
@@ -77,6 +119,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
               if (!removed) widget.onReturn?.call();
             },
           ),
+          if (widget.prefs != null) ..._wakeSection(context, widget.prefs!),
           const Text('Google', style: TextStyle(color: mutedText, fontSize: 12)),
           const SizedBox(height: 8),
           const Text('Calendar, tasks and email access can expire. Reconnect to sign in to Google again.',

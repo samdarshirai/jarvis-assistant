@@ -17,6 +17,7 @@ import 'session.dart';
 import 'store.dart';
 import 'theme.dart';
 import 'ui.dart';
+import 'wake_choice_screen.dart';
 import 'ws_socket.dart';
 
 /// Lets the wake-word, assistant and push entry points start a session on the one controller.
@@ -69,7 +70,8 @@ class JarvisApp extends StatefulWidget {
       this.tz = deviceTimezone,
       this.dashboardFetch,
       this.alarm,
-      this.prefs});
+      this.prefs,
+      this.onWakeChanged});
   final VoidCallback? onSessionEnded;
   final VoidCallback? onSessionStarted;
   final Future<String?> Function()? fcmToken;
@@ -86,6 +88,7 @@ class JarvisApp extends StatefulWidget {
   final Future<DashboardData> Function(Config)? dashboardFetch;
   final Future<DateTime?> Function()? alarm;
   final Prefs? prefs; // null: the app owns one
+  final Future<void> Function(bool enabled)? onWakeChanged; // wake choice or switch changed: start/stop the service
   @override
   State<JarvisApp> createState() => _JarvisAppState();
 }
@@ -112,6 +115,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _prefs.addListener(_onPrefs);
     unawaited(_prefs.load().catchError((Object _) {})); // unreadable prefs leave isNight true (silent)
     _initialized = _store.load().catchError((Object _) => Config(_store.url, null)).then(_route);
     _links = (widget.links ?? AppLinks().uriLinkStream).listen((link) async {
@@ -127,8 +131,21 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
     });
   }
 
+  void _onPrefs() {
+    if (mounted) setState(() {}); // wakeChosen flips the home screen
+  }
+
+  Future<void> _wakeChanged() async {
+    try {
+      await widget.onWakeChanged?.call(_prefs.wakeEnabled);
+    } catch (e) {
+      debugPrint('wake word unavailable: $e');
+    }
+  }
+
   @override
   void dispose() {
+    _prefs.removeListener(_onPrefs);
     WidgetsBinding.instance.removeObserver(this);
     _links?.cancel();
     _fcmRefresh?.cancel();
@@ -292,7 +309,12 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
           api: widget.apiFor(c),
           onDone: () => _route(c));
     }
+    if (_prefs.loaded && !_prefs.wakeChosen) {
+      return WakeChoiceScreen(key: const ValueKey('wake-choice'), prefs: _prefs, onDone: _wakeChanged);
+    }
     return SessionScreen(
+        prefs: _prefs,
+        onWakeChanged: _wakeChanged,
         displayName: _me['display_name'] as String?,
         controller: _controller!,
         dashboard: _dashboard,
