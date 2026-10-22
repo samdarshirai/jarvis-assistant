@@ -57,6 +57,36 @@ void main() {
     expect(p.flushes, 2);
   });
 
+  test('night beginning mid-reply cuts buffered audio without another chunk', () {
+    fakeAsync((fa) {
+      final p = FakePlayer();
+      var night = false;
+      final q = QuietPlayer(p, () => night);
+      q.play(Uint8List(32000 * 5)); // 5 s of 16 kHz mono pcm16, already handed to the native player
+      fa.elapse(const Duration(milliseconds: 1500));
+      expect(p.flushes, 0);
+      night = true;
+      fa.elapse(const Duration(milliseconds: 1500));
+      expect(p.flushes, 1);
+      fa.elapse(const Duration(seconds: 10));
+      expect(p.flushes, 1);
+      expect(fa.pendingTimers, isEmpty);
+    });
+  });
+
+  test('the watch stops once forwarded audio has played out', () {
+    fakeAsync((fa) {
+      final p = FakePlayer();
+      var night = false;
+      QuietPlayer(p, () => night).play(Uint8List(32000 * 2));
+      fa.elapse(const Duration(seconds: 4));
+      expect(fa.pendingTimers, isEmpty);
+      night = true;
+      fa.elapse(const Duration(seconds: 2));
+      expect(p.flushes, 0); // nothing left playing, nothing to cut
+    });
+  });
+
   test('flush always forwards', () async {
     final p = FakePlayer();
     await QuietPlayer(p, () => true).flush();

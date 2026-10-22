@@ -48,7 +48,7 @@ Jarvis speaks aloud during night hours, even by mistake. This outranks every oth
 ## Author's calls (settled without the user; easy to change)
 
 - **Fail closed.** The night check runs at the moment audio would play (each reply, and each streamed chunk). If settings or the clock cannot be read, treat it as night: silent.
-- **Cut off at night start.** A reply still speaking when night begins is stopped; the rest shows as text.
+- **Cut off at night start.** Streamed reply audio still playing when night begins is stopped within about a second (even if no further chunk arrives); the rest shows as text. A short Jarvis TTS acknowledgement (or the offline message) already speaking is not interrupted.
 - **Clock changes.** Use the phone's current local time on every check, so timezone and daylight-saving changes take effect immediately.
 - **Equal start and end time** means no night hours (voice allowed all day).
 - **Wake-word state flips mid-session** (unplug, car disconnects): the running session finishes; `resume` then does nothing while the gate is closed.

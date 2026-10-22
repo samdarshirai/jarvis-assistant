@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
@@ -136,27 +137,52 @@ class TtsSpeaker implements Speaker {
 }
 
 /// Drops all Jarvis sound at night. isNight is checked per call and fails closed (see Prefs).
+/// Chunks arrive faster than real time, so the native player may hold a whole reply: while forwarded audio may still be
+/// playing, a 1 s watch flushes it as soon as night begins, even if no further chunk comes.
 class QuietPlayer implements Player {
-  QuietPlayer(this._inner, this._isNight);
+  QuietPlayer(this._inner, this._isNight, {this.tick = const Duration(seconds: 1)});
   final Player _inner;
   final bool Function() _isNight;
+  final Duration tick;
   bool _cut = false;
+  int _leftMs = 0; // forwarded audio not yet played out, estimated from bytes (16 kHz mono pcm16 = 32 bytes/ms)
+  Timer? _watch;
 
-  @override
-  void play(Uint8List pcm) {
-    if (_isNight()) {
-      if (!_cut) {
-        _cut = true;
-        _inner.flush(); // night began mid-reply: drop what is already buffered
-      }
-      return;
+  void _cutNow() {
+    _watch?.cancel();
+    _watch = null;
+    _leftMs = 0;
+    if (!_cut) {
+      _cut = true;
+      _inner.flush(); // night began mid-reply: drop what is already buffered
     }
-    _cut = false;
-    _inner.play(pcm);
   }
 
   @override
-  Future<void> flush() => _inner.flush();
+  void play(Uint8List pcm) {
+    if (_isNight()) return _cutNow();
+    _cut = false;
+    _inner.play(pcm);
+    _leftMs += pcm.length ~/ 32;
+    _watch ??= Timer.periodic(tick, (_) {
+      if (_isNight()) return _cutNow();
+      _leftMs -= tick.inMilliseconds;
+      // One tick of slack past the estimate covers the native player's own latency.
+      if (_leftMs <= -tick.inMilliseconds) {
+        _watch?.cancel();
+        _watch = null;
+        _leftMs = 0;
+      }
+    });
+  }
+
+  @override
+  Future<void> flush() {
+    _watch?.cancel();
+    _watch = null;
+    _leftMs = 0;
+    return _inner.flush();
+  }
 }
 
 class QuietSpeaker implements Speaker {
@@ -164,6 +190,8 @@ class QuietSpeaker implements Speaker {
   final Speaker _inner;
   final bool Function() _isNight;
 
+  // ponytail: checked once per utterance; a short ack or the offline message already speaking when night begins
+  // finishes (a few seconds at most). Interrupt it via a stop() on Speaker if that ever matters.
   @override
   Future<void> say(String text) async {
     if (!_isNight()) await _inner.say(text);
