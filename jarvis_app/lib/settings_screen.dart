@@ -119,7 +119,11 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
               if (!removed) widget.onReturn?.call();
             },
           ),
-          if (widget.prefs != null) ..._wakeSection(context, widget.prefs!),
+          if (widget.prefs != null)
+            ListenableBuilder(
+                listenable: widget.prefs!,
+                builder: (context, _) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.start, children: _wakeSection(context, widget.prefs!))),
           const Text('Google', style: TextStyle(color: mutedText, fontSize: 12)),
           const SizedBox(height: 8),
           const Text('Calendar, tasks and email access can expire. Reconnect to sign in to Google again.',

@@ -19,9 +19,13 @@ class _WakeChoiceScreenState extends State<WakeChoiceScreen> {
 
   Future<void> _continue() async {
     setState(() => _busy = true);
-    await widget.prefs.setWakeEnabled(_on);
-    await widget.prefs.markWakeChosen();
-    widget.onDone();
+    try {
+      await widget.prefs.setWakeEnabled(_on);
+      await widget.prefs.markWakeChosen();
+      widget.onDone();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override

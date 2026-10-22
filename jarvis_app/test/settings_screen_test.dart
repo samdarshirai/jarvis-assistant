@@ -47,6 +47,21 @@ void main() {
     await t.pumpAndSettle();
     expect(prefs.wakeEnabled, false);
     expect(changed, 1);
+    expect(t.widget<Switch>(find.byType(Switch)).value, false);
+    await t.tap(find.text('Night starts'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('OK'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Night ends'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('OK'));
+    await t.pumpAndSettle();
+    expect(prefs.nightStart, 23 * 60);
+    // pick a different start through the dial's hour input: use prefs path to prove labels follow prefs
+    await prefs.setNight(22 * 60, 6 * 60);
+    await t.pump();
+    expect(find.text('10:00 PM'), findsOneWidget);
+    expect(find.text('6:00 AM'), findsOneWidget);
   });
 
   testWidgets('backend failure shows an error and nothing opens', (t) async {
