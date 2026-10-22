@@ -5,17 +5,24 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:jarvis_gate/jarvis_gate.dart';
 import 'package:record/record.dart';
 
 import 'app.dart';
 import 'oww.dart';
+import 'prefs.dart';
 import 'store.dart';
+import 'wake_gate.dart';
 
 /// No sign-in token: the wake word does nothing. The app stops the service when /me says voice is not set up,
 /// and a backend `needs_deepgram` close covers a key removed elsewhere (no /me round trip on every wake).
 Future<bool> voiceConfigured() async => (await const ConfigStore().load()).token != null;
 
 const _wakeKey = 'wake';
+const _listeningText = 'Listening for "Hey Jarvis"';
+
+/// The detector runs only while the gate is open and no session holds the mic.
+bool shouldListen({required bool gateOpen, required bool held}) => gateOpen && !held;
 
 bool wakeIsFresh(int? savedMillis, DateTime now) {
   if (savedMillis == null) return false;
@@ -35,9 +42,26 @@ class WakeTaskHandler extends TaskHandler {
   bool _listening = false;
   int _chunks = 0;
   double _peak = 0;
+  bool _held = false; // a session (wake, Talk, assistant, push) holds the mic
+  bool _gateOpen = false;
+  GateState _gate = const GateState(charging: false, androidAuto: false); // unknown = closed: mic stays off
+  StreamSubscription<GateState>? _gateSub;
+  Future<void> _queue = Future.value();
+
+  /// Serialises gate/pause/resume work so duplicate gate events cannot start two recorders.
+  Future<void> _run(Future<void> Function() job) => _queue = _queue.then((_) => job()).catchError((Object _) {});
+
+  /// Re-reads the setting and starts or stops the detector to match the gate.
+  Future<void> _applyGate() async {
+    _gateOpen = wakeGateOpen(enabled: await storedWakeEnabled(), charging: _gate.charging, androidAuto: _gate.androidAuto);
+    if (_gateOpen) return _listen();
+    await _pause();
+    await FlutterForegroundTask.updateService(notificationText: 'Wake word paused - plug in or connect Android Auto');
+  }
 
   /// Never throws: a missing model file or mic permission must not leave an unhandled error and a notification that lies.
   Future<void> _listen() async {
+    if (!shouldListen(gateOpen: _gateOpen, held: _held)) return;
     if (_listening) return; // resume can arrive while the detector already runs (e.g. after a manual Talk session)
     if (!await voiceConfigured()) return;
     try {
@@ -45,6 +69,7 @@ class WakeTaskHandler extends TaskHandler {
       final oww = _oww = Oww(_ort.call);
       final pcm = await _rec.startStream(const RecordConfig(encoder: AudioEncoder.pcm16bits, sampleRate: 16000, numChannels: 1));
       _listening = true;
+      await FlutterForegroundTask.updateService(notificationText: _listeningText);
       _sub = pcm.listen((bytes) {
         if (!_listening) return;
         final pcm16 = ByteData.sublistView(bytes); // asInt16List throws when the chunk starts at an odd offset
@@ -104,19 +129,31 @@ class WakeTaskHandler extends TaskHandler {
   }
 
   @override
-  Future<void> onStart(DateTime timestamp, TaskStarter starter) => _listen();
+  Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
+    _gateSub = JarvisGate.changes.listen((g) {
+      _gate = g;
+      _run(_applyGate); // duplicates are harmless: re-applying the same gate is a no-op
+    }, onError: (Object e) => debugPrint('wake: gate error $e'));
+    try {
+      // Android Auto may never report: a hung or failed read leaves the gate closed until a change event arrives.
+      _gate = await JarvisGate.state().timeout(const Duration(seconds: 3));
+    } catch (_) {}
+    await _run(_applyGate);
+  }
   @override
   void onRepeatEvent(DateTime timestamp) {}
   @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
+    await _gateSub?.cancel();
     await _pause();
     await _ort.close();
     await _rec.dispose();
   }
   @override
   void onReceiveData(Object data) {
-    if (data == 'resume') _listen();
-    if (data == 'pause') _pause();
+    if (data == 'resume') _run(() { _held = false; return _applyGate(); });
+    if (data == 'pause') { _held = true; _run(_pause); }
+    if (data == 'gate') _run(_applyGate);
   }
 }
 
@@ -136,11 +173,12 @@ class WakeService {
 
   static Future<void> ensureRunning() async {
     if (!await voiceConfigured()) return;
+    if (!await storedWakeEnabled()) return;
     if (await FlutterForegroundTask.isRunningService) return;
     await FlutterForegroundTask.startService(
       serviceId: 100,
       notificationTitle: 'Jarvis',
-      notificationText: 'Listening for "Hey Jarvis"',
+      notificationText: _listeningText,
       serviceTypes: [ForegroundServiceTypes.microphone],
       callback: startCallback,
     );
@@ -150,6 +188,12 @@ class WakeService {
     _clearWakeNotification();
     if (!AppHost.ready) return;
     FlutterForegroundTask.sendDataToTask('resume');
+  }
+
+  /// Charging, Android Auto or the wake setting changed: the task re-checks the gate.
+  static void refreshGate() {
+    if (!AppHost.ready) return;
+    FlutterForegroundTask.sendDataToTask('gate');
   }
 
   static Future<void> stop() async {

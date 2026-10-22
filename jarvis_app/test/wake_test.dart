@@ -13,4 +13,10 @@ void main() {
   test('a timestamp from the future is not fresh', () {
     expect(wakeIsFresh(now.add(const Duration(seconds: 5)).millisecondsSinceEpoch, now), isFalse);
   });
+  test('listens only when the gate is open and no session holds the mic', () {
+    expect(shouldListen(gateOpen: true, held: false), isTrue);
+    expect(shouldListen(gateOpen: true, held: true), isFalse); // charger plugged in during a session
+    expect(shouldListen(gateOpen: false, held: false), isFalse);
+    expect(shouldListen(gateOpen: false, held: true), isFalse);
+  });
 }
