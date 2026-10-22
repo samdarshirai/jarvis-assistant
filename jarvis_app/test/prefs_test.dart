@@ -48,6 +48,18 @@ void main() {
     expect(d.isNight, false);
   });
 
+  test('out-of-range or garbage night hours fall back to defaults', () async {
+    for (final (s, e) in [('99999', '-5'), ('abc', '7am')]) {
+      final st = MemStore();
+      await st.write('night_start', s);
+      await st.write('night_end', e);
+      final p = Prefs(store: st, clock: () => at(2));
+      await p.load();
+      expect((p.nightStart, p.nightEnd), (1380, 420));
+      expect(p.isNight, true);
+    }
+  });
+
   test('unreadable store stays unloaded and night', () async {
     final p = Prefs(store: ThrowStore(), clock: () => at(12));
     await p.load();

@@ -20,6 +20,12 @@ Future<bool> storedWakeEnabled([ConfigStore store = const ConfigStore()]) async 
   }
 }
 
+/// A stored minute of the day, or [def] if missing, unparsable or outside 0..1439 (a corrupt value must not mean "no night").
+int _minute(String? s, int def) {
+  final v = int.tryParse(s ?? '');
+  return v != null && v >= 0 && v < 24 * 60 ? v : def;
+}
+
 /// Fails closed: until prefs are loaded (or if the store is unreadable) it is night.
 class Prefs extends ChangeNotifier {
   Prefs({ConfigStore store = const ConfigStore(), DateTime Function() clock = DateTime.now}) : _store = store, _clock = clock;
@@ -39,8 +45,8 @@ class Prefs extends ChangeNotifier {
   Future<void> load() async {
     try {
       _wakeEnabled = await _store.read('wake_enabled') != '0';
-      _start = int.tryParse(await _store.read('night_start') ?? '') ?? _defStart;
-      _end = int.tryParse(await _store.read('night_end') ?? '') ?? _defEnd;
+      _start = _minute(await _store.read('night_start'), _defStart);
+      _end = _minute(await _store.read('night_end'), _defEnd);
       _wakeChosen = await _store.read('wake_chosen') == '1';
       _loaded = true;
     } catch (_) {
