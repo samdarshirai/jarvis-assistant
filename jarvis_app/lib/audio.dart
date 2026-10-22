@@ -134,3 +134,38 @@ class TtsSpeaker implements Speaker {
     } catch (_) {} // voice choice is cosmetic; never block the ack
   }
 }
+
+/// Drops all Jarvis sound at night. isNight is checked per call and fails closed (see Prefs).
+class QuietPlayer implements Player {
+  QuietPlayer(this._inner, this._isNight);
+  final Player _inner;
+  final bool Function() _isNight;
+  bool _cut = false;
+
+  @override
+  void play(Uint8List pcm) {
+    if (_isNight()) {
+      if (!_cut) {
+        _cut = true;
+        _inner.flush(); // night began mid-reply: drop what is already buffered
+      }
+      return;
+    }
+    _cut = false;
+    _inner.play(pcm);
+  }
+
+  @override
+  Future<void> flush() => _inner.flush();
+}
+
+class QuietSpeaker implements Speaker {
+  QuietSpeaker(this._inner, this._isNight);
+  final Speaker _inner;
+  final bool Function() _isNight;
+
+  @override
+  Future<void> say(String text) async {
+    if (!_isNight()) await _inner.say(text);
+  }
+}

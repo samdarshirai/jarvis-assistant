@@ -12,6 +12,7 @@ import 'config.dart';
 import 'dashboard.dart';
 import 'onboarding_screen.dart';
 import 'phone.dart';
+import 'prefs.dart';
 import 'session.dart';
 import 'store.dart';
 import 'theme.dart';
@@ -67,7 +68,8 @@ class JarvisApp extends StatefulWidget {
       this.open = openInBrowser,
       this.tz = deviceTimezone,
       this.dashboardFetch,
-      this.alarm});
+      this.alarm,
+      this.prefs});
   final VoidCallback? onSessionEnded;
   final VoidCallback? onSessionStarted;
   final Future<String?> Function()? fcmToken;
@@ -83,6 +85,7 @@ class JarvisApp extends StatefulWidget {
   final Future<String?> Function() tz;
   final Future<DashboardData> Function(Config)? dashboardFetch;
   final Future<DateTime?> Function()? alarm;
+  final Prefs? prefs; // null: the app owns one
   @override
   State<JarvisApp> createState() => _JarvisAppState();
 }
@@ -103,11 +106,13 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   final _messenger = GlobalKey<ScaffoldMessengerState>();
   late final _auth = AuthClient(widget.apiFor(Config(_store.url, null)), _store);
   late final Future<void> _initialized;
+  late final Prefs _prefs = widget.prefs ?? Prefs();
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    unawaited(_prefs.load().catchError((Object _) {})); // unreadable prefs leave isNight true (silent)
     _initialized = _store.load().catchError((Object _) => Config(_store.url, null)).then(_route);
     _links = (widget.links ?? AppLinks().uriLinkStream).listen((link) async {
       await _initialized;
@@ -244,9 +249,9 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
         : SessionController(
             connect: () => WsVoiceSocket.open(c),
             mic: RecordMic(),
-            player: PcmPlayer(),
+            player: QuietPlayer(PcmPlayer(), () => _prefs.isNight),
             phone: AndroidPhoneActions(),
-            speaker: TtsSpeaker(),
+            speaker: QuietSpeaker(TtsSpeaker(), () => _prefs.isNight),
             fcmToken: widget.fcmToken,
             onEnded: () {
               widget.onSessionEnded?.call();
