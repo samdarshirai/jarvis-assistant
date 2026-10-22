@@ -73,8 +73,22 @@ void main() {
     expect(find.text('Nothing scheduled'), findsOneWidget);
     expect(find.textContaining('Now ·'), findsNothing);
     await t.tap(find.text('Ask Jarvis to schedule something'));
+    expect(asked, 1);
     await t.tap(find.byTooltip('Add event'));
-    expect(asked, 2);
+    await t.pumpAndSettle();
+    expect(find.textContaining('New event'), findsOneWidget);
+  });
+
+  testWidgets('month view fetches the six-week grid; arrows page it', (t) async {
+    final api = await _pump(t, _events);
+    await t.tap(find.text('Month'));
+    await t.pumpAndSettle();
+    expect(api.calls.last, {'from': '2026-09-28', 'days': '42'});
+    await t.tap(find.byKey(const ValueKey('next')));
+    await t.pumpAndSettle();
+    expect(find.text('November 2026'), findsOneWidget);
+    expect(api.calls.last, {'from': '2026-10-26', 'days': '42'});
+    expect(t.takeException(), isNull);
   });
 
   testWidgets('error shows retry', (t) async {

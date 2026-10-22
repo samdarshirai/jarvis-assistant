@@ -10,7 +10,9 @@ import 'mail_screen.dart';
 import 'notes_screen.dart';
 import 'orb.dart';
 import 'phone.dart';
+import 'memory_screen.dart';
 import 'settings_screen.dart';
+import 'shopping_screen.dart';
 import 'tasks_screen.dart';
 import 'confirm_card.dart';
 import 'dashboard.dart';
@@ -61,6 +63,8 @@ class SessionScreen extends StatelessWidget {
           HomeTarget.mail => MailScreen(api: a, onReplyByVoice: ask),
           HomeTarget.notes => NotesScreen(api: a, onAskJarvis: ask),
           HomeTarget.tasks => TasksScreen(api: a, onAskJarvis: ask),
+          HomeTarget.shopping => ShoppingScreen(api: a, onAskJarvis: ask),
+          HomeTarget.memory => MemoryScreen(api: a, onAskJarvis: ask),
           HomeTarget.alarms => AlarmsScreen(alarm: alarm ?? (() async => dashboard?.nextAlarm), onAskJarvis: ask),
         });
   }

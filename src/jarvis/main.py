@@ -4,13 +4,13 @@ import logging
 from contextlib import asynccontextmanager
 from functools import partial
 
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import BaseModel, StringConstraints
+from pydantic import AwareDatetime, BaseModel, StringConstraints
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from jarvis.appapi import AppService
@@ -131,6 +131,12 @@ async def lifespan(app: FastAPI):
                 await tenants.close()  # after the steps drained: closes each runtime's LLM http client
     finally:
         pool.close()
+
+
+class EventIn(BaseModel):
+    summary: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    start: AwareDatetime
+    end: AwareDatetime
 
 
 class TaskIn(BaseModel):
@@ -326,6 +332,25 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
             return JSONResponse({"error": "bad_request"}, status_code=422)
         return await svc.calendar_events(rt, start or now_local(rt.tz).date(), days)
 
+    @app.post("/calendar/events")
+    async def add_event(request: Request, body: EventIn):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        if body.end <= body.start:
+            return JSONResponse({"error": "bad_request"}, status_code=422)
+        ev = await svc.create_event(rt, body.summary, body.start, body.end)
+        return JSONResponse({"error": "unavailable"}, status_code=502) if ev is None else {"event": ev}
+
+    @app.delete("/calendar/events/{event_id}")
+    async def delete_event(request: Request, event_id: str):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        if not await svc.delete_event(rt, event_id):
+            return JSONResponse({"error": "unavailable"}, status_code=502)
+        return {"ok": True}
+
     @app.get("/tasks")
     async def tasks(request: Request):
         svc, rt, err = await guarded(request)
@@ -347,6 +372,40 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         if not await svc.complete_task(rt, task_id):
             return JSONResponse({"error": "unavailable"}, status_code=502)
         return {"ok": True}
+
+    @app.get("/shopping")
+    async def shopping(request: Request):
+        svc, rt, err = await guarded(request)
+        return err or await svc.shopping_list(rt)
+
+    @app.post("/shopping")
+    async def add_shopping(request: Request, body: TaskIn):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        item = await svc.add_shopping(rt, body.title)
+        return JSONResponse({"error": "unavailable"}, status_code=502) if item is None else {"item": item}
+
+    @app.post("/shopping/{item_id}/complete")
+    async def complete_shopping(request: Request, item_id: str):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        if not await svc.complete_shopping(rt, item_id):
+            return JSONResponse({"error": "unavailable"}, status_code=502)
+        return {"ok": True}
+
+    @app.get("/memory")
+    async def memory(request: Request):
+        svc, rt, err = await guarded(request)
+        return err or await svc.memory_list(rt)
+
+    @app.delete("/memory/{memory_id}")
+    async def forget_memory(request: Request, memory_id: int):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        return {"ok": True} if await svc.forget_memory(rt, memory_id) else JSONResponse({"error": "not_found"}, status_code=404)
 
     @app.get("/mail")
     async def mail(request: Request, limit: int = 20):

@@ -51,12 +51,26 @@ class AppService:
 
     # --- calendar / tasks ---
     async def calendar_events(self, rt, start: date, days: int) -> dict:
-        days = max(1, min(days, 14))
+        days = max(1, min(days, 42))  # a six-week month grid
         a = datetime.combine(start, time.min, tzinfo=ZoneInfo(rt.tz))
         events, reauth = await self._call(rt.calendar.list_events, a, a + timedelta(days=days))
         return {"events": None if events is None else [
             {"id": e["id"], "summary": e.get("summary") or "(no title)", "start": e["start"], "end": e["end"],
              "location": e.get("location"), "all_day": len(e["start"] or "") == 10} for e in events], "reauth": reauth}
+
+    async def create_event(self, rt, summary: str, start: datetime, end: datetime) -> dict | None:
+        ev, _ = await self._call(rt.calendar.create_event, summary, start, end)
+        if ev is None:
+            return None
+        await self._audit(rt, "create_event", {"summary": summary, "start": start.isoformat()}, {"id": ev["id"]})
+        return {"id": ev["id"]}
+
+    async def delete_event(self, rt, event_id: str) -> bool:
+        r, _ = await self._call(rt.calendar.delete_event, event_id, "this")
+        if r is None:
+            return False
+        await self._audit(rt, "delete_event", {"id": event_id}, r)
+        return True
 
     async def task_list(self, rt) -> dict:
         tasks, reauth = await self._call(rt.tasks.list_tasks)
@@ -86,6 +100,46 @@ class AppService:
             return False
         await self._audit(rt, "complete_task", {"id": task_id}, {"status": task.get("status")})
         return True
+
+    # --- shopping: the hidden "Shopping" Google Tasks list ---
+    async def shopping_list(self, rt) -> dict:
+        def read():
+            return rt.tasks.list_tasks(False, rt.tasks.shopping_list_id())
+
+        items, reauth = await self._call(read)
+        return {"items": None if items is None else [{"id": t["id"], "title": t.get("title") or ""} for t in items],
+                "reauth": reauth}
+
+    async def add_shopping(self, rt, title: str) -> dict | None:
+        def add():
+            return rt.tasks.create_task(title, None, rt.tasks.shopping_list_id())
+
+        t, _ = await self._call(add)
+        if t is None:
+            return None
+        await self._audit(rt, "add_shopping_items", {"items": [title]}, {"id": t["id"]})
+        return {"id": t["id"], "title": t.get("title") or title}
+
+    async def complete_shopping(self, rt, item_id: str) -> bool:
+        def done():
+            return rt.tasks.complete_task(item_id, rt.tasks.shopping_list_id())
+
+        t, _ = await self._call(done)
+        if t is None:
+            return False
+        await self._audit(rt, "complete_shopping_item", {"id": item_id}, {"status": t.get("status")})
+        return True
+
+    # --- memory ---
+    async def memory_list(self, rt) -> dict:
+        rows, _ = await self._call(rt.memories.all)
+        return {"memories": rows}
+
+    async def forget_memory(self, rt, memory_id: int) -> bool:
+        ok, _ = await self._call(rt.memories.remove, memory_id)
+        if ok:
+            await self._audit(rt, "forget", {"memory_id": memory_id}, {"removed": True})
+        return bool(ok)
 
     # --- mail (display only: never passed to the LLM) ---
     async def mail_list(self, rt, limit: int) -> dict:

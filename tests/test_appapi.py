@@ -46,10 +46,25 @@ class Src:
     def list_tasks(self, *a):
         return self._go("list", ret=[{"id": "t2", "title": "B", "due": None}, {"id": "t1", "title": "A", "due": "2000-01-01"}])
 
-    def create_task(self, title, due=None):
+    def create_event(self, summary, start, end):
+        return self._go("create_event", summary, ret={"id": "ev9"})
+
+    def delete_event(self, eid, scope):
+        return self._go("delete_event", eid, ret={"deleted": eid})
+
+    def shopping_list_id(self):
+        return "shop"
+
+    def all(self):
+        return self._go("memories", ret=[{"id": 3, "text": "likes tea"}])
+
+    def remove(self, mid):
+        return self._go("forget", mid, ret=mid == 3)
+
+    def create_task(self, title, due=None, *a):
         return self._go("create", title, due, ret={"id": "t9", "title": title, "due": due and due.isoformat(), "status": "needsAction"})
 
-    def complete_task(self, tid):
+    def complete_task(self, tid, *a):
         return self._go("complete", tid, ret={"id": tid, "status": "completed"})
 
     def search_emails(self, q, limit=10):
@@ -91,7 +106,7 @@ class Graph:
 def rt(src=None, graph=None, audit=None, uid=1):
     """A stand-in UserRuntime: the service reads every client, the graph, the lock and the audit from it."""
     src = src or Src()
-    return NS(user=NS(id=uid), calendar=src, tasks=src, gmail=src, notes=src, graph=graph or Graph(),
+    return NS(user=NS(id=uid), calendar=src, tasks=src, memories=src, gmail=src, notes=src, graph=graph or Graph(),
               lock=asyncio.Lock(), audit=audit or Audit(), tz=TZ, llm_ready=graph is not False)
 
 
@@ -106,7 +121,7 @@ async def test_calendar_shapes_clamps_window_and_flags_all_day():
                                 "end": "2026-10-05T10:00:00+02:00", "location": None, "all_day": False}
     assert out["events"][1]["all_day"] and out["events"][1]["summary"] == "(no title)" and out["reauth"] is False
     _, a, b = src.calls[0]
-    assert (b - a).days == 14 and a.hour == 0 and a.tzinfo is not None
+    assert (b - a).days == 42 and a.hour == 0 and a.tzinfo is not None
 
 
 async def test_tasks_sorted_with_overdue_and_failure_is_null():
@@ -458,3 +473,24 @@ async def test_disabled_user_gets_401_on_next_request(pool, uids):
     assert (await s.tenants.get(uids[1])).user.disabled  # e.g. a scheduler job cached it while disabled
     UserStore(pool).set_disabled(uids[1], False)
     assert (await s.authenticate(hb)).user.id == uids[1]  # the stale cached flag does not lock them out
+
+
+def test_http_shopping_and_memory_contract():
+    c = client(rt())
+    assert c.get("/shopping", headers=H).json()["items"][0] == {"id": "t2", "title": "B"}
+    assert c.post("/shopping", headers=H, json={"title": " eggs "}).json()["item"]["title"] == "eggs"
+    assert c.post("/shopping/t1/complete", headers=H).json() == {"ok": True}
+    assert c.get("/memory", headers=H).json() == {"memories": [{"id": 3, "text": "likes tea"}]}
+    assert c.delete("/memory/3", headers=H).json() == {"ok": True}
+    assert c.delete("/memory/4", headers=H).status_code == 404
+    assert client(rt(Src(RuntimeError()))).post("/shopping/x/complete", headers=H).status_code == 502
+
+
+def test_http_event_create_and_delete():
+    c = client(rt())
+    ev = {"summary": " Lunch ", "start": "2026-10-05T12:00:00+02:00", "end": "2026-10-05T13:00:00+02:00"}
+    assert c.post("/calendar/events", headers=H, json=ev).json() == {"event": {"id": "ev9"}}
+    assert c.post("/calendar/events", headers=H, json={**ev, "end": ev["start"]}).status_code == 422
+    assert c.post("/calendar/events", headers=H, json={**ev, "start": "2026-10-05T12:00:00"}).status_code == 422
+    assert c.delete("/calendar/events/e1", headers=H).json() == {"ok": True}
+    assert client(rt(Src(RuntimeError()))).delete("/calendar/events/e1", headers=H).status_code == 502

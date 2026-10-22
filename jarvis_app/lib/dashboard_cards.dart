@@ -25,7 +25,7 @@ Widget _muted(String t) => Text(t, style: const TextStyle(color: mutedText, font
 Widget _one(String t, {TextStyle? style, int lines = 1}) =>
     Text(t, maxLines: lines, overflow: TextOverflow.ellipsis, style: style);
 
-enum HomeTarget { calendar, mail, notes, tasks, alarms }
+enum HomeTarget { calendar, mail, notes, tasks, alarms, shopping, memory }
 
 class DashboardSections extends StatelessWidget {
   const DashboardSections(
@@ -84,6 +84,12 @@ class DashboardSections extends StatelessWidget {
             ])),
             const SizedBox(height: 10),
             _alarm(n),
+            const SizedBox(height: 10),
+            Row(children: [
+              Expanded(child: _pill(Icons.shopping_cart_outlined, 'Shopping', HomeTarget.shopping)),
+              const SizedBox(width: 10),
+              Expanded(child: _pill(Icons.psychology_outlined, 'Memory', HomeTarget.memory)),
+            ]),
           ]);
         },
       );
@@ -264,6 +270,23 @@ class DashboardSections extends StatelessWidget {
               ])),
             ]),
           ),
+        ),
+      );
+
+  Widget _pill(IconData icon, String label, HomeTarget target) => GestureDetector(
+        onTap: () => onOpen?.call(target),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          decoration: BoxDecoration(
+            color: darkPill.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+          ),
+          child: Row(children: [
+            Icon(icon, color: amber),
+            const SizedBox(width: 12),
+            Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cream, fontWeight: FontWeight.w600, fontSize: 15))),
+          ]),
         ),
       );
 

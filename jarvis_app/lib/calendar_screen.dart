@@ -172,7 +172,22 @@ class _CalendarScreenState extends State<CalendarScreen> {
   final _open = <String>{};
 
   DateTime get _today => DateTime(widget.now().year, widget.now().month, widget.now().day);
-  DateTime get _monday => _today.subtract(Duration(days: _today.weekday - 1));
+  bool _month = false;
+
+  static DateTime _mondayOf(DateTime d) => DateTime(d.year, d.month, d.day - (d.weekday - 1));
+  DateTime get _monday => _mondayOf(_selected);
+  // month view fetches the whole six-week grid so leading/trailing days show their dots
+  DateTime get _gridStart => _mondayOf(DateTime(_selected.year, _selected.month));
+
+  void _go(DateTime to, {bool month = false}) {
+    _selected = to;
+    _month = month || _month;
+    _load();
+  }
+
+  void _step(int dir) => _go(_month
+      ? DateTime(_selected.year, _selected.month + dir, 1)
+      : _selected.add(Duration(days: 7 * dir)));
 
   @override
   void initState() {
@@ -187,7 +202,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
       _error = false;
     });
     try {
-      final j = await widget.api.get('/calendar', {'from': _ymd(_monday), 'days': '7'});
+      final j = await widget.api.get(
+          '/calendar', {'from': _ymd(_month ? _gridStart : _monday), 'days': _month ? '42' : '7'});
       final l = j['events'];
       final ev = l is List ? [for (final e in l) if (e is Map<String, dynamic>) CalEvent.from(e)] : null;
       if (mounted) {
@@ -210,7 +226,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
   Widget build(BuildContext context) => ScreenShell(
         title: 'Calendar',
         onMic: widget.onAskJarvis,
-        trailing: RoundButton(icon: Icons.add, tooltip: 'Add event', onTap: widget.onAskJarvis),
+        trailing: RoundButton(icon: Icons.add, tooltip: 'Add event', onTap: _addEvent),
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : _error
@@ -239,7 +255,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis),
       ),
-      _strip(evs),
+      _nav(),
+      const SizedBox(height: 10),
+      _month ? _grid(evs) : _strip(evs),
       const SizedBox(height: 18),
       if (evs == null)
         const Text('Unavailable', style: TextStyle(color: mutedText))
@@ -258,6 +276,122 @@ class _CalendarScreenState extends State<CalendarScreen> {
         if (day.isEmpty) _empty() else for (final e in timed) _tile(e, e == next),
       ],
     ]);
+  }
+
+  Widget _nav() => Wrap(crossAxisAlignment: WrapCrossAlignment.center, spacing: 4, children: [
+        IconButton(key: const ValueKey('prev'), tooltip: _month ? 'Previous month' : 'Previous week', icon: const Icon(Icons.chevron_left, color: cream), onPressed: () => _step(-1)),
+        IconButton(key: const ValueKey('next'), tooltip: _month ? 'Next month' : 'Next week', icon: const Icon(Icons.chevron_right, color: cream), onPressed: () => _step(1)),
+        TextButton(onPressed: () => _go(_today), child: const Text('Today', style: TextStyle(color: amber))),
+        SegmentedButton<bool>(
+          showSelectedIcon: false,
+          segments: const [ButtonSegment(value: false, label: Text('Week')), ButtonSegment(value: true, label: Text('Month'))],
+          selected: {_month},
+          onSelectionChanged: (v) {
+            _month = v.first;
+            _load();
+          },
+        ),
+      ]);
+
+  Widget _grid(List<CalEvent>? evs) => Column(children: [
+        Row(children: [
+          for (final n in _dayInitials)
+            Expanded(child: Center(child: Text(n, style: TextStyle(fontSize: 11, color: cream.withValues(alpha: 0.6))))),
+        ]),
+        const SizedBox(height: 6),
+        for (var w = 0; w < 6; w++)
+          Row(children: [
+            for (var i = 0; i < 7; i++) Expanded(child: _gridCell(_gridStart.add(Duration(days: w * 7 + i)), evs)),
+          ]),
+      ]);
+
+  Widget _gridCell(DateTime d, List<CalEvent>? evs) {
+    final sel = d == _selected, has = evs?.any((e) => e.onDay(d)) ?? false, inMonth = d.month == _selected.month;
+    final fg = sel ? ink : cream.withValues(alpha: inMonth ? 1 : 0.35);
+    return GestureDetector(
+      key: ValueKey('cell-${d.month}-${d.day}'),
+      onTap: () => setState(() => _selected = d),
+      child: Container(
+        height: 46,
+        margin: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+            color: sel ? blush : (d == _today ? amber.withValues(alpha: 0.18) : null), borderRadius: BorderRadius.circular(14)),
+        child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Text('${d.day}', style: TextStyle(fontSize: 15, color: fg)),
+          const SizedBox(height: 3),
+          Container(width: 4, height: 4, decoration: BoxDecoration(shape: BoxShape.circle, color: has ? (sel ? ink : amber) : Colors.transparent)),
+        ]),
+      ),
+    );
+  }
+
+  static String _iso(DateTime d) {
+    final o = d.timeZoneOffset, a = o.abs();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${d.toIso8601String().split('.').first}${o.isNegative ? '-' : '+'}${two(a.inHours)}:${two(a.inMinutes % 60)}';
+  }
+
+  Future<void> _addEvent() async {
+    final title = TextEditingController();
+    var start = DateTime(_selected.year, _selected.month, _selected.day, 9);
+    var mins = 60;
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => StatefulBuilder(
+            builder: (ctx, set) => AlertDialog(
+                  title: Text('New event · ${_ymd(_selected)}'),
+                  content: Column(mainAxisSize: MainAxisSize.min, children: [
+                    TextField(controller: title, autofocus: true, maxLength: 200, decoration: const InputDecoration(labelText: 'Title', counterText: '')),
+                    ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        title: Text('Starts ${hhmm(start)}'),
+                        trailing: const Icon(Icons.schedule),
+                        onTap: () async {
+                          final t = await showTimePicker(context: ctx, initialTime: TimeOfDay.fromDateTime(start));
+                          if (t != null) set(() => start = DateTime(start.year, start.month, start.day, t.hour, t.minute));
+                        }),
+                    DropdownButton<int>(
+                        value: mins,
+                        items: [for (final m in [15, 30, 60, 90, 120]) DropdownMenuItem(value: m, child: Text('$m min'))],
+                        onChanged: (v) => set(() => mins = v ?? mins)),
+                  ]),
+                  actions: [
+                    TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                    FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Add')),
+                  ],
+                )));
+    final name = title.text.trim();
+    title.dispose();
+    if (ok != true || name.isEmpty || !mounted) return;
+    try {
+      await widget.api.post('/calendar/events', {
+        'summary': name,
+        'start': _iso(start),
+        'end': _iso(start.add(Duration(minutes: mins))),
+      });
+      await _load();
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't add event")));
+    }
+  }
+
+  Future<void> _delete(CalEvent e) async {
+    final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+              title: Text('Delete "${e.summary}"?'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+              ],
+            ));
+    if (ok != true || !mounted) return;
+    try {
+      await widget.api.delete('/calendar/events/${e.id}');
+      await _load();
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't delete event")));
+    }
   }
 
   Widget _strip(List<CalEvent>? evs) => Row(children: [
@@ -330,6 +464,7 @@ class _CalendarScreenState extends State<CalendarScreen> {
     return GestureDetector(
       key: ValueKey('event-${e.id}'),
       onTap: () => setState(() => open ? _open.remove(e.id) : _open.add(e.id)),
+      onLongPress: () => _delete(e),
       child: Container(
         width: double.infinity,
         margin: const EdgeInsets.only(bottom: 8),

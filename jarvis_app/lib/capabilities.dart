@@ -5,7 +5,7 @@ import 'theme.dart';
 
 // User-facing list of everything Jarvis can do. Update when adding a tool in src/jarvis/tools/ or a proactive job.
 const capabilities = <(String, List<String>)>[
-  ('Calendar', ['List events', 'Find free slots', 'Create, update, delete events (asks to confirm)']),
+  ('Calendar', ['List events', 'Find free slots', 'Create, update, delete events (asks to confirm; also in the Calendar screen)']),
   ('Tasks & shopping', ['List, create, complete, reschedule tasks', 'Add, list, complete shopping items']),
   ('Email', ['Search and read email', 'Find contacts', 'Draft, edit and send email (asks to confirm)']),
   ('Phone', ['Set alarms', 'Set timers', 'Start navigation', 'Compose messages']),
