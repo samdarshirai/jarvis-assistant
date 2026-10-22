@@ -21,6 +21,18 @@ Future<bool> voiceConfigured() async => (await const ConfigStore().load()).token
 const _wakeKey = 'wake';
 const _listeningText = 'Listening for "Hey Jarvis"';
 
+/// Silent at all hours (Jarvis never makes its own sound at night); the full-screen intent still wakes the screen.
+/// New channel id: the old 'wake' channel played the default sound and Android keeps a channel's sound forever.
+const wakeNotification = NotificationDetails(
+    android: AndroidNotificationDetails('wake_silent', 'Wake word',
+        importance: Importance.max,
+        priority: Priority.high,
+        playSound: false,
+        enableVibration: false,
+        fullScreenIntent: true,
+        timeoutAfter: 15000, // backstop: never linger if a cancel is missed
+        category: AndroidNotificationCategory.call));
+
 /// The detector runs only while the gate is open and no session holds the mic.
 bool shouldListen({required bool gateOpen, required bool held}) => gateOpen && !held;
 
@@ -113,18 +125,14 @@ class WakeTaskHandler extends TaskHandler {
     await FlutterForegroundTask.saveData(key: _wakeKey, value: DateTime.now().millisecondsSinceEpoch);
     final n = FlutterLocalNotificationsPlugin();
     await n.initialize(settings: const InitializationSettings(android: AndroidInitializationSettings('@mipmap/ic_launcher')));
+    // The old channel rang; a channel's sound is fixed once created, so drop it (no-op once gone).
+    await n.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()?.deleteNotificationChannel(channelId: 'wake');
     // Full-screen intent wakes the screen; if Android denies it, this degrades to a heads-up notification.
     await n.show(
       id: 1,
       title: 'Jarvis',
       body: 'Listening…',
-      notificationDetails: const NotificationDetails(
-          android: AndroidNotificationDetails('wake', 'Wake word',
-              importance: Importance.max,
-              priority: Priority.high,
-              fullScreenIntent: true,
-              timeoutAfter: 15000, // backstop: never linger if a cancel is missed
-              category: AndroidNotificationCategory.call)),
+      notificationDetails: wakeNotification,
     );
     // After show: main cancels this on session start, and a cancel sent before show would leave it stuck.
     FlutterForegroundTask.sendDataToMain('wake');

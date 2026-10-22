@@ -14,11 +14,14 @@ class BootReceiver : BroadcastReceiver() {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
         if (!voiceReady(context)) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        nm.createNotificationChannel(NotificationChannel("boot", "Jarvis reminders", NotificationManager.IMPORTANCE_DEFAULT))
+        // Silent at all hours (a reboot can finish at night). New id: the old "boot" channel's sound cannot be changed.
+        nm.deleteNotificationChannel("boot")
+        nm.createNotificationChannel(NotificationChannel("boot_silent", "Jarvis reminders", NotificationManager.IMPORTANCE_DEFAULT)
+            .apply { setSound(null, null); enableVibration(false) })
         val open = PendingIntent.getActivity(
             context, 0, Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
             PendingIntent.FLAG_IMMUTABLE)
-        nm.notify(2, NotificationCompat.Builder(context, "boot")
+        nm.notify(2, NotificationCompat.Builder(context, "boot_silent")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Jarvis is not listening")
             .setContentText("Tap to resume \"Hey Jarvis\" after the restart.")

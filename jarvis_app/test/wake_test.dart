@@ -1,3 +1,4 @@
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jarvis_app/wake.dart';
 
@@ -18,5 +19,13 @@ void main() {
     expect(shouldListen(gateOpen: true, held: true), isFalse); // charger plugged in during a session
     expect(shouldListen(gateOpen: false, held: false), isFalse);
     expect(shouldListen(gateOpen: false, held: true), isFalse);
+  });
+  test('wake notification is silent on a fresh channel and still wakes the screen', () {
+    final a = wakeNotification.android!;
+    expect(a.channelId, 'wake_silent'); // the old 'wake' channel's sound cannot be changed after creation
+    expect(a.playSound, isFalse);
+    expect(a.enableVibration, isFalse);
+    expect(a.importance, Importance.max);
+    expect(a.fullScreenIntent, isTrue);
   });
 }
