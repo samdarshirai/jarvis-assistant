@@ -67,7 +67,7 @@ Jarvis speaks aloud during night hours, even by mistake. This outranks every oth
 
 ## Success
 
-- On battery, away from Android Auto, the mic is off and the foreground microphone notification is gone.
+- On battery, away from Android Auto, the mic is not recording. The wake service stays alive (Android 14 blocks restarting a microphone service from the background) and its notification reads that the wake word is paused.
 - Plugging in or connecting to Android Auto turns the wake word on within a few seconds; unplugging or disconnecting turns it off.
 - With night hours set and the clock inside them, no trigger and no push can produce any Jarvis audio, while replies still appear as text.
 - The widget and the power-button assistant start a session. The wake word starts one when enabled and not when disabled.
