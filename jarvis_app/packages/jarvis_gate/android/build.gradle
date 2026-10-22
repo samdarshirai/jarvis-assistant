@@ -1,0 +1,32 @@
+group 'com.jarvis.jarvis_gate'
+version '1.0'
+
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'com.jarvis.jarvis_gate'
+    compileSdk 37
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    defaultConfig {
+        minSdkVersion 24
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.car.app:app:1.7.0'
+}

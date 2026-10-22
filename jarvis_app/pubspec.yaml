@@ -50,6 +50,8 @@ dependencies:
   geolocator: ^14.1.1
   crypto: ^3.0.7
   app_links: ^7.2.2
+  jarvis_gate:
+    path: packages/jarvis_gate
 
 dev_dependencies:
   flutter_test:

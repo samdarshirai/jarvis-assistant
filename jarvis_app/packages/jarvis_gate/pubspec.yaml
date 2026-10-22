@@ -1,0 +1,19 @@
+name: jarvis_gate
+description: Charging and Android Auto state for the Jarvis wake gate.
+publish_to: 'none'
+version: 0.0.1
+
+environment:
+  sdk: ^3.13.3
+  flutter: '>=3.3.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.jarvis.jarvis_gate
+        pluginClass: JarvisGatePlugin
