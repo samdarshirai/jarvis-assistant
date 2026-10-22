@@ -28,7 +28,7 @@ int _minute(String? s, int def) {
 
 /// Fails closed: until prefs are loaded (or if the store is unreadable) it is night.
 class Prefs extends ChangeNotifier {
-  Prefs({ConfigStore store = const ConfigStore(), DateTime Function() clock = DateTime.now}) : _store = store, _clock = clock;
+  Prefs({this._store = const ConfigStore(), this._clock = DateTime.now});
   final ConfigStore _store;
   final DateTime Function() _clock;
 
