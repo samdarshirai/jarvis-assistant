@@ -46,6 +46,7 @@ class WakeTaskHandler extends TaskHandler {
   bool _gateOpen = false;
   GateState _gate = const GateState(charging: false, androidAuto: false); // unknown = closed: mic stays off
   StreamSubscription<GateState>? _gateSub;
+  bool _gotEvent = false; // a change event is newer than the startup state() reply
   Future<void> _queue = Future.value();
 
   /// Serialises gate/pause/resume work so duplicate gate events cannot start two recorders.
@@ -106,6 +107,7 @@ class WakeTaskHandler extends TaskHandler {
   }
 
   Future<void> _onWake() async {
+    _held = true; // the session owns the mic from now on; its 'resume' lets go (a gate event must not restart us first)
     await _pause();
     if (!await voiceConfigured()) return;
     await FlutterForegroundTask.saveData(key: _wakeKey, value: DateTime.now().millisecondsSinceEpoch);
@@ -131,12 +133,14 @@ class WakeTaskHandler extends TaskHandler {
   @override
   Future<void> onStart(DateTime timestamp, TaskStarter starter) async {
     _gateSub = JarvisGate.changes.listen((g) {
+      _gotEvent = true;
       _gate = g;
       _run(_applyGate); // duplicates are harmless: re-applying the same gate is a no-op
     }, onError: (Object e) => debugPrint('wake: gate error $e'));
     try {
       // Android Auto may never report: a hung or failed read leaves the gate closed until a change event arrives.
-      _gate = await JarvisGate.state().timeout(const Duration(seconds: 3));
+      final seed = await JarvisGate.state().timeout(const Duration(seconds: 3));
+      if (!_gotEvent) _gate = seed;
     } catch (_) {}
     await _run(_applyGate);
   }
