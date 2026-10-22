@@ -4,12 +4,16 @@ import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.media.AudioDeviceInfo
+import android.media.AudioAttributes
+import android.media.AudioFormat
 import android.media.AudioManager
+import android.media.AudioTrack
 import android.os.Build
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.util.TimeZone
+import java.util.concurrent.Executors
 
 /** Non-secret hint for native entry points; the Dart side checks the actual secure token and /me. */
 internal fun voiceReady(context: Context): Boolean =
@@ -43,6 +47,8 @@ class MainActivity : FlutterActivity() {
             when (call.method) {
                 "headsetStart" -> result.success(headsetStart())
                 "headsetStop" -> { headsetStop(); result.success(null) }
+                "play" -> { play(call.arguments as ByteArray); result.success(null) }
+                "flush" -> { flush(); result.success(null) }
                 else -> result.notImplemented()
             }
         }
@@ -52,6 +58,32 @@ class MainActivity : FlutterActivity() {
                 result.success(am.nextAlarmClock?.triggerTime)
             } else result.notImplemented()
         }
+    }
+
+    // Reply audio as voice-call usage: the phone's echo canceller only uses call playback as its echo reference (music playback is not cancelled on Samsung).
+    private val speaker = Executors.newSingleThreadExecutor()
+    private var track: AudioTrack? = null
+    @Volatile private var playGen = 0
+
+    private fun play(pcm: ByteArray) {
+        val gen = playGen
+        speaker.execute {
+            if (gen != playGen) return@execute // flushed while queued
+            val t = track ?: AudioTrack.Builder()
+                .setAudioAttributes(AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                .setAudioFormat(AudioFormat.Builder().setSampleRate(16000)
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT).setChannelMask(AudioFormat.CHANNEL_OUT_MONO).build())
+                .setBufferSizeInBytes(16000 * 2)
+                .build().also { it.play(); track = it }
+            t.write(pcm, 0, pcm.size) // blocks until buffered; flush() releases it by stopping the track
+        }
+    }
+
+    private fun flush() {
+        playGen++
+        track?.let { it.pause(); it.flush(); it.play() } // drops buffered audio and unblocks a pending write
     }
 
     private val am get() = getSystemService(Context.AUDIO_SERVICE) as AudioManager

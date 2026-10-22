@@ -164,10 +164,8 @@ class SessionController extends ChangeNotifier {
 
   void _onMic(Uint8List pcm) {
     // ponytail: half-duplex while speaking: speaker echo reaching STT would read as barge-in (ws.py partial); only the loud client VAD can interrupt
-    // The server says "listening" once audio is sent, not played, so also count buffered playback as speaking.
-    final talking = phase == Phase.speaking || (phase == Phase.listening && _playEnd.isAfter(DateTime.now()));
-    _socket?.sendAudio(talking ? Uint8List(pcm.length) : pcm);
-    if (talking) {
+    _socket?.sendAudio(phase == Phase.speaking ? Uint8List(pcm.length) : pcm);
+    if (phase == Phase.speaking) {
       if (vad.feed(pcm)) _bargeIn();
     } else if (phase == Phase.listening && vad.feed(pcm)) {
       _arm(); // the user is talking: keep the session alive
