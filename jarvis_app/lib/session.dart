@@ -163,7 +163,8 @@ class SessionController extends ChangeNotifier {
   }
 
   void _onMic(Uint8List pcm) {
-    _socket?.sendAudio(pcm);
+    // ponytail: half-duplex while speaking: speaker echo reaching STT would read as barge-in (ws.py partial); only the loud client VAD can interrupt
+    _socket?.sendAudio(phase == Phase.speaking ? Uint8List(pcm.length) : pcm);
     if (phase == Phase.speaking) {
       if (vad.feed(pcm)) _bargeIn();
     } else if (phase == Phase.listening && vad.feed(pcm)) {

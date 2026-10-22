@@ -26,6 +26,17 @@ void main() {
     });
   });
 
+  test('mic audio is silenced while speaking so speaker echo cannot reach STT', () {
+    fakeAsync((a) {
+      final r = Rig();
+      r.c.start();
+      a.flushMicrotasks();
+      r.socket.ctrl.add(const StateEvent('speaking'));
+      r.mic.ctrl.add(Uint8List.fromList([5, 5, 5, 5]));
+      expect(r.socket.audio.last, [0, 0, 0, 0]);
+    });
+  });
+
   test('speakText sends a speak request after hello', () {
     fakeAsync((a) {
       final r = Rig();
