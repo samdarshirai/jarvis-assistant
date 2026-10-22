@@ -61,6 +61,10 @@
         <receiver android:name=".BootReceiver" android:exported="true">
             <intent-filter><action android:name="android.intent.action.BOOT_COMPLETED"/></intent-filter>
         </receiver>
+        <receiver android:name=".JarvisWidget" android:exported="true">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/jarvis_widget_info"/>
+        </receiver>
         <service android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
             android:foregroundServiceType="microphone" android:exported="false"/>
         <service android:name=".JarvisInteractionService" android:exported="true"
