@@ -37,8 +37,6 @@ Jarvis speaks aloud during night hours, even by mistake. This outranks every oth
 **Pushes and reminders at night.** Text only, on screen. Alarms are the exception: they ring through the phone's clock app (Jarvis already creates them with `SET_ALARM`), so Jarvis's own voice is not involved and nothing changes there.
 
 **Back-tap (Pixel only).** Android's own Quick Tap can open Jarvis. Jarvis shows a setup hint pointing the user to that system setting. No detection code.
-- Pixel: Android's own Quick Tap can open Jarvis. Jarvis only shows a setup hint pointing the user to that system setting. No detection code.
-
 
 ## Constraints from the existing code
 
@@ -57,7 +55,6 @@ Jarvis speaks aloud during night hours, even by mistake. This outranks every oth
 - **Push notification sound** belongs to the system. Night mode governs only Jarvis's own voice (`PcmPlayer`, `TtsSpeaker`).
 - **Widget taps** open the app visibly, which Android allows.
 - **Trigger defaults** (not yet confirmed by the user): wake word on. Onboarding shows the wake-word choice once for new and existing users; the settings page can change it later.
-
 
 ## Left to the builder
 
