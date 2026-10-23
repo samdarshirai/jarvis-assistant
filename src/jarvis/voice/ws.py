@@ -9,6 +9,7 @@ from langgraph.types import Command
 from starlette.websockets import WebSocket
 
 from jarvis.agent.graph import turn_replies
+from jarvis.llm import MemoryContextError
 from jarvis.tenant import UnknownUser, thread_config
 from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.voice import protocol as P
@@ -108,13 +109,15 @@ class VoiceSession:
             await coro
         except asyncio.CancelledError:
             raise
+        except MemoryContextError as error:
+            await self._failed(str(error))
         except Exception:
             await self._failed()
 
-    async def _failed(self) -> None:
+    async def _failed(self, text: str = FAIL_TEXT) -> None:
         log.error("voice turn failed")
-        await self.send("error", message=FAIL_TEXT)
-        await self._say([FAIL_TEXT])
+        await self.send("error", message=text)
+        await self._say([text])
         with contextlib.suppress(Exception):  # buttons may be gone: re-offer a still-pending confirmation
             state = await self.graph.aget_state(self.cfg)
             if state.interrupts:

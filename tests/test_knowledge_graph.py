@@ -88,14 +88,17 @@ async def test_no_memories_means_no_block():
     assert "<memory>" not in provider._models["fast"].seen[1][0].content
 
 
-async def test_a_failing_memory_load_does_not_break_the_turn():
+async def test_a_failing_memory_load_stops_before_the_router():
+    from jarvis.llm import MemoryContextError
+
     def boom():
         raise RuntimeError("db down")
 
     g, provider = graph({"fast": [AIMessage("chat"), AIMessage("hello")]}, memories=boom, recording=("fast",))
-    out = await g.ainvoke(hello(), CFG)
-    assert out["messages"][-1].content == "hello"
-    assert "<memory>" not in provider._models["fast"].seen[1][0].content
+    before = len(provider._models["fast"].seen)
+    with pytest.raises(MemoryContextError):
+        await g.ainvoke(hello(), CFG)
+    assert len(provider._models["fast"].seen) == before
 
 
 async def test_graph_without_memories_still_works():

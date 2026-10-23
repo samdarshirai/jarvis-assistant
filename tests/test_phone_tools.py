@@ -14,9 +14,9 @@ def reg():
     return r
 
 
-def test_five_phone_tools_none_need_confirmation():
+def test_phone_tools_none_need_confirmation():
     r = reg()
-    assert {t.name for t in r.for_domain("phone")} == {"set_alarm", "set_timer", "start_navigation", "compose_message", "call_contact"}
+    assert {t.name for t in r.for_domain("phone")} == {"set_alarm", "set_timer", "start_navigation", "compose_message", "call_contact", "clarify_contact"}
     assert not any(r.needs_confirm(t.name) for t in r.for_domain("phone"))
 
 

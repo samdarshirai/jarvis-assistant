@@ -14,7 +14,7 @@ from langgraph.types import Command, interrupt
 
 from jarvis.agent.domains import DOMAINS
 from jarvis.google.auth import ReauthRequired
-from jarvis.memory import memory_block
+from jarvis.llm import MemoryAwareProvider
 from jarvis.timeutil import now_local
 
 log = logging.getLogger(__name__)
@@ -61,7 +61,7 @@ KEYWORDS = {
 }
 
 
-# Sub-category of the phone domain: a message that starts with "call" is a call, so the call tool is forced
+# Direct call commands require a call or contact-clarification tool rather than a verbal promise.
 CALL_COMMAND = re.compile(
     r"^\W*(?:(?:hey|ok),?\s+jarvis\W+)?(?:please\s+)?(?:(?:can|could|would|will) you\s+)?(?:please\s+)?call\b", re.IGNORECASE)
 
@@ -143,6 +143,9 @@ def turn_replies(messages: list) -> list[str]:
 
 
 def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None):
+    if memories is not None and not isinstance(provider, MemoryAwareProvider):
+        provider = MemoryAwareProvider(provider, memories)
+
     async def record(*args, **kw) -> None:
         # An audit failure must never break the turn or hide an executed side effect.
         try:
@@ -167,21 +170,21 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         tools = registry.lc_tools(dom.name) or None
         last = state["messages"][-1]
         telegram = (config.get("configurable") or {}).get("channel") == "telegram"
-        # phone -> call: the model only fills in the contact, it cannot answer in words instead of calling
+        # A direct call must produce an action or clarification, rather than only claiming to call.
         force_call = (dom.name == "phone" and not telegram and registry.get("call_contact") is not None
                       and isinstance(last, HumanMessage) and isinstance(last.content, str)
                       and bool(CALL_COMMAND.match(last.content)))
-        llm = provider.get(tier, tools, tool_choice="call_contact") if force_call else provider.get(tier, tools)
-        rows: list[dict] = []
-        if memories is not None:
-            try:
-                rows = await asyncio.to_thread(memories)
-            except Exception:
-                log.exception("memory load failed")
+        if force_call:
+            # A direct call must dispatch a tool, but conflicting memories must allow a question.
+            choices = [t for t in tools if t.name in ("call_contact", "clarify_contact")]
+            choice = "required" if registry.get("clarify_contact") else "call_contact"
+            llm = provider.get(tier, choices, tool_choice=choice)
+        else:
+            llm = provider.get(tier, tools)
         spoken = VOICE_NOTE if voice and dom.name in ("notes", "research") else ""
         if (config.get("configurable") or {}).get("channel") == "telegram" and dom.name == "phone":
             spoken += TELEGRAM_NO_CALLS_NOTE
-        system = SystemMessage(f"{dom.prompt}{spoken}{memory_block(rows)}\nCurrent local time: "
+        system = SystemMessage(f"{dom.prompt}{spoken}\nCurrent local time: "
                                f"{now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
         reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
         return {"messages": [reply], "approved": False}
@@ -198,6 +201,9 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
 
     async def gate(state: State) -> Command[Literal["tools", "reject"]]:
         calls = state["messages"][-1].tool_calls
+        if state["domains"][state["idx"]] == "phone" and registry.get("clarify_contact") and any(
+                c["name"] == "clarify_contact" for c in calls):
+            return Command(goto="tools", update={"approved": False})
         seen = untrusted_seen(state)
         pending = [c for c in calls if gated(c["name"], seen)]
         if not pending:
@@ -239,7 +245,25 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         ran_untrusted = False
         dones: list[str] = []  # one wrap-up line per clean confirmed write; used only if every call in the step has one
         seen = untrusted_seen(state)
-        for c in state["messages"][-1].tool_calls:
+        calls = state["messages"][-1].tool_calls
+        clarifications = [c for c in calls if c["name"] == "clarify_contact"]
+        if clarifications and "clarify_contact" in allowed:
+            # Clarification wins over any simultaneous action; nothing in this batch is dispatched.
+            tool = registry.get("clarify_contact")
+            try:
+                kwargs = tool.args_schema(**clarifications[0]["args"]).model_dump()
+                question = tool.fn(**kwargs)["question"]
+            except (ValueError, KeyError):
+                question = "Which person or saved contact do you mean?"
+            for c in calls:
+                result = {"question": question} if c["name"] == "clarify_contact" else {"error": "Not executed: clarify the contact first."}
+                await record("tool", c["name"], args=c["args"], result=result,
+                             confirmation="not_required" if c["name"] == "clarify_contact" else "blocked")
+                out.append(ToolMessage(json.dumps(result), tool_call_id=c["id"]))
+            out.append(AIMessage(question))
+            # End the turn, including any later domains, while waiting for the user's answer.
+            return {"messages": out, "client_actions": actions, "idx": len(state["domains"]) - 1}
+        for c in calls:
             tool = registry.get(c["name"])
             confirm = gated(c["name"], seen)
             result: object

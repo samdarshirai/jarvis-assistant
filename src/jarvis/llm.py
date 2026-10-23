@@ -6,12 +6,60 @@ from urllib.parse import urlsplit
 
 import httpx
 from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.messages import SystemMessage
+from langchain_core.runnables import RunnableLambda
 from langchain_openai import ChatOpenAI
 
+from jarvis.memory import memory_block
 from jarvis.web import FetchError, _check_url, _pin
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 TIMEOUT = 60.0
+
+
+class MemoryContextError(RuntimeError):
+    """Memory could not be loaded; no request may proceed without its context."""
+
+    def __init__(self):
+        super().__init__("Saved memories are temporarily unavailable. Please try again.")
+
+
+class MemoryAwareProvider:
+    """One user's provider with fresh memory context on every invocation, before model fallbacks."""
+
+    def __init__(self, provider, memories):
+        self.provider, self.memories = provider, memories
+
+    def __getattr__(self, name):
+        return getattr(self.provider, name)
+
+    def get(self, tier, tools=None, tool_choice=None):
+        llm = (self.provider.get(tier, tools, tool_choice=tool_choice) if tool_choice
+               else self.provider.get(tier, tools))
+
+        async def context(messages):
+            try:
+                rows = await asyncio.to_thread(self.memories)
+                block = memory_block(rows)
+            except Exception:
+                # Do not retain a database exception (which can contain personal data) in the chain.
+                failed = True
+            else:
+                failed = False
+            if failed:
+                raise MemoryContextError()
+            messages = list(messages)
+            if block:
+                if messages and isinstance(messages[0], SystemMessage) and isinstance(messages[0].content, str):
+                    messages[0] = messages[0].model_copy(update={"content": messages[0].content + block})
+                else:
+                    messages.insert(0, SystemMessage(block))
+            return messages
+
+        return RunnableLambda(context) | llm
+
+    async def aclose(self):
+        await self.provider.aclose()
 
 
 @dataclass(frozen=True)

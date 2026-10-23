@@ -8,7 +8,7 @@ CONFIRM = {"create_event", "update_event", "delete_event", "create_task", "compl
 NO_CONFIRM = {"list_events", "find_free_slots", "list_tasks", "search_emails", "read_email",
               "create_draft", "update_draft", "set_alarm", "set_timer", "start_navigation", "compose_message", "call_contact",
               "recall", "search_notes", "read_note", "list_notes", "web_search", "fetch_page",
-              "add_shopping_items", "list_shopping", "find_contact"}
+              "add_shopping_items", "list_shopping", "find_contact", "clarify_contact"}
 
 
 def registry():

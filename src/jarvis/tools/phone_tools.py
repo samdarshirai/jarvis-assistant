@@ -22,13 +22,18 @@ class NavigationArgs(BaseModel):
 
 class ComposeArgs(BaseModel):
     app: Literal["whatsapp", "sms"]
-    contact: str = Field(min_length=1, description="Contact name as the user said it; the phone resolves it")
+    contact: str = Field(min_length=1, description="Saved contact alias resolved from memories; otherwise the user's supplied name. The phone matches it.")
     text: str = Field(min_length=1)
 
 
 class CallArgs(BaseModel):
-    contact: str = Field(min_length=1, description="Contact name as the user said it; the phone resolves it")
+    contact: str = Field(min_length=1, description="Saved contact alias resolved from memories; otherwise the user's supplied name. The phone matches it.")
     last4: str | None = Field(None, pattern=r"^\d{4}$", description="Last four digits of the chosen number")
+
+
+class ClarifyContactArgs(BaseModel):
+    question: str = Field(min_length=1, max_length=500, pattern=r"\S",
+                          description="A short question asking the user to resolve conflicting or unclear contact mappings")
 
 
 def register_phone_tools(registry: Registry) -> None:
@@ -51,6 +56,9 @@ def register_phone_tools(registry: Registry) -> None:
     def call_contact(**kw):
         return queue("call_contact", **kw)
 
+    def clarify_contact(question):
+        return {"question": question}
+
     for name, desc, schema, fn in [
         ("set_alarm", "Set an alarm on the user's phone.", SetAlarmArgs, set_alarm),
         ("set_timer", "Start a countdown timer on the user's phone.", SetTimerArgs, set_timer),
@@ -59,5 +67,8 @@ def register_phone_tools(registry: Registry) -> None:
          ComposeArgs, compose_message),
         ("call_contact", "Call a contact by name on the user's phone: WhatsApp first, normal call if that is not "
          "possible. Pass last4 only after the user has chosen between several matches.", CallArgs, call_contact),
+        ("clarify_contact", "Ask which person or saved contact the user means when memories conflict or the mapping "
+         "is unclear. Queues no phone action. Use alone, instead of calling or composing a message.",
+         ClarifyContactArgs, clarify_contact),
     ]:
         registry.add(Tool(name=name, domain="phone", description=desc, args_schema=schema, fn=fn, needs_confirm=False))

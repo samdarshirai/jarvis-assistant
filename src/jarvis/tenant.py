@@ -13,7 +13,7 @@ from jarvis.google.auth import PgTokenStore, build_service
 from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
-from jarvis.llm import LLMProvider, creds_for
+from jarvis.llm import LLMProvider, MemoryAwareProvider, creds_for
 from jarvis.memory import MemoryStore
 from jarvis.notes import NoteStore
 from jarvis.proactive.store import ProactiveStore
@@ -81,7 +81,7 @@ class UserRuntime:
     tasks: TasksClient
     gmail: GmailClient
     registry: Registry
-    llm: LLMProvider | None
+    llm: MemoryAwareProvider | None
     graph: object | None  # the compiled LangGraph; None until the user sets an LLM key
     lock: asyncio.Lock
     tz: str
@@ -155,8 +155,8 @@ class Tenants:
         registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id)
         memories = MemoryStore(pool, user_id)
         creds = creds_for(secrets, s)
-        llm = self.llm_provider_factory(creds, audit) if creds else None
-        graph = build_graph(llm, registry, audit, self.saver, tz, memories=memories.all) if llm else None
+        llm = MemoryAwareProvider(self.llm_provider_factory(creds, audit), memories.all) if creds else None
+        graph = build_graph(llm, registry, audit, self.saver, tz) if llm else None
         return UserRuntime(user=user, secrets=secrets, audit=audit, memories=memories, notes=NoteStore(pool, user_id),
                            proactive=ProactiveStore(pool, user_id), calendar=CalendarClient(svc("calendar", "v3"), tz),
                            tasks=TasksClient(svc("tasks", "v1")), gmail=GmailClient(svc("gmail", "v1")),

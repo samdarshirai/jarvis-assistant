@@ -167,3 +167,18 @@ Prerequisites: phone paired, Contacts permission granted, CALL_PHONE granted for
 | 107 | Voice app connected (live session): Telegram "call Mom" | Same: a Telegram call request never calls, even with the voice app connected; Jarvis says calls can't be made from Telegram. Telegram alarms/timers/navigation still reach the phone |
 | 108 | Ask for a call while the screen is locked, from Android Auto, or via the wake word with the screen off | Either the call starts or nothing happens. Android's background-activity rules may block the launch silently, and there is no phone fallback in that case |
 | 109 | During rows 99 and 100, watch the moment the call connects | The "Asking your phone..." speech does not keep playing and the mic does not keep capturing into the connected call |
+
+## Memory-aware requests and contact aliases
+
+Not run on a real device yet. Use the configured LLM and a test contact whose call you are prepared to place.
+
+| Do | Expect |
+|----|--------|
+| Save and confirm two memories: "Ronali is my wife" and "My wife's contact is saved as Pogo". Have a contact saved as Pogo. Say "call my wife", then separately "call Ronali" | Both queue `call_contact` with `contact="Pogo"`; the phone matches Pogo and follows the existing WhatsApp/phone behavior |
+| Save a conflicting memory saying the wife's contact is saved as another name; ask "call my wife" | Jarvis asks which saved contact you mean; no phone action runs until you answer. Answering "Pogo" resolves this request without modifying memories |
+| Use an alias matching two phone contacts | Jarvis asks using names and last four digits; the retry retains the resolved alias and uses the selected digits |
+| Forget the contact-alias memory, then repeat a call request in a fresh conversation | The next LLM request no longer contains that memory; Jarvis uses the supplied name if no alias is known |
+| Ask from Telegram to call Ronali | No call runs; Jarvis directs you to voice in the app |
+| Trigger a morning brief or booking-email extraction with saved memories | The shared per-user provider includes the current memories. Email content remains untrusted and extraction keeps its existing schema |
+
+Automated tests additionally cover memory-load failures, per-user isolation, fresh loads between requests, and identical memory context across model fallbacks. API-key/model validation requests intentionally contain no memories.

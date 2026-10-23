@@ -9,6 +9,7 @@ from langgraph.types import Command
 from jarvis.agent.graph import turn_replies
 from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.google.auth import ReauthRequired
+from jarvis.llm import MemoryContextError
 from jarvis.tenant import auth_runtime, thread_config
 from jarvis.timeutil import now_local
 from jarvis.voice.ws import card_lines, is_tap_only
@@ -196,7 +197,7 @@ class AppService:
         cfg = thread_config(rt.user.id)
         try:
             result = await rt.graph.ainvoke(graph_input, cfg)
-        except Exception:
+        except Exception as error:
             log.error("graph run failed")
             card = None
             try:  # re-offer a still-pending confirmation so the owner is not locked out
@@ -204,7 +205,8 @@ class AppService:
                 card = self._card(interrupts[0]) if interrupts else None
             except Exception:
                 log.error("could not re-offer pending confirmation")
-            return {"reply": FAIL_TEXT, "card": card, "client_actions": []}
+            return {"reply": str(error) if isinstance(error, MemoryContextError) else FAIL_TEXT,
+                    "card": card, "client_actions": []}
         if result.get("__interrupt__"):
             return {"reply": None, "card": self._card(result["__interrupt__"][0]), "client_actions": []}
         return {"reply": "\n\n".join(turn_replies(result["messages"]) or [EMPTY_TEXT]), "card": None,

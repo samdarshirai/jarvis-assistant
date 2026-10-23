@@ -9,6 +9,7 @@ from telegram.error import TelegramError
 from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
 
 from jarvis.agent.graph import turn_replies
+from jarvis.llm import MemoryContextError
 from jarvis.tenant import UnknownUser, thread_config
 from jarvis.users import UserStore
 
@@ -108,6 +109,8 @@ class TelegramChannel:
         """Run the graph (the caller holds the lock). None means the run failed."""
         try:
             return await graph.ainvoke(graph_input, {**self.cfg, "configurable": {**self.cfg["configurable"], "channel": "telegram"}})
+        except MemoryContextError as error:
+            return {"memory_error": str(error)}
         except Exception:
             log.error("graph run failed")
             return None
@@ -116,8 +119,8 @@ class TelegramChannel:
         await chat.send_message(format_confirmation(it.value), reply_markup=keyboard(it.id))
 
     async def _reply(self, chat, graph, result) -> None:
-        if result is None:
-            await chat.send_message(FAIL_TEXT)
+        if result is None or result.get("memory_error"):
+            await chat.send_message(result["memory_error"] if result else FAIL_TEXT)
             try:  # buttons may be gone; re-offer a still-pending confirmation so the owner is not locked out
                 state = await graph.aget_state(self.cfg)
                 if state.interrupts:
