@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import re
 
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
@@ -21,6 +22,18 @@ TAP_ONLY = {"send_draft"}  # irreversible and third-party-facing: a spoken yes i
 TAP_TEXT = "I need you to tap Confirm on the screen to send it."
 STT_DOWN_TEXT = "Sorry, I can't hear you right now."
 WARN_TEXT = "Heads up, I came up with this after reading an email or a web page, so double-check it. "
+ACTION_RESULTS = {  # each names "the call" so the keyword router sends the turn to the phone domain
+    "ambiguous": "",
+    "not_found": "the call to {} failed: no contact with that name was found. Tell the user.",
+    "no_permission": "the call to {} was not made: the app has no permission to read contacts or place calls. Tell the user.",
+    "error": "the call to {} failed with an error. Tell the user.",
+}
+
+
+def _clean(name: str) -> str:
+    """Names come from the phone's contacts: only letters, digits, spaces and .'- reach the model."""
+    kept = "".join(c for c in name if c.isalnum() or c in " .'-")
+    return " ".join(kept.split())[:P.MAX_NAME_CHARS]
 
 
 def card_lines(payload: dict) -> list[str]:
@@ -185,6 +198,24 @@ class VoiceSession:
             return
         await self._say([text])
 
+    async def _action_result(self, m: dict) -> None:
+        contact, matches, status = m.get("contact"), m.get("matches", []), m.get("status")
+        ok = (m.get("action") == "call_contact" and status in ACTION_RESULTS
+              and isinstance(contact, str) and len(contact) <= P.MAX_CONTACT_CHARS
+              and isinstance(matches, list) and len(matches) <= P.MAX_MATCHES
+              and all(isinstance(x, dict) and isinstance(x.get("name"), str) and isinstance(x.get("last4"), str)
+                      and re.fullmatch(r"[0-9]{4}", x["last4"]) for x in matches))
+        if not ok:
+            await self.send("error", message="Bad action result.")
+            return
+        who = f"'{_clean(contact)}'"
+        if status == "ambiguous":
+            found = ", ".join(f"{_clean(x['name'])} ending {x['last4']}" for x in matches)
+            text = f"Phone result: the call to {who} matches {len(matches)} contacts: {found}. Ask which one."
+        else:
+            text = f"Phone result: {ACTION_RESULTS[status].format(who)}"
+        await self._utterance(text)
+
     async def _tap(self, m: dict) -> None:
         await self.set_state("thinking")
         decision = m.get("decision")
@@ -287,6 +318,8 @@ class VoiceSession:
             await self.set_state("listening")
         elif kind == "speak":
             await self._start(self._speak_text(m))
+        elif kind == "action_result":
+            await self._start(self._action_result(m))
         elif kind == "bye":
             return False
         else:

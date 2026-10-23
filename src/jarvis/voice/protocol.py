@@ -5,6 +5,9 @@ MAX_AUDIO_FRAME = 64 * 1024
 MAX_UTTERANCE_BYTES = 60 * SAMPLE_RATE * 2  # 60 s of 16-bit mono
 MAX_SPEAK_CHARS = 2000
 MAX_TEXT_FRAME = 64 * 1024  # control frames are tiny; the audio cap alone left text frames at the server's 16 MiB limit
+MAX_CONTACT_CHARS = 60  # action_result: the spoken contact name as the phone reports it
+MAX_NAME_CHARS = 40  # ...and what of a name reaches the model
+MAX_MATCHES = 10
 
 CLOSE_REPLACED = 4000
 CLOSE_UNAUTHORIZED = 4401
