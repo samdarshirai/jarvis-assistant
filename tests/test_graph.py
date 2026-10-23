@@ -1,3 +1,4 @@
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -761,10 +762,35 @@ async def test_telegram_call_contact_is_refused_and_never_queued():
         async def ainvoke(self, msgs, *a, **k):
             prompts.append(msgs[0].content)
             return await self.llm.ainvoke(msgs, *a, **k)
-    provider.get = lambda tier, tools=None: Spy(orig(tier, tools))
+    provider.get = lambda tier, tools=None, tool_choice=None: Spy(orig(tier, tools, tool_choice))
     g = build_graph(provider, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
     out = await g.ainvoke(say(), {"configurable": {"thread_id": "t", "channel": "telegram"}, "recursion_limit": 40})
     tm = [m for m in out["messages"] if isinstance(m, ToolMessage)][0]
     assert "Calls cannot be placed from Telegram" in tm.content
     assert out["client_actions"] == []
     assert any("you cannot place calls from here" in p for p in prompts)
+
+
+async def forced_choices(text, scripts, cfg=CFG):
+    reg = Registry()
+    reg.add(call_tool())
+    provider = FakeProvider({"fast": scripts})
+    g = build_graph(provider, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
+    await g.ainvoke(say(text), cfg)
+    return provider.choices
+
+
+@pytest.mark.parametrize("text", ["Call Pogo on WhatsApp.", "please call Mom", "Hey Jarvis, call Mom", "Could you call Dan Smith?"])
+async def test_a_call_command_forces_call_contact_on_the_first_step_only(text):
+    assert await forced_choices(text, [call("call_contact"), AIMessage("ok")]) == ["call_contact", None]
+
+
+@pytest.mark.parametrize("text", ["Set a timer for five minutes then call mom", "what's the call on this", "did Mom call",
+                                  'Phone result: the call to "Mom" matches 2 contacts: "Mom" ending 4521'])
+async def test_other_phone_requests_leave_the_tool_choice_to_the_model(text):
+    assert await forced_choices(text, [AIMessage("fine")]) == [None]
+
+
+async def test_telegram_never_forces_a_call():
+    cfg = {"configurable": {"thread_id": "t", "channel": "telegram"}, "recursion_limit": 40}
+    assert await forced_choices("Call Mom", [AIMessage("no calls here")], cfg) == [None]

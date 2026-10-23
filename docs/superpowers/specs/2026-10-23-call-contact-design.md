@@ -84,3 +84,7 @@ Required changes:
 - Add calling to the router's `phone` description and an example ("call Mom" -> phone).
 - When Jarvis has just asked "which one?" or "say the name again" for a call, the user's next reply must route to `phone`, either via the router prompt seeing that question in its 6-message window or by remembering the last domain. The builder picks; add a test that "the second one" and "ending 8830" after a which-one question reach `phone`.
 - Update the `phone` domain prompt in `src/jarvis/agent/domains.py` to list `call_contact` and the ask-then-retry behaviour; `test_wiring.py` pins tool names and tags.
+
+## Sub-category: forcing the tool (added after the first device try)
+
+On the first device try the model replied "I asked the phone to call ..." without calling `call_contact` (no tool row in the audit log), so the phone never received an instruction. Classification now has two levels: domain `phone`, then sub-category `call` when the message starts with "call" (optionally after "please", "hey Jarvis", "could you"). For that sub-category the first agent step runs with `tool_choice` set to `call_contact`; the model only fills in `contact`. Not forced: Telegram, messages that do not start with "call" ("set a timer then call mom", "did Mom call"), the "Phone result" follow-up turns, and the user's answer to "which one?" (model-driven; revisit if it skips the tool too).

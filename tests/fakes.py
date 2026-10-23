@@ -30,8 +30,10 @@ class FakeChat(BaseChatModel):
 class FakeProvider:
     def __init__(self, scripts: dict[str, list[AIMessage]]):
         self._models = {tier: FakeChat(script=s) for tier, s in scripts.items()}
+        self.choices: list = []  # the tool_choice each agent step asked for
 
-    def get(self, tier, tools=None):
+    def get(self, tier, tools=None, tool_choice=None):
+        self.choices.append(tool_choice)
         return self._models[tier]
 
 

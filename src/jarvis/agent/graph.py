@@ -61,6 +61,11 @@ KEYWORDS = {
 }
 
 
+# Sub-category of the phone domain: a message that starts with "call" is a call, so the call tool is forced
+CALL_COMMAND = re.compile(
+    r"^\W*(?:(?:hey|ok),?\s+jarvis\W+)?(?:please\s+)?(?:(?:can|could|would|will) you\s+)?(?:please\s+)?call\b", re.IGNORECASE)
+
+
 def keyword_domain(text: str) -> list[str] | None:
     """Skip the router LLM call when exactly one domain's keywords appear; anything unclear goes to the router."""
     if re.search(r"\binvit", text, re.IGNORECASE):  # inviting needs the gmail contact lookup: let the router plan it
@@ -159,7 +164,14 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         # voice turns trade some tool-calling strength for latency; gmail and research stay strong (untrusted content)
         voice = (config.get("configurable") or {}).get("voice")
         tier = "fast" if voice and dom.name not in ("gmail", "research") else dom.tier
-        llm = provider.get(tier, registry.lc_tools(dom.name) or None)
+        tools = registry.lc_tools(dom.name) or None
+        last = state["messages"][-1]
+        telegram = (config.get("configurable") or {}).get("channel") == "telegram"
+        # phone -> call: the model only fills in the contact, it cannot answer in words instead of calling
+        force_call = (dom.name == "phone" and not telegram and registry.get("call_contact") is not None
+                      and isinstance(last, HumanMessage) and isinstance(last.content, str)
+                      and bool(CALL_COMMAND.match(last.content)))
+        llm = provider.get(tier, tools, tool_choice="call_contact") if force_call else provider.get(tier, tools)
         rows: list[dict] = []
         if memories is not None:
             try:

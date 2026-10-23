@@ -169,6 +169,7 @@ class LLMProvider:
     async def aclose(self) -> None:
         await self.http.aclose()
 
-    def get(self, tier: str, tools: list | None = None):
-        models = [m.bind_tools(tools) if tools else m for m in self._models(tier)]
+    def get(self, tier: str, tools: list | None = None, tool_choice: str | None = None):
+        choice = {"tool_choice": tool_choice} if tool_choice else {}  # forces that one tool to be called
+        models = [m.bind_tools(tools, **choice) if tools else m for m in self._models(tier)]
         return models[0].with_fallbacks(models[1:]) if len(models) > 1 else models[0]
