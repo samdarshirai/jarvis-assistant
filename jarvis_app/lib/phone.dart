@@ -108,7 +108,8 @@ Future<String?> runCall(
     if (hits.isEmpty) return outcome('not_found', 'No contact named $name.');
     if (hits.length > 1) {
       return outcome('ambiguous', 'Several contacts match $name.', [
-        for (final h in hits) {'name': h.name, 'last4': h.last4}
+        // the server accepts at most 10 matches, each last4 exactly 4 digits (pad short numbers here only)
+        for (final h in hits.take(10)) {'name': h.name, 'last4': h.last4.padLeft(4, '0')}
       ]);
     }
     final hit = hits.single;

@@ -71,6 +71,20 @@ void main() {
     });
   });
 
+  test('ambiguity reports at most 10 matches', () async {
+    final many = [for (var i = 0; i < 12; i++) ContactMatch('$i', 'Mom', ['+1 555 000 ${1000 + i}'])];
+    await call(many);
+    expect((reports.single['matches'] as List).length, 10);
+  });
+
+  test('reported last4 is always four digits', () async {
+    await call([const ContactMatch('1', 'Mom', ['112']), _mom]);
+    expect(reports.single['matches'], [
+      {'name': 'Mom', 'last4': '0112'},
+      {'name': 'Mom', 'last4': '4521'},
+    ]);
+  });
+
   test('last4 narrows to one and calls (null last4 is unset)', () async {
     await call([_mom, _momWork], action: {'type': 'call_contact', 'contact': 'Mom', 'last4': '9911'});
     expect(waCalls, ['2']);

@@ -25,7 +25,7 @@ WARN_TEXT = "Heads up, I came up with this after reading an email or a web page,
 ACTION_RESULTS = {  # each names "the call" so the keyword router sends the turn to the phone domain
     "ambiguous": "",
     "not_found": "the call to {} failed: no contact with that name was found. Tell the user.",
-    "no_permission": "the call to {} was not made: the app has no permission to read contacts or place calls. Tell the user.",
+    "no_permission": "the call to {} was not made: the app has no permission to read contacts. Tell the user.",
     "error": "the call to {} failed with an error. Tell the user.",
 }
 

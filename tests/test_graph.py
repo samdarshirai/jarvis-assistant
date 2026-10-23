@@ -568,6 +568,9 @@ def test_keyword_domain_only_when_exactly_one_domain_matches():
     assert keyword_domain("set an alarm for 6") == ["phone"]
     assert keyword_domain("add that booking email to my calendar") is None  # two domains: router decides
     assert keyword_domain("call Mom") == ["phone"]
+    assert keyword_domain("remind me to call Mom") is None  # a reminder is a task, not a call
+    assert keyword_domain("remind me to call Mom tomorrow") is None
+    assert keyword_domain("call Mom") == ["phone"]
     assert keyword_domain("calendar for Monday") == ["calendar"]
     assert keyword_domain("call the dentist and add it to my calendar") is None
     assert keyword_domain("yes, do it") is None

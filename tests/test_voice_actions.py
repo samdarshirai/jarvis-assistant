@@ -117,6 +117,11 @@ def test_other_statuses_start_a_turn(monkeypatch, status, word):
     assert humans[0].startswith("Phone result") and word in humans[0]
 
 
+def test_no_permission_names_contacts_only(monkeypatch):
+    humans, _ = run_result(monkeypatch, result(status="no_permission", matches=[]))
+    assert "contacts" in humans[0] and "place calls" not in humans[0]
+
+
 @pytest.mark.parametrize("bad", [
     {"status": "weird"}, {"action": "open_door"}, {"contact": 5}, {"contact": "x" * 61}, {"matches": "no"},
     {"matches": [{"name": "A", "last4": "1234"}] * 11}, {"matches": [{"name": "A", "last4": "12a4"}]},

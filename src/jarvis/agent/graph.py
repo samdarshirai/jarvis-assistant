@@ -61,6 +61,8 @@ def keyword_domain(text: str) -> list[str] | None:
     """Skip the router LLM call when exactly one domain's keywords appear; anything unclear goes to the router."""
     if re.search(r"\binvit", text, re.IGNORECASE):  # inviting needs the gmail contact lookup: let the router plan it
         return None
+    if re.search(r"\bremind", text, re.IGNORECASE):  # "remind me to call X" is a task, not a call: let the router plan it
+        return None
     hits = [d for d, rx in KEYWORDS.items() if re.search(rx, text, re.IGNORECASE)]
     return hits if len(hits) == 1 else None
 
