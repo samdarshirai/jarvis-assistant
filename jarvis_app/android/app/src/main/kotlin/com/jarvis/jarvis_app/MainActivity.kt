@@ -11,6 +11,7 @@ import android.media.AudioTrack
 import android.net.Uri
 import android.os.Build
 import android.provider.ContactsContract
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -61,7 +62,7 @@ class MainActivity : FlutterActivity() {
             } else result.notImplemented()
         }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "jarvis/whatsapp").setMethodCallHandler { call, result ->
-            if (call.method == "call") result.success(whatsappCall(call.arguments as String)) else result.notImplemented()
+            if (call.method == "call") result.success((call.arguments as? String)?.let(::whatsappCall) ?: false) else result.notImplemented()
         }
     }
 
@@ -75,7 +76,7 @@ class MainActivity : FlutterActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             true
         }
-    } catch (e: Exception) { false }
+    } catch (e: Exception) { Log.w("WhatsAppCall", "call failed", e); false }
 
     private fun whatsappCallRow(contactId: String): Long? =
         contentResolver.query(
