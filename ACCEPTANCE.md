@@ -150,3 +150,18 @@ Prerequisites: `docs/DEPLOY-RAILWAY.md` "Multi-user prerequisites" done (redirec
 | Use a 320px-wide screen, visible keyboard and 200% text | Forms and primary actions scroll into view without overflow; input labels and show/hide button labels are accessible |
 
 These checks include real-device Google consent and provider calls; widget tests cover routing, saves, retries and layout with simulated API responses.
+
+# Manual acceptance (call a contact)
+
+Prerequisites: phone paired, Contacts permission granted, CALL_PHONE granted for the direct-call rows. Spec: `docs/superpowers/specs/2026-10-23-call-contact-design.md`. Not run yet. Row 99 is the first to run: it checks the WhatsApp mechanism itself.
+
+| # | Do | Expect |
+|---|----|--------|
+| 99 | "Call <a contact who uses WhatsApp>" | A WhatsApp VOICE call starts (not a chat). If it opens a chat instead, tell the developer: the mechanism is wrong on this phone |
+| 100 | "Call <a contact without WhatsApp>" with CALL_PHONE granted, then with it denied | Granted: the phone call starts directly. Denied: the dialer opens with the number filled in |
+| 101 | "Call <name>" where two contacts share the name | Jarvis speaks both with the last 4 digits of each; "the second one" calls the second |
+| 102 | Same, then answer "ending 8830" (use a real last 4) | Calls the contact whose number ends in those digits |
+| 103 | Mumble or garble the name ("call blorpt") | Jarvis asks to repeat or spell it; answering retries; after 2 asks it gives up |
+| 104 | Turn Contacts permission off, then "call Mom" | Jarvis says it needs contacts permission; nothing is dialled |
+| 105 | Telegram: "call Mom" | Reply says the phone action was not run; no call starts |
+| 106 | Any successful call request | The spoken reply only says it asked the phone; it never claims the call was placed |

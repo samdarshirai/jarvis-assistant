@@ -8,7 +8,7 @@ const capabilities = <(String, List<String>)>[
   ('Calendar', ['List events', 'Find free slots', 'Create, update, delete events (asks to confirm; also in the Calendar screen)']),
   ('Tasks & shopping', ['List, create, complete, reschedule tasks', 'Add, list, complete shopping items']),
   ('Email', ['Search and read email', 'Find contacts', 'Draft, edit and send email (asks to confirm)']),
-  ('Phone', ['Set alarms', 'Set timers', 'Start navigation', 'Compose messages']),
+  ('Phone', ['Set alarms', 'Set timers', 'Start navigation', 'Compose messages', 'Call a contact (WhatsApp or phone)']),
   ('Memory', ['Remember things', 'Forget things', 'Recall what you told me']),
   ('Notes', ['Create, append, delete notes', 'Search, read, list notes']),
   ('Research', ['Search the web', 'Read web pages']),
