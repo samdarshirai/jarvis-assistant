@@ -67,10 +67,11 @@ jobs:
           keytool -list -keystore "$RUNNER_TEMP/upload.jks" -storepass "$KEYSTORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null \
             || { echo "::error::keystore unreadable: re-check ANDROID_KEYSTORE_B64, _PASSWORD and _KEY_ALIAS"; exit 1; }
 
-      - run: flutter build apk --release --dart-define-from-file=jarvis.env.json --build-number=${{ github.run_number }}
-      # Play wants a bundle, not an APK. Same signing, same build number.
+      # The run number is both the versionCode and the visible version name (1.0.<run>), so Settings shows which build is installed.
+      - run: flutter build apk --release --dart-define-from-file=jarvis.env.json --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}
+      # Play wants a bundle, not an APK. Same signing, same build number and name.
       - if: env.PLAY_JSON != ''
-        run: flutter build appbundle --release --dart-define-from-file=jarvis.env.json --build-number=${{ github.run_number }}
+        run: flutter build appbundle --release --dart-define-from-file=jarvis.env.json --build-number=${{ github.run_number }} --build-name=1.0.${{ github.run_number }}
 
       - name: Upload to Play (internal track)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.PLAY_JSON != ''
