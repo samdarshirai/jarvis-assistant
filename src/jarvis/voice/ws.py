@@ -32,7 +32,7 @@ ACTION_RESULTS = {  # each names "the call" so the keyword router sends the turn
 
 def _clean(name: str) -> str:
     """Names come from the phone's contacts: only letters, digits, spaces and .'- reach the model."""
-    kept = "".join(c for c in name if c.isalnum() or c in " .'-")
+    kept = "".join(c for c in name if c.isalnum() or c in ".'-" or c.isspace())  # split() below turns any whitespace into one space
     return " ".join(kept.split())[:P.MAX_NAME_CHARS]
 
 
@@ -198,23 +198,23 @@ class VoiceSession:
             return
         await self._say([text])
 
-    async def _action_result(self, m: dict) -> None:
+    @staticmethod
+    def _action_text(m: dict) -> str | None:
+        """The utterance for a valid action_result frame, else None. Sync, so a bad frame never touches the running turn."""
         contact, matches, status = m.get("contact"), m.get("matches", []), m.get("status")
         ok = (m.get("action") == "call_contact" and status in ACTION_RESULTS
-              and isinstance(contact, str) and len(contact) <= P.MAX_CONTACT_CHARS
+              and isinstance(contact, str) and len(contact) <= P.MAX_CONTACT_CHARS and _clean(contact)
               and isinstance(matches, list) and len(matches) <= P.MAX_MATCHES
+              and (status != "ambiguous" or len(matches) >= 2)
               and all(isinstance(x, dict) and isinstance(x.get("name"), str) and isinstance(x.get("last4"), str)
                       and re.fullmatch(r"[0-9]{4}", x["last4"]) for x in matches))
         if not ok:
-            await self.send("error", message="Bad action result.")
-            return
-        who = f"'{_clean(contact)}'"
+            return None
+        who = f'"{_clean(contact)}"'  # _clean always strips ", so a name cannot close its own quotes
         if status == "ambiguous":
-            found = ", ".join(f"{_clean(x['name'])} ending {x['last4']}" for x in matches)
-            text = f"Phone result: the call to {who} matches {len(matches)} contacts: {found}. Ask which one."
-        else:
-            text = f"Phone result: {ACTION_RESULTS[status].format(who)}"
-        await self._utterance(text)
+            found = ", ".join(f'"{_clean(x["name"])}" ending {x["last4"]}' for x in matches)
+            return f"Phone result: the call to {who} matches {len(matches)} contacts: {found}. Ask which one."
+        return f"Phone result: {ACTION_RESULTS[status].format(who)}"
 
     async def _tap(self, m: dict) -> None:
         await self.set_state("thinking")
@@ -319,7 +319,11 @@ class VoiceSession:
         elif kind == "speak":
             await self._start(self._speak_text(m))
         elif kind == "action_result":
-            await self._start(self._action_result(m))
+            text = self._action_text(m)
+            if text is None:
+                await self.send("error", message="Bad action result.")
+            else:
+                await self._start(self._utterance(text))
         elif kind == "bye":
             return False
         else:
