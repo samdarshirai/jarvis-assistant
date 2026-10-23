@@ -95,9 +95,23 @@ void main() {
       expect(matchContacts('Mom', [c], last4: '6666').length, 1);
     });
     test('last4 matching nothing is empty', () => expect(matchContacts('Mom', [mom1], last4: '0000'), isEmpty));
-    test('prefix beats substring', () {
+    test('prefix only, never substring', () {
       const salmon = ContactMatch('6', 'Salmon', ['555 000 1111']);
-      expect(matchContacts('Mo', [salmon, mom1]).map((c) => c.name), ['Mom']);
+      const moritz = ContactMatch('8', 'Moritz', ['555 000 2222']);
+      expect(matchContacts('Mo', [salmon, mom1, moritz]).map((c) => c.name), ['Mom', 'Moritz']);
+    });
+    test('Dan does not match Jordan', () {
+      const jordan = ContactMatch('9', 'Jordan', ['555 000 3333']);
+      expect(matchContacts('Dan', [jordan]), isEmpty);
+    });
+    test('Smith does not match Dan Smith', () {
+      const dan = ContactMatch('10', 'Dan Smith', ['555 000 4444']);
+      expect(matchContacts('Smith', [dan]), isEmpty);
+      expect(matchContacts('Dan', [dan]).length, 1);
+    });
+    test('exact beats prefix', () {
+      const work = ContactMatch('11', 'Mom Work', ['555 000 5555']);
+      expect(matchContacts('Mom', [work, mom1]).map((c) => c.id), ['1']);
     });
     test('empty name is empty', () => expect(matchContacts('  ', [mom1]), isEmpty));
     test('contact without numbers ignored', () => expect(matchContacts('Mom', [const ContactMatch('7', 'Mom', [])]), isEmpty));

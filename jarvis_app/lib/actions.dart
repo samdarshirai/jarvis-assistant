@@ -75,13 +75,13 @@ String normalizeNumber(String raw) {
   return d.length > 10 ? d.substring(d.length - 10) : d;
 }
 
-/// Contacts for a spoken name (same tiers as [pickContact]), narrowed by last 4 digits, duplicates collapsed.
+/// Contacts for a spoken name (exact, then prefix of the start of the name; no substring), narrowed by last 4 digits, duplicates collapsed.
 List<ContactMatch> matchContacts(String name, List<ContactMatch> contacts, {String? last4}) {
   final n = name.trim().toLowerCase();
   if (n.isEmpty) return [];
   final withNumbers = contacts.where((c) => c.numbers.isNotEmpty).toList();
   var hits = <ContactMatch>[];
-  for (final test in <bool Function(String)>[(s) => s == n, (s) => s.startsWith(n), (s) => s.contains(n)]) {
+  for (final test in <bool Function(String)>[(s) => s == n, (s) => s.startsWith(n)]) {
     hits = withNumbers.where((c) => test(c.name.toLowerCase())).toList();
     if (hits.isNotEmpty) break;
   }
