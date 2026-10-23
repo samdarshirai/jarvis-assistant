@@ -8,7 +8,9 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.net.Uri
 import android.os.Build
+import android.provider.ContactsContract
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -58,7 +60,29 @@ class MainActivity : FlutterActivity() {
                 result.success(am.nextAlarmClock?.triggerTime)
             } else result.notImplemented()
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "jarvis/whatsapp").setMethodCallHandler { call, result ->
+            if (call.method == "call") result.success(whatsappCall(call.arguments as String)) else result.notImplemented()
+        }
     }
+
+    /** Starts WhatsApp's voice call for a contact via its call row in the contacts provider; false when there is no row, no WhatsApp, or the launch fails. */
+    private fun whatsappCall(contactId: String): Boolean = try {
+        val dataId = whatsappCallRow(contactId)
+        if (dataId == null) false else {
+            startActivity(Intent(Intent.ACTION_VIEW)
+                .setDataAndType(Uri.parse("content://com.android.contacts/data/$dataId"), WA_CALL_MIME)
+                .setPackage("com.whatsapp")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            true
+        }
+    } catch (e: Exception) { false }
+
+    private fun whatsappCallRow(contactId: String): Long? =
+        contentResolver.query(
+            ContactsContract.Data.CONTENT_URI, arrayOf(ContactsContract.Data._ID),
+            "${ContactsContract.Data.MIMETYPE} = ? AND ${ContactsContract.Data.CONTACT_ID} = ?",
+            arrayOf(WA_CALL_MIME, contactId), null,
+        )?.use { if (it.moveToFirst()) it.getLong(0) else null }
 
     // Reply audio as voice-call usage: the phone's echo canceller only uses call playback as its echo reference (music playback is not cancelled on Samsung).
     private val speaker = Executors.newSingleThreadExecutor()
@@ -121,5 +145,8 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    companion object { const val EXTRA_START = "jarvis_start" }
+    companion object {
+        const val EXTRA_START = "jarvis_start"
+        const val WA_CALL_MIME = "vnd.android.cursor.item/vnd.com.whatsapp.voip.call"
+    }
 }
