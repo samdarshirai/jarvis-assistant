@@ -27,7 +27,8 @@ abstract class Player {
 
 abstract class PhoneActions {
   /// Runs one client action; returns an error message, or null on success.
-  Future<String?> run(Map<String, dynamic> action);
+  /// [report] sends an outcome the server must hear about; without it such outcomes come back as errors.
+  Future<String?> run(Map<String, dynamic> action, {void Function(Map<String, dynamic> result)? report});
 }
 
 abstract class Speaker {
@@ -215,7 +216,7 @@ class SessionController extends ChangeNotifier {
     for (final a in actions) {
       String? err;
       try {
-        err = await phone.run(a);
+        err = await phone.run(a, report: (r) => _socket?.sendJson('action_result', r));
       } catch (e) {
         err = 'Could not run ${a['type']}: $e';
       }

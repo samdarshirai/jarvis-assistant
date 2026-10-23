@@ -61,9 +61,11 @@ class FakePhone implements PhoneActions {
   final ran = <Map<String, dynamic>>[];
   final errors = <String, String>{}; // action type -> error to return
   final throwOn = <String>{}; // action types whose run() throws
+  Map<String, dynamic>? reportWith; // handed to report when run() is called
   @override
-  Future<String?> run(Map<String, dynamic> action) async {
+  Future<String?> run(Map<String, dynamic> action, {void Function(Map<String, dynamic> result)? report}) async {
     ran.add(action);
+    if (reportWith != null) report?.call(reportWith!);
     if (throwOn.contains(action['type'])) throw StateError('boom');
     return errors[action['type']];
   }

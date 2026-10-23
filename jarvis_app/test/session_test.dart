@@ -210,6 +210,25 @@ void main() {
     });
   });
 
+  test('a phone action result is sent to the server', () {
+    fakeAsync((a) {
+      final r = Rig();
+      final result = {
+        'action': 'call_contact',
+        'status': 'ambiguous',
+        'contact': 'Mom',
+        'matches': [{'name': 'Mom', 'last4': '4521'}, {'name': 'Mom Work', 'last4': '9911'}],
+      };
+      r.phone.reportWith = result;
+      r.c.start();
+      a.flushMicrotasks();
+      r.socket.ctrl.add(const ClientActionsEvent([{'type': 'call_contact', 'contact': 'Mom'}]));
+      a.flushMicrotasks();
+      expect(r.socket.sent.last.$1, 'action_result');
+      expect(r.socket.sent.last.$2, result);
+    });
+  });
+
   test('server error frames are surfaced', () {
     fakeAsync((a) {
       final r = Rig();
