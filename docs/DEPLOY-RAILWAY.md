@@ -76,5 +76,4 @@ The phone app still needs its own Firebase config (`google-services.json`) built
 
 ## Other options
 
-- Throwaway test on a Railway VM: `docs/RAILWAY-VM.md`.
 - Own server with TLS: `docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build`.
