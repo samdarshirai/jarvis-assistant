@@ -27,7 +27,7 @@ The owner wants to say "call Mom" and have the phone place the call. Today Jarvi
 ## Behaviour
 
 1. A new phone tool `call_contact(contact: str, last4: str | None)` queues a `call_contact` client action, like the other phone tools. `contact` is the name as spoken. `last4` is set only on the second attempt, after the user has chosen.
-2. The phone resolves the name against its contacts (exact match, then prefix of the start of the display name, case-insensitive; never a substring, so "Dan" does not match "Jordan") and collects **every** phone number of each matching contact. If `last4` is given, only numbers ending in those digits are considered.
+2. The phone resolves the name against its contacts (exact match, then whole words anywhere in the display name, case-insensitive; never part of a word, so "Dan" and "Smith" both match "Dan Smith" but "Dan" does not match "Jordan" and "Smith" does not match "Smitherson") and collects **every** phone number of each matching contact. If `last4` is given, only numbers ending in those digits are considered.
 3. Distinct matches are distinct contacts with different numbers. One contact with several numbers (mobile + home) is one match: try its numbers in contact order for the WhatsApp step below, and use the first for the phone fallback. Two entries that normalise to the same number are one match.
 4. **Exactly one match:** try WhatsApp, then phone (see Channels).
 5. **More than one match:** do not call. Report the matches back to the server as `{name, last4}` pairs. Jarvis asks which one, speaking the last 4 digits. The user's answer leads to a second `call_contact` with `last4` set to the chosen digits (and the same `contact`).

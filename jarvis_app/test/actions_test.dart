@@ -95,21 +95,30 @@ void main() {
       expect(matchContacts('Mom', [c], last4: '6666').length, 1);
     });
     test('last4 matching nothing is empty', () => expect(matchContacts('Mom', [mom1], last4: '0000'), isEmpty));
-    test('prefix only, never substring', () {
+    test('whole words only: never part of a word', () {
       const salmon = ContactMatch('6', 'Salmon', ['555 000 1111']);
       const moritz = ContactMatch('8', 'Moritz', ['555 000 2222']);
-      expect(matchContacts('Mo', [salmon, mom1, moritz]).map((c) => c.name), ['Mom', 'Moritz']);
+      expect(matchContacts('Mo', [salmon, mom1, moritz]), isEmpty);
+      expect(matchContacts('Mom', [salmon, mom1, moritz]).map((c) => c.name), ['Mom']);
     });
-    test('Dan does not match Jordan', () {
+    test('Dan matches Dan Smith but not Jordan', () {
       const jordan = ContactMatch('9', 'Jordan', ['555 000 3333']);
+      const dan = ContactMatch('10', 'Dan Smith', ['555 000 4444']);
+      expect(matchContacts('Dan', [jordan, dan]).map((c) => c.name), ['Dan Smith']);
       expect(matchContacts('Dan', [jordan]), isEmpty);
     });
-    test('Smith does not match Dan Smith', () {
+    test('Smith matches the second word of Dan Smith but not Smitherson', () {
       const dan = ContactMatch('10', 'Dan Smith', ['555 000 4444']);
-      expect(matchContacts('Smith', [dan]), isEmpty);
-      expect(matchContacts('Dan', [dan]).length, 1);
+      const smitherson = ContactMatch('12', 'Smitherson', ['555 000 6666']);
+      expect(matchContacts('Smith', [smitherson, dan]).map((c) => c.name), ['Dan Smith']);
+      expect(matchContacts('Smith', [smitherson]), isEmpty);
     });
-    test('exact beats prefix', () {
+    test('a spoken full name matches its words in order', () {
+      const dan = ContactMatch('10', 'Dan Smith', ['555 000 4444']);
+      expect(matchContacts('dan smith', [dan]).length, 1);
+      expect(matchContacts('smith dan', [dan]), isEmpty);
+    });
+    test('exact beats a word match', () {
       const work = ContactMatch('11', 'Mom Work', ['555 000 5555']);
       expect(matchContacts('Mom', [work, mom1]).map((c) => c.id), ['1']);
     });

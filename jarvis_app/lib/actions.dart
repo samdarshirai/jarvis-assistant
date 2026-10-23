@@ -70,18 +70,29 @@ class ContactMatch {
 
 String _digits(String s) => s.replaceAll(RegExp(r'\D'), '');
 
+List<String> _words(String s) => s.split(RegExp(r'[^\p{L}\p{N}]+', unicode: true)).where((w) => w.isNotEmpty).toList();
+
+/// True when [words] holds [spoken] as a run of whole words.
+bool _hasWords(List<String> words, List<String> spoken) {
+  for (var i = 0; i + spoken.length <= words.length; i++) {
+    if (spoken.indexed.every((e) => words[i + e.$1] == e.$2)) return true;
+  }
+  return false;
+}
+
 String normalizeNumber(String raw) {
   final d = _digits(raw);
   return d.length > 10 ? d.substring(d.length - 10) : d;
 }
 
-/// Contacts for a spoken name (exact, then prefix of the start of the name; no substring), narrowed by last 4 digits, duplicates collapsed.
+/// Contacts for a spoken name (exact, then whole words anywhere in the name: "Dan" and "Smith" match "Dan Smith", never "Jordan" or "Smitherson"), narrowed by last 4 digits, duplicates collapsed.
 List<ContactMatch> matchContacts(String name, List<ContactMatch> contacts, {String? last4}) {
   final n = name.trim().toLowerCase();
   if (n.isEmpty) return [];
   final withNumbers = contacts.where((c) => c.numbers.isNotEmpty).toList();
   var hits = <ContactMatch>[];
-  for (final test in <bool Function(String)>[(s) => s == n, (s) => s.startsWith(n)]) {
+  final spoken = _words(n);
+  for (final test in <bool Function(String)>[(s) => s == n, (s) => _hasWords(_words(s), spoken)]) {
     hits = withNumbers.where((c) => test(c.name.toLowerCase())).toList();
     if (hits.isNotEmpty) break;
   }

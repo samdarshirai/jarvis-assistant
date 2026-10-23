@@ -161,7 +161,7 @@ Prerequisites: phone paired, Contacts permission granted, CALL_PHONE granted for
 | 100 | "Call <a contact without WhatsApp>" with CALL_PHONE granted, then with it denied | Granted: the phone call starts directly. Denied: the dialer opens with the number filled in |
 | 101 | "Call <name>" where two contacts share the name | Jarvis speaks both with the last 4 digits of each; "the second one" calls the second |
 | 102 | Same, then answer "ending 8830" (use a real last 4) | Calls the contact whose number ends in those digits |
-| 103 | Mumble or garble the name ("call blorpt"); also say a name that is only the middle or end of a contact (e.g. "call Smith" with only "Dan Smith") | Jarvis asks to repeat or spell it (names match only the start of a contact's name); answering retries; after 2 asks it gives up |
+| 103 | Mumble or garble the name ("call blorpt"); also say part of a word (e.g. "call Dan" with only "Jordan", "call Smith" with only "Smitherson"); "call Smith" with "Dan Smith" must work | Jarvis asks to repeat or spell it for the garbled name and the part-of-a-word names (a name matches whole words only, so "Smith" and "Dan" both reach "Dan Smith"); answering retries; after 2 asks it gives up |
 | 104 | Turn Contacts permission off, then "call Mom" | Jarvis says it needs contacts permission; nothing is dialled |
 | 105 | Voice app NOT connected: Telegram "call Mom" | Jarvis says calls can't be made from Telegram and to ask by voice in the app; no call starts |
 | 106 | Any successful call request | The spoken reply only says it asked the phone; it never claims the call was placed |
