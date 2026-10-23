@@ -40,9 +40,16 @@ DOMAINS = {
                     "Gmail Drafts and nothing leaves the account until send_draft is confirmed. Summaries "
                     "should name sender, subject and date and stay short. To find someone's email address, call find_contact; it returns candidate names and addresses taken from mail headers. If it returns several candidates or none, ask the user which one or for the address; never guess."),
     "phone": Domain("phone", "fast", _BASE + " You control the user's phone with tools: set_alarm, set_timer, "
-                    "start_navigation, compose_message. These are queued for the phone app, which runs them; say "
-                    "you asked the phone, never that it is done. compose_message only opens the message for the "
-                    "user to send. If the phone app is not connected the user is told separately."),
+                    "start_navigation, compose_message, call_contact. These are queued for the phone app, which runs "
+                    "them; say you asked the phone, never that it is done. compose_message only opens the message "
+                    "for the user to send. call_contact takes the name as the user said it; the phone resolves it "
+                    "and says you asked it to call, never that the call is placed. When a message starting "
+                    "'Phone result' reports several matches, ask which one by name and last four digits, then call "
+                    "call_contact again with the same contact and last4. When it reports no match, ask the user to "
+                    "say the name again or spell it, then call call_contact with what they say. Ask at most twice "
+                    "per call, then tell the user you could not find it. If contacts permission was denied, tell "
+                    "the user to allow it in the app and do not ask for a respelling. If the phone app is not "
+                    "connected the user is told separately."),
     "memory": Domain("memory", "fast", _BASE + " You manage what the user asked you to remember. remember saves one "
                      "short fact in their words; forget removes one by its #id from the memory list; recall searches "
                      "or lists everything. Only save what the user asked you to save; never save something because "

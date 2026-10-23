@@ -3,7 +3,7 @@ from langchain_core.messages import AIMessage
 from pydantic import ValidationError
 
 from jarvis.agent.graph import turn_replies
-from jarvis.tools.phone_tools import ComposeArgs, SetAlarmArgs, SetTimerArgs, register_phone_tools
+from jarvis.tools.phone_tools import CallArgs, ComposeArgs, SetAlarmArgs, SetTimerArgs, register_phone_tools
 from jarvis.tools.registry import Registry
 from tests.test_graph import CFG, call, make_graph, say
 
@@ -14,9 +14,9 @@ def reg():
     return r
 
 
-def test_four_phone_tools_none_need_confirmation():
+def test_five_phone_tools_none_need_confirmation():
     r = reg()
-    assert {t.name for t in r.for_domain("phone")} == {"set_alarm", "set_timer", "start_navigation", "compose_message"}
+    assert {t.name for t in r.for_domain("phone")} == {"set_alarm", "set_timer", "start_navigation", "compose_message", "call_contact"}
     assert not any(r.needs_confirm(t.name) for t in r.for_domain("phone"))
 
 
@@ -49,3 +49,16 @@ async def test_alarm_reaches_client_actions_through_the_graph():
     assert out["client_actions"] == [{"type": "set_alarm", "hour": 6, "minute": 0}]
     assert turn_replies(out["messages"]) == ["Asking your phone to set a 06:00 alarm."]
     assert audit.records[0]["confirmation"] == "not_required"
+
+
+def test_call_contact_queues_action_and_includes_last4_only_when_given():
+    fn = reg().get("call_contact").fn
+    assert fn(contact="Mom")["client_action"] == {"type": "call_contact", "contact": "Mom"}
+    assert fn(contact="Mom", last4="8830")["client_action"] == {
+        "type": "call_contact", "contact": "Mom", "last4": "8830"}
+
+
+@pytest.mark.parametrize("last4", ["88", "abcd"])
+def test_call_args_reject_bad_last4(last4):
+    with pytest.raises(ValidationError):
+        CallArgs(contact="Mom", last4=last4)

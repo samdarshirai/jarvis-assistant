@@ -23,12 +23,14 @@ ROUTER_PROMPT = (
     "Classify the user's latest request. Reply with ONLY a comma-separated list, in the order the work "
     "must happen, chosen from: calendar, tasks, gmail, phone, memory, notes, research, chat. Use 'chat' alone "
     "when no calendar, task, email, phone, memory, notes or research work is needed. calendar = anything about "
-    "the user's schedule, day, agenda, plans, availability or what is on or coming up; tasks = to-dos, deadlines and the shopping list; gmail = mail; phone = alarms, timers, navigation, texting; memory = remembering or forgetting "
+    "the user's schedule, day, agenda, plans, availability or what is on or coming up; tasks = to-dos, deadlines and the shopping list; gmail = mail; phone = alarms, timers, navigation, texting, calling; memory = remembering or forgetting "
     "facts about the user; notes = the user's own notes; research = looking something up on the web. Examples: "
     "'what does my day look like' -> calendar; 'am I free Friday' -> calendar; 'what do I have to do' -> tasks; "
     "'add that booking email to my calendar' -> gmail, calendar; 'set an alarm for 6 and put gym at 7 in my "
     "calendar' -> calendar, phone; 'research robot vacuums and save a note' -> research, notes; "
-    "'remember I like window seats' -> memory; 'add milk and eggs to my shopping list' -> tasks; 'invite Raj to lunch Friday at 12' -> gmail, calendar."
+    "'remember I like window seats' -> memory; 'add milk and eggs to my shopping list' -> tasks; 'invite Raj to lunch Friday at 12' -> gmail, calendar; "
+    "'call Mom' -> phone. If the assistant's last message asked which contact to call, or to repeat or spell a "
+    "name, the user's reply is phone."
 )
 HISTORY = 40
 VOICE_NOTE = ("\nThis reply will be spoken aloud: use two or three short sentences, name sources by site, and never "
@@ -48,7 +50,7 @@ KEYWORDS = {
     "calendar": r"calendar|event|meeting|appointment|free slot|schedule|agenda|my day|am i free",
     "tasks": r"\btasks?\b|to-?do|shopping|grocer",
     "gmail": r"e-?mail|inbox|gmail|draft",
-    "phone": r"alarm|timer|navigat|directions",
+    "phone": r"alarm|timer|navigat|directions|\bcall(?:ing)?\b",
     "memory": r"\bremember\b|\bforget (?:that|about|what)\b|what do you know about me",
     "notes": r"\bnotes?\b|jot down|note down",
     "research": r"search (?:the )?(?:web|online|internet)|look (?:it |that |this )?up|\bresearch\b|\bgoogle (?:it|that|this|for)\b",

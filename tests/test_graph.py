@@ -567,6 +567,9 @@ def test_keyword_domain_only_when_exactly_one_domain_matches():
     assert keyword_domain("Move my meeting to 5") == ["calendar"]
     assert keyword_domain("set an alarm for 6") == ["phone"]
     assert keyword_domain("add that booking email to my calendar") is None  # two domains: router decides
+    assert keyword_domain("call Mom") == ["phone"]
+    assert keyword_domain("calendar for Monday") == ["calendar"]
+    assert keyword_domain("call the dentist and add it to my calendar") is None
     assert keyword_domain("yes, do it") is None
     assert keyword_domain("What does my day look like?") == ["calendar"]
 
@@ -719,3 +722,13 @@ def test_invite_requests_skip_the_keyword_shortcut_and_the_prompts_explain_the_l
     assert keyword_domain("Move my meeting to 5") == ["calendar"]
     assert "invite" in ROUTER_PROMPT and "gmail, calendar" in ROUTER_PROMPT
     assert "find_contact" in DOMAINS["gmail"].prompt
+
+
+async def test_router_prompt_tells_model_a_which_contact_reply_is_phone():
+    prov = FakeProvider({"fast": []})
+    SEEN.clear()
+    prov._models["fast"] = RecChat(script=[AIMessage("phone"), AIMessage("ok")])
+    g = build_graph(prov, Registry(), MemoryAudit(), InMemorySaver(), "Europe/Berlin")
+    await g.ainvoke({"messages": [AIMessage("Which one, ending 4521 or 8830?"), HumanMessage("the second one")]}, CFG)
+    router = [m for m in SEEN[0] if m.type == "system"][0].content
+    assert "asked which contact to call" in router and "'call Mom' -> phone" in router

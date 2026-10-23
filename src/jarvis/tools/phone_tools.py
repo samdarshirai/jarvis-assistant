@@ -26,6 +26,11 @@ class ComposeArgs(BaseModel):
     text: str = Field(min_length=1)
 
 
+class CallArgs(BaseModel):
+    contact: str = Field(min_length=1, description="Contact name as the user said it; the phone resolves it")
+    last4: str | None = Field(None, pattern=r"^\d{4}$", description="Last four digits of the chosen number")
+
+
 def register_phone_tools(registry: Registry) -> None:
     def queue(type_: str, **args) -> dict:
         # nothing runs on the server: the voice app executes the action as an Android intent
@@ -43,11 +48,16 @@ def register_phone_tools(registry: Registry) -> None:
     def compose_message(**kw):
         return queue("compose_message", **kw)
 
+    def call_contact(**kw):
+        return queue("call_contact", **kw)
+
     for name, desc, schema, fn in [
         ("set_alarm", "Set an alarm on the user's phone.", SetAlarmArgs, set_alarm),
         ("set_timer", "Start a countdown timer on the user's phone.", SetTimerArgs, set_timer),
         ("start_navigation", "Start Google Maps navigation on the user's phone.", NavigationArgs, start_navigation),
         ("compose_message", "Open a WhatsApp or SMS message, pre-filled, for the user to send. Never sends it.",
          ComposeArgs, compose_message),
+        ("call_contact", "Call a contact by name on the user's phone: WhatsApp first, normal call if that is not "
+         "possible. Pass last4 only after the user has chosen between several matches.", CallArgs, call_contact),
     ]:
         registry.add(Tool(name=name, domain="phone", description=desc, args_schema=schema, fn=fn, needs_confirm=False))
