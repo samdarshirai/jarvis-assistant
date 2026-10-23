@@ -244,11 +244,11 @@ void main() {
       final r = Rig();
       r.c.start();
       a.flushMicrotasks();
-      r.socket.ctrl.add(const ErrorEvent('Add your Deepgram key in Settings to enable voice', needsSetup: true));
+      r.socket.ctrl.add(const ErrorEvent('Voice is unavailable right now', needsSetup: true));
       r.socket.ctrl.close();
       a.flushMicrotasks();
-      expect(r.speaker.said, ['Add your Deepgram key in Settings to enable voice']);
-      expect((r.c.phase, r.c.error), (Phase.idle, 'Add your Deepgram key in Settings to enable voice'));
+      expect(r.speaker.said, ['Voice is unavailable right now']);
+      expect((r.c.phase, r.c.error), (Phase.idle, 'Voice is unavailable right now'));
     });
   });
 

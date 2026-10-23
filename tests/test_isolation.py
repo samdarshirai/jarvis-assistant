@@ -315,8 +315,6 @@ def env(pool, monkeypatch, caplog):
                                                         "api_key": KEYS[who]["llm"], "model_fast": f"{who}/fast",
                                                         "model_strong": f"{who}/strong"})
             assert r.status_code == 200, r.text
-            for which in ("deepgram", "tavily"):
-                assert c.put(f"/settings/{which}", headers=h, json={"api_key": KEYS[who][which]}).status_code == 200
         ns.h = lambda who: {"Authorization": f"Bearer {ns.tok[who]}"}
         ns.portal = c.portal
         ns.tenants = c.app.state.tenants
@@ -466,7 +464,7 @@ def test_interrupt_ids_do_not_cross_users(env):
     assert sorted(rows(env, "SELECT user_id, text FROM memories")) == [(env.a, "A owns a red bike"), (env.b, "B owns a blue car")]
 
 
-def test_voice_uses_only_the_callers_deepgram_key_and_thread(env):
+def test_voice_uses_the_operators_deepgram_key_and_the_callers_thread(env):
     for who in ("b", "a"):
         env.voice_keys.clear()
         CALLS.clear()
@@ -476,7 +474,7 @@ def test_voice_uses_only_the_callers_deepgram_key_and_thread(env):
             ping(ws)
             until_state(ws, "speaking")
             until_state(ws, "listening")
-        assert env.voice_keys == [("stt", KEYS[who]["deepgram"]), ("tts", KEYS[who]["deepgram"])]
+        assert env.voice_keys == [("stt", OP["deepgram"]), ("tts", OP["deepgram"])]
         assert CALLS and {k for k, _ in CALLS} == {KEYS[who]["llm"]}
         rt = env.portal.call(env.tenants.get, uid(env, who))
         state = env.portal.call(rt.graph.aget_state, thread_config(uid(env, who)))
@@ -508,10 +506,9 @@ def test_me_shows_only_the_callers_own_data(env):
     for who in ("a", "b"):
         me = env.c.get("/me", headers=env.h(who)).json()
         assert me["email"] == f"{who}@example.com"
-        assert me["setup"] == {"google": True, "llm": True, "deepgram": True, "tavily": True}
+        assert me["setup"] == {"google": True, "llm": True}
         assert me["keys"] == {"llm_base_url": f"https://llm-{who}.example.com/v1", "llm_key_last4": KEYS[who]["llm"][-4:],
-                              "model_fast": f"{who}/fast", "model_strong": f"{who}/strong",
-                              "deepgram_last4": KEYS[who]["deepgram"][-4:], "tavily_last4": KEYS[who]["tavily"][-4:]}
+                              "model_fast": f"{who}/fast", "model_strong": f"{who}/strong"}
     assert env.c.get("/me", headers=env.h("b")).json()["tz"] == "Asia/Kolkata"
 
 
@@ -539,7 +536,6 @@ def test_secrets_absent_from_all_responses_logs_and_audit(env):
         r = c.put("/settings/llm", headers=h, json={"base_url": f"https://down-{who}.example.com/v1",
                                                     "api_key": KEYS[who]["llm"], "model_fast": "m/f"})
         assert r.status_code == 422 and r.json()["error"] == "unreachable"
-        c.put(f"/settings/deepgram", headers=h, json={"api_key": KEYS[who]["deepgram"]})
         run_job(env, "mail")
         run_job(env, "mail")
     env.c.put("/settings/llm", headers=env.h("a"), json={"base_url": "https://llm-a.example.com/v1",
@@ -561,8 +557,7 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("GET", "/notes", None), ("GET", "/notes/1", None), ("POST", "/chat", {"text": "hi"}),
           ("POST", "/chat/confirm", {"interrupt_id": "i", "decision": "yes"}), ("GET", "/me", None),
           ("PUT", "/me", {"tz": "UTC"}), ("PUT", "/settings/llm", {"base_url": "https://x.example.com/v1", "api_key": "k"}),
-          ("PUT", "/settings/deepgram", {"api_key": "k"}), ("PUT", "/settings/tavily", {"api_key": "k"}),
-          ("DELETE", "/settings/deepgram", None), ("DELETE", "/settings/tavily", None), ("GET", "/dashboard", None),
+          ("GET", "/dashboard", None),
           ("PUT", "/device/fcm", {"token": "fcm-x"})]
 PUBLIC = {"/", "/privacy", "/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}
@@ -630,7 +625,7 @@ def test_operator_env_keys_unused_by_friend_requests(env):
                 read(ws)
     assert e.value.code == 4403
     me = c.get("/me", headers=h).json()
-    assert me["setup"] == {"google": True, "llm": False, "deepgram": False, "tavily": False}
+    assert me["setup"] == {"google": True, "llm": False}
     rt = env.portal.call(env.tenants.get, uid_c)
     assert rt.llm is None and rt.graph is None and rt.secrets == {}
     run_job(env, "mail")
@@ -654,13 +649,13 @@ def test_operator_env_keys_unused_by_friend_requests(env):
                                                          "api_key": KEYS[who]["llm"], "model_fast": f"{who}/fast",
                                                          "model_strong": f"{who}/strong"})
     env.portal.call(env.tenants.get, uid_c)
-    ops = set(OP.values())
+    ops = {OP["llm"]}
     assert set(FakeLLM.made) == {KEYS["a"]["llm"], KEYS["b"]["llm"]}
     assert {k for k, _ in CALLS} == {KEYS["a"]["llm"], KEYS["b"]["llm"]}
-    assert {k for _, k in env.voice_keys} == {KEYS["a"]["deepgram"], KEYS["b"]["deepgram"]}
-    assert sorted(env.web_search_keys) == sorted([KEYS["a"]["tavily"], KEYS["b"]["tavily"]])  # C: no web key at all
+    assert {k for _, k in env.voice_keys} == {OP["deepgram"]}  # Deepgram and Tavily are the operator's, shared
+    assert set(env.web_search_keys) == {OP["tavily"]}
     assert {auth for _, _, auth in env.net.connections} == {f"Bearer {KEYS['a']['llm']}", f"Bearer {KEYS['b']['llm']}"}
-    assert not ops & set(FakeLLM.made + [k for _, k in env.voice_keys] + env.web_search_keys)
+    assert not ops & set(FakeLLM.made)  # the operator's LLM key is never a user's
     # the owner's copy of the env keys stays the owner's
     assert SecretStore(env.pool, FERNET).all(env.owner)["llm_key"] == OP["llm"]
 

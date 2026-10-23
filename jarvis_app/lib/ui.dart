@@ -44,7 +44,7 @@ class SessionScreen extends StatelessWidget {
       controller.start(speakText: text);
     } else {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Add your Deepgram key in Settings > API keys to enable voice.')));
+          content: Text('Voice is unavailable right now.')));
     }
   }
 
@@ -189,7 +189,7 @@ class SessionScreen extends StatelessWidget {
           right: 0,
           bottom: 20,
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Text(voiceReady ? 'Say "Hey Jarvis"' : 'Add a Deepgram key in Settings to enable voice',
+            Text(voiceReady ? 'Say "Hey Jarvis"' : 'Voice is unavailable right now',
                 style: const TextStyle(fontSize: 12, color: mutedText)),
             const SizedBox(height: 8),
             Row(mainAxisAlignment: MainAxisAlignment.center, children: [

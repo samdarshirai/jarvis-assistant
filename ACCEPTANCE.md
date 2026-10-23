@@ -116,7 +116,7 @@ Server-only check without the phone: `python -m jarvis.voice.client wss://<host>
 
 # Manual acceptance (multi-tenant BYOK)
 
-Prerequisites: `docs/DEPLOY-RAILWAY.md` "Multi-user prerequisites" done (redirect URI, scopes, In production, `JARVIS_OWNER_EMAIL`, APK built with `--dart-define-from-file=jarvis.env.json`). Add the friend: `python -m jarvis.users add friend@gmail.com`. Needs a fresh phone (or cleared app data), a friend Google account and AI, Deepgram and Tavily API keys. Not run yet.
+Prerequisites: `docs/DEPLOY-RAILWAY.md` "Multi-user prerequisites" done (redirect URI, scopes, In production, `JARVIS_OWNER_EMAIL`, APK built with `--dart-define-from-file=jarvis.env.json`). Add the friend: `python -m jarvis.users add friend@gmail.com`. Needs a fresh phone (or cleared app data), a friend Google account and an AI API key (Deepgram and Tavily are the server's, set once). Not run yet.
 
 | # | Do | Expect |
 |---|----|--------|
@@ -128,7 +128,7 @@ Prerequisites: `docs/DEPLOY-RAILWAY.md` "Multi-user prerequisites" done (redirec
 | 89 | Try a key with no credit, then a model id that does not exist, then an unreachable host | `out_of_credit`, `model_not_found` (names the failing model), `unreachable` / `bad_url`; each blocks saving |
 | 90 | Enter a valid key and models | AI key tested and saved; input cleared; `/me` shows only the last 4 characters; Continue moves to the first missing key and the app stays locked until all keys are saved |
 | 91 | Chat: "what's on my calendar today", "add task buy bread" + Confirm | Answers from the friend's calendar, not the owner's; confirm card and audit row under the friend (`SELECT DISTINCT user_id FROM audit_log` shows separate ids) |
-| 92 | Open an existing install with no Deepgram key | Required Deepgram setup opens; chat and voice stay locked. Save the key, then required Tavily key; Ready shows saved status. Start using Jarvis rechecks `/me.setup` and opens the app only if all required flags are true |
+| 92 | Open an existing install with no AI key | AI key setup opens; chat and voice stay locked. Save the key; Ready shows saved status. Start using Jarvis rechecks `/me.setup` and opens the app only if the flags are true |
 | 93 | Owner and friend use their phones at once, each asking "my calendar" and "what do you remember" | Each sees only their own data; a friend with no LLM key gets 409 `needs_setup`, never the operator's key |
 | 94 | `python -m jarvis.users disable friend@gmail.com` while the friend is chatting | The next request returns 401; the app returns to sign-in on its NEXT launch or when Settings is reopened (not instantly mid-chat); the owner is unaffected. `enable`, then sign in again works |
 | 95 | Friend: trigger a conflict alert or wait for the brief | Arrives as a push on the friend's phone only; nothing reaches the owner's Telegram. Mail watch is owner-only for now (no Undo in the app): a booking email to the friend adds NO calendar event |
@@ -141,11 +141,10 @@ Prerequisites: `docs/DEPLOY-RAILWAY.md` "Multi-user prerequisites" done (redirec
 | Do | Expect |
 |----|--------|
 | Cancel Google consent, reject access, or fail to launch the browser; then retry | Stay on Connect Google, show useful inline feedback and rejection hint, allow retry; never open the app |
-| Try each of the eight saved/missing combinations of AI, Deepgram and Tavily, after sign-in and after restart | Resume the first missing key in AI → Deepgram → Tavily order; retain saved credentials. Only all three saved opens the app |
-| Fail an AI test or Deepgram/Tavily save, then retry | Inline error, Continue blocked for a missing key, retry succeeds; no duplicate submissions or navigation during saves |
-| Save each required key | AI says tested and saved; Deepgram/Tavily say Saved only. Secret input clears; saved status is masked. Each form allows replacing the key |
+| Try each saved/missing combination of the AI key, after sign-in and after restart | Resume the AI step when missing; retain saved credentials. Saved opens the app |
+| Fail an AI test, then retry | Inline error, Continue blocked, retry succeeds; no duplicate submissions or navigation during saves |
+| Save the AI key | Says tested and saved. Secret input clears; saved status is masked. The form allows replacing the key |
 | Use Back between key screens | Completed labels remain visible; saved keys do not need reentry; no Skip action |
-| Remove Deepgram or Tavily in Settings | Immediately return to its setup step, stop voice entry points and prevent app access until the required key is saved again |
 | Remove a key elsewhere before pressing Start using Jarvis, or fail `/me` | Recheck fails closed: return to missing setup or show retry; never open the app with incomplete/unconfirmed setup |
 | Use a 320px-wide screen, visible keyboard and 200% text | Forms and primary actions scroll into view without overflow; input labels and show/hide button labels are accessible |
 

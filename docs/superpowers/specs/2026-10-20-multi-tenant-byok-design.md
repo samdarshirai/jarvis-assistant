@@ -2,6 +2,8 @@
 
 Status: draft for approval. Date: 2026-10-20. Owner: Samdarshi.
 
+> **Superseded (2026-10-23):** Deepgram and Tavily are no longer per-user keys. They are operator-set (`JARVIS_DEEPGRAM_API_KEY`, `JARVIS_TAVILY_API_KEY`) and shared by all users; users bring only the LLM key. Per-user Deepgram/Tavily storage, `/settings/deepgram|tavily` and their onboarding steps were removed. Read the references to them below as historical.
+
 ## Intent and why
 
 Jarvis today is a single-owner assistant: one Google token, one OpenRouter key from `.env`, one conversation thread (`"owner"`), one Telegram chat, one set of memories and notes. The owner wants a handful of friends (hand-picked, not the public) to use the same hosted backend and the Android app, each on their own Google account and **their own API keys**, without the owner paying for their LLM, voice or search usage.

@@ -36,7 +36,7 @@ class ErrorEvent extends ServerEvent {
 
 /// Backend `{"type":"error","code":...}` before a 4403 close, in plain words.
 const setupMessages = {
-  'needs_deepgram': 'Add your Deepgram key in Settings to enable voice',
+  'needs_deepgram': 'Voice is unavailable right now',
   'needs_llm': 'Add your AI key in Settings to talk to Jarvis',
 };
 

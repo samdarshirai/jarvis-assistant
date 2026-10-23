@@ -23,12 +23,13 @@ class FakeLLM:
         self.closed = True
 
 
-def settings():
-    return SimpleNamespace(fernet_key=KEY, models=lambda tier: [f"{tier}-model"])
+def settings(tavily=""):
+    return SimpleNamespace(fernet_key=KEY, tavily_api_key=tavily, models=lambda tier: [f"{tier}-model"])
 
 
 def tenants(pool, **kw):
-    return Tenants(pool, settings(), InMemorySaver(), google_service_factory=lambda name, version, store, key: object(),
+    tavily = kw.pop("tavily", "")
+    return Tenants(pool, settings(tavily), InMemorySaver(), google_service_factory=lambda name, version, store, key: object(),
                    llm_provider_factory=FakeLLM, **kw)
 
 
@@ -94,11 +95,13 @@ async def test_tavily_key_selects_tavily_search(pool, uids, monkeypatch):
     made = []
     monkeypatch.setattr("jarvis.tenant.WebSearch", lambda key: made.append(key) or SimpleNamespace())
     monkeypatch.setattr("jarvis.tenant.DdgSearch", lambda: made.append("ddg") or SimpleNamespace())
-    SecretStore(pool, KEY).put(a, "tavily_key", "tv-a")
-    t = tenants(pool)
+    t = tenants(pool, tavily="tv-op")
     await t.get(a)
     await t.get(b)
-    assert made == ["tv-a", "ddg"]
+    assert made == ["tv-op", "tv-op"]  # one operator key for everyone
+    made.clear()
+    await tenants(pool).get(a)
+    assert made == ["ddg"]
 
 
 async def test_auth_runtime(pool, uids):

@@ -108,15 +108,10 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
           if (widget.api != null) ListTile(
             leading: const Icon(Icons.key, color: amber),
             title: const Text('API keys', style: TextStyle(color: cream)),
-            subtitle: const Text('AI provider, voice and web search', style: TextStyle(color: mutedText)),
+            subtitle: const Text('AI provider', style: TextStyle(color: mutedText)),
             onTap: () async {
-              var removed = false;
-              await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => KeysScreen(
-                api: widget.api!, onRequiredKeyRemoved: () {
-                  removed = true;
-                  widget.onReturn?.call();
-                })));
-              if (!removed) widget.onReturn?.call();
+              await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => KeysScreen(api: widget.api!)));
+              widget.onReturn?.call();
             },
           ),
           if (widget.prefs != null)

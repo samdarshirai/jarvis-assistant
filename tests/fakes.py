@@ -110,6 +110,7 @@ class FakeTenants:
 
     def __init__(self, runtimes: dict | None = None):
         self.runtimes: dict[int, SimpleNamespace] = runtimes if runtimes is not None else {}
+        self.s = SimpleNamespace(deepgram_api_key="", tavily_api_key="")
         self._users = {uid: rt.user for uid, rt in self.runtimes.items()}
         self.users = SimpleNamespace(get=self._users.get)
         self._locks: dict[int, asyncio.Lock] = {

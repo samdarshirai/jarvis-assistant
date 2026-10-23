@@ -15,7 +15,6 @@ from jarvis.tenant import auth_runtime
 from jarvis.users import SecretStore, UserStore, _put_secret
 from jarvis.web import embedded_v4
 
-OPTIONAL = {"deepgram": "deepgram_key", "tavily": "tavily_key"}
 MAX_MODELS = 5  # per tier: each one is a paid test call on every PUT
 _model_id = re.compile(r"[A-Za-z0-9._:/@+-]{1,100}")
 _numeric_label = re.compile(r"0x[0-9a-f]*|[0-9]+")  # no real TLD looks like this; inet_aton-style IPs (2130706433, 0x7f.1) do
@@ -70,11 +69,9 @@ class Keys:
         user, sec = UserStore(pool).get(uid), self._store().all(uid)
         creds = creds_for(sec, self.tenants.s)
         return {"email": user.email, "tz": user.tz, "display_name": user.display_name,
-                "setup": {"google": PgTokenStore(pool, uid).get(PROVIDER) is not None, "llm": creds is not None,
-                          "deepgram": bool(sec.get("deepgram_key")), "tavily": bool(sec.get("tavily_key"))},
+                "setup": {"google": PgTokenStore(pool, uid).get(PROVIDER) is not None, "llm": creds is not None},
                 "keys": {"llm_base_url": creds and creds.base_url, "llm_key_last4": last4(sec.get("llm_key")),
-                         "model_fast": creds and ",".join(creds.fast), "model_strong": creds and ",".join(creds.strong),
-                         "deepgram_last4": last4(sec.get("deepgram_key")), "tavily_last4": last4(sec.get("tavily_key"))}}
+                         "model_fast": creds and ",".join(creds.fast), "model_strong": creds and ",".join(creds.strong)}}
 
     async def me(self, rt) -> dict:
         return await asyncio.to_thread(self._me, rt.user.id)
@@ -148,11 +145,3 @@ class Keys:
 
         await asyncio.to_thread(save)
         return await self._changed(rt, "set_llm", {"base_url": url, "fast": creds.fast, "strong": creds.strong})
-
-    async def set_key(self, rt, which: str, api_key: str) -> dict:
-        await asyncio.to_thread(self._store().put, rt.user.id, OPTIONAL[which], api_key)
-        return await self._changed(rt, f"set_{which}", {})
-
-    async def delete_key(self, rt, which: str) -> dict:
-        await asyncio.to_thread(self._store().delete, rt.user.id, OPTIONAL[which])
-        return await self._changed(rt, f"delete_{which}", {})

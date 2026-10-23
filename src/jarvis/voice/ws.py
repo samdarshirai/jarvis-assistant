@@ -381,8 +381,7 @@ class VoiceService:
         if rt is None:
             await ws.close(code=P.CLOSE_UNAUTHORIZED)  # before accept: no audio is ever read from a stranger
             return
-        # the user's own Deepgram key only: never the operator's
-        key = rt.secrets.get("deepgram_key")
+        key = self.tenants.s.deepgram_api_key  # the operator's, shared by all users
         missing = P.NEEDS_DEEPGRAM if not key else P.NEEDS_LLM if rt.graph is None else None
         await ws.accept()
         if missing:

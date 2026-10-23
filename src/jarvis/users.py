@@ -15,7 +15,7 @@ from jarvis.db import DATA_TABLES, finish_user_columns, init_schema, make_pool
 from jarvis.voice.devices import Devices
 
 MAX_USERS = 100
-SECRET_NAMES = ("llm_base_url", "llm_key", "model_fast", "model_strong", "deepgram_key", "tavily_key")
+SECRET_NAMES = ("llm_base_url", "llm_key", "model_fast", "model_strong")
 CHECKPOINT_TABLES = ("checkpoints", "checkpoint_blobs", "checkpoint_writes")  # LangGraph's Postgres saver
 LEGACY_THREAD = "owner"  # the single conversation thread from before users existed
 _COLS = "id, email, google_sub, tz, is_owner, disabled, display_name"
@@ -164,8 +164,7 @@ def ensure_owner(pool, s) -> int | None:
         finish_user_columns(c)
         fernet = Fernet(s.fernet_key)
         for name, value in (("llm_key", s.openrouter_api_key), ("model_fast", s.models_fast),
-                            ("model_strong", s.models_strong), ("deepgram_key", s.deepgram_api_key),
-                            ("tavily_key", s.tavily_api_key)):
+                            ("model_strong", s.models_strong)):
             if value:
                 _put_secret(c, fernet, uid, name, value)
         for t in CHECKPOINT_TABLES:

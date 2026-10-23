@@ -16,31 +16,14 @@ Future<void> _pump(WidgetTester t, RecApi api) async {
 
 void main() {
   testWidgets('shows_last4_never_full_key', (t) async {
-    await _pump(t, RecApi({'GET /me': meBody(tavily: null)}));
+    await _pump(t, RecApi({'GET /me': meBody()}));
     expect(find.text('Set, ends in abcd'), findsOneWidget); // LLM
-    expect(find.text('Set, ends in wxyz'), findsOneWidget); // Deepgram
-    expect(find.text('Not set'), findsOneWidget); // Tavily
+    expect(find.textContaining('Deepgram'), findsNothing);
+    expect(find.textContaining('Tavily'), findsNothing);
     expect(find.textContaining('https://openrouter.ai/api/v1'), findsWidgets);
     for (final f in t.widgetList<TextField>(find.byType(TextField))) {
       if (f.obscureText) expect(f.controller?.text ?? '', isEmpty); // key inputs start empty, never prefilled
     }
-  });
-
-  testWidgets('delete_required_key', (t) async {
-    var deleted = false;
-    final api = RecApi({
-      'GET /me': (Map<String, dynamic>? _) => meBody(deepgram: deleted ? null : 'wxyz', tavily: null),
-      'DELETE /settings/deepgram': (Map<String, dynamic>? _) {
-        deleted = true;
-        return <String, dynamic>{'ok': true};
-      },
-    });
-    await _pump(t, api);
-    await t.tap(find.byTooltip('Remove Deepgram key'));
-    await t.pumpAndSettle();
-    expect(api.paths, contains('DELETE /settings/deepgram'));
-    expect(find.text('Set, ends in wxyz'), findsNothing);
-    expect(find.text('Not set'), findsNWidgets(2));
   });
 
   testWidgets('prefilled default model ids are not sent; edited ones are', (t) async {
@@ -63,14 +46,6 @@ void main() {
     final second = api.calls.lastWhere((c) => c.$1 == 'PUT').$3!;
     expect(second['model_fast'], 'my/fast');
     expect(second.containsKey('model_strong'), isFalse);
-  });
-
-  testWidgets('a short key is set without last 4 and can still be removed', (t) async {
-    final me = meBody(tavily: null);
-    (me['setup'] as Map)['tavily'] = true; // set, but under 8 characters: no last 4
-    await _pump(t, RecApi({'GET /me': me}));
-    expect(find.text('Set'), findsOneWidget);
-    expect(find.byTooltip('Remove Tavily key'), findsOneWidget);
   });
 
   test('keyErrorText maps every backend code', () {

@@ -65,15 +65,14 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
   });
 
-  testWidgets('no Deepgram key returns to required setup', (t) async {
-    await t.pumpWidget(app(MemStore({'token': 'tok'}), RecApi({'GET /me': meBody(deepgram: null)})));
+  testWidgets('no LLM key returns to required setup', (t) async {
+    await t.pumpWidget(app(MemStore({'token': 'tok'}), RecApi({'GET /me': meBody(llm: false)})));
     await t.pump();
     await t.pump();
     expect(find.byType(SessionScreen), findsNothing);
-    expect(find.widgetWithText(TextField, 'Deepgram key'), findsOneWidget);
+    expect(find.widgetWithText(TextField, 'API key'), findsOneWidget);
     expect(AppHost.controller, isNull);
     expect(wake, 0);
-    expect(find.widgetWithText(TextField, 'Deepgram key'), findsOneWidget);
     await t.pumpWidget(const SizedBox());
   });
 
@@ -130,34 +129,6 @@ void main() {
     expect(find.byType(SessionScreen), findsNothing);
     expect(find.widgetWithText(TextField, 'API key'), findsOneWidget);
     expect(stopped, greaterThan(0));
-    await t.pumpWidget(const SizedBox());
-  });
-
-  testWidgets('returning from key removal reloads setup and stops voice', (t) async {
-    t.view.physicalSize = const Size(360, 2000);
-    t.view.devicePixelRatio = 1;
-    addTearDown(t.view.reset);
-    var removed = false;
-    final api = RecApi({
-      'GET /me': (Map<String, dynamic>? _) => meBody(deepgram: removed ? null : 'wxyz'),
-      'DELETE /settings/deepgram': (Map<String, dynamic>? _) {
-        removed = true;
-        return <String, dynamic>{'ok': true};
-      },
-    });
-    await t.pumpWidget(app(MemStore({'token': 'tok'}), api));
-    await t.pump(); await t.pump();
-    expect(AppHost.controller, isNotNull);
-    await t.tap(find.byTooltip('Settings'));
-    await t.pumpAndSettle();
-    await t.tap(find.text('API keys'));
-    await t.pumpAndSettle();
-    await t.tap(find.byTooltip('Remove Deepgram key'));
-    await t.pumpAndSettle();
-    expect(AppHost.controller, isNull);
-    expect(stopped, 1);
-    expect(find.byType(OnboardingScreen), findsOneWidget);
-    expect(find.widgetWithText(TextField, 'Deepgram key'), findsOneWidget);
     await t.pumpWidget(const SizedBox());
   });
 
@@ -257,8 +228,8 @@ void main() {
     await links.close();
   });
 
-  // A friend without Deepgram never opens /voice, so the push token goes over REST after push init.
-  for (final (name, me) in [('no Deepgram key', meBody(deepgram: null)), ('no LLM key', meBody(llm: false, deepgram: null))]) {
+  // A friend without an LLM key never opens /voice, so the push token goes over REST after push init.
+  for (final (name, me) in [('no LLM key', meBody(llm: false))]) {
     testWidgets('the push token is registered after push init with $name', (t) async {
       final order = <String>[];
       final refresh = StreamController<String>();

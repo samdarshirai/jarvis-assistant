@@ -34,7 +34,8 @@ def build(scripts, tools=(), stt_script=(), tts=None, stt=None, with_voice=True,
     tts = tts or FakeTTS()
     stt = stt or FakeSTT(stt_script)
     tenants = FakeTenants()
-    rt = tenants.add(1, g if with_llm else None, {"deepgram_key": "dg-1"} if with_voice else {})
+    tenants.s.deepgram_api_key = "dg-1" if with_voice else ""
+    rt = tenants.add(1, g if with_llm else None)
     keys = []  # (kind, key) per factory call
 
     def stt_factory(key):

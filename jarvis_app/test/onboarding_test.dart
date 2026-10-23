@@ -140,7 +140,7 @@ void main() {
   );
 
   testWidgets(
-    'Google explains all required services; cancellation permits retry',
+    'Google explains the one required key; cancellation permits retry',
     (t) async {
       var started = 0;
       await _pump(
@@ -152,7 +152,7 @@ void main() {
           onDone: () async {},
         ),
       );
-      expect(find.textContaining('three required API keys'), findsOneWidget);
+      expect(find.textContaining('paste one API key'), findsOneWidget);
       await _tap(t, 'Before you connect');
       expect(
         find.textContaining('tap Advanced, then Continue'),
@@ -185,7 +185,7 @@ void main() {
     'all saves required; retries, masking, back and final server check',
     (t) async {
       var tries = 0, done = 0;
-      final me = meBody(llm: false, deepgram: null, tavily: null);
+      final me = meBody(llm: false);
       final setup = me['setup'] as Map;
       final api = RecApi({
         'GET /me': (Map<String, dynamic>? _) => me,
@@ -196,11 +196,6 @@ void main() {
           setup['llm'] = true;
           return {'ok': true};
         },
-        for (final name in ['deepgram', 'tavily'])
-          'PUT /settings/$name': (Map<String, dynamic>? _) {
-            setup[name] = true;
-            return {'ok': true};
-          },
       });
       await _pump(
         t,
@@ -231,119 +226,29 @@ void main() {
         isEmpty,
       );
       await _tap(t, 'Continue');
-      expect(find.widgetWithText(TextField, 'Deepgram key'), findsOneWidget);
-      expect(_button(t, 'Continue').onPressed, isNull);
-      await t.enterText(
-        find.widgetWithText(TextField, 'Deepgram key'),
-        'deep-secret',
-      );
-      expect(
-        t
-            .widget<TextField>(find.widgetWithText(TextField, 'Deepgram key'))
-            .obscureText,
-        isTrue,
-      );
-      await t.tap(find.byTooltip('Show Deepgram key'));
-      await t.pump();
-      expect(
-        t
-            .widget<TextField>(find.widgetWithText(TextField, 'Deepgram key'))
-            .obscureText,
-        isFalse,
-      );
-      await _tap(t, 'Save');
-      expect(find.text('Saved.'), findsOneWidget);
-      await _tap(t, 'Continue');
-      await _tap(t, 'Back');
-      expect(find.textContaining('•••• Saved'), findsOneWidget);
-      await _tap(t, 'Continue');
-      await t.enterText(
-        find.widgetWithText(TextField, 'Tavily key'),
-        'tav-secret',
-      );
-      await _tap(t, 'Save');
-      await _tap(t, 'Continue');
       expect(find.text('Google connected'), findsOneWidget);
       expect(find.text('Skip'), findsNothing);
-      setup['tavily'] = false; // changed elsewhere before completion
+      setup['llm'] = false; // changed elsewhere before completion
       await _tap(t, 'Start using Jarvis');
       expect(done, 0);
-      expect(find.widgetWithText(TextField, 'Tavily key'), findsOneWidget);
+      expect(find.widgetWithText(TextField, 'API key'), findsOneWidget);
+      tries = 1;
       await t.enterText(
-        find.widgetWithText(TextField, 'Tavily key'),
+        find.widgetWithText(TextField, 'API key'),
         'replacement',
       );
-      await _tap(t, 'Save');
+      await _tap(t, 'Test and save');
       await _tap(t, 'Continue');
       await _tap(t, 'Start using Jarvis');
       expect(done, 1);
     },
   );
 
-  for (final name in ['deepgram', 'tavily']) {
-    testWidgets(
-      '$name blocks navigation during save and supports failed-save retry',
-      (t) async {
-        final me = meBody(
-          deepgram: name == 'deepgram' ? null : 'saved',
-          tavily: null,
-        );
-        final api = PendingSaveApi(me);
-        await _pump(
-          t,
-          OnboardingScreen(
-            me: me,
-            api: api,
-            signIn: () async {},
-            onDone: () async {},
-          ),
-        );
-        final label = name == 'deepgram' ? 'Deepgram key' : 'Tavily key';
-        await t.enterText(find.widgetWithText(TextField, label), 'secret');
-        await t.ensureVisible(find.text('Save'));
-        await t.pumpAndSettle();
-        await t.tap(find.text('Save'));
-        await t.pump();
-        expect(
-          t.widget<TextField>(find.widgetWithText(TextField, label)).enabled,
-          isFalse,
-        );
-        expect(
-          t
-              .widget<TextButton>(find.widgetWithText(TextButton, 'Back'))
-              .onPressed,
-          isNull,
-        );
-        expect(_button(t, 'Please wait…').onPressed, isNull);
-        api.pending.completeError(ApiError(503, null, '/settings/$name'));
-        await t.pumpAndSettle();
-        expect(find.textContaining('could not be saved'), findsOneWidget);
-        expect(_button(t, 'Continue').onPressed, isNull);
-        api.pending = Completer();
-        await t.tap(find.text('Save'));
-        await t.pump();
-        (me['setup'] as Map)[name] = true;
-        api.pending.complete({'ok': true});
-        await t.pumpAndSettle();
-        expect(find.text('Saved.'), findsOneWidget);
-        expect(_button(t, 'Continue').onPressed, isNotNull);
-        expect(
-          t
-              .widget<TextField>(find.widgetWithText(TextField, label))
-              .controller!
-              .text,
-          isEmpty,
-        );
-      },
-    );
-  }
-
   testWidgets('Ready opens the app after final setup recheck', (t) async {
     var saved = false;
     final api = RecApi({
-      'GET /me': (Map<String, dynamic>? _) =>
-          meBody(tavily: saved ? 'saved' : null),
-      'PUT /settings/tavily': (Map<String, dynamic>? _) {
+      'GET /me': (Map<String, dynamic>? _) => meBody(llm: saved),
+      'PUT /settings/llm': (Map<String, dynamic>? _) {
         saved = true;
         return {'ok': true};
       },
@@ -362,8 +267,8 @@ void main() {
     );
     await t.pump();
     await t.pump();
-    await t.enterText(find.widgetWithText(TextField, 'Tavily key'), 'secret');
-    await _tap(t, 'Save');
+    await t.enterText(find.widgetWithText(TextField, 'API key'), 'secret');
+    await _tap(t, 'Test and save');
     await _tap(t, 'Continue');
     expect(find.byType(SessionScreen), findsNothing);
     await t.ensureVisible(find.text('Start using Jarvis'));
@@ -375,15 +280,11 @@ void main() {
     await t.pumpWidget(const SizedBox());
   });
 
-  for (var mask = 0; mask < 8; mask++) {
+  for (var mask = 0; mask < 2; mask++) {
     testWidgets('restart resumes first missing key for combination $mask', (
       t,
     ) async {
-      final me = meBody(
-        llm: mask & 1 != 0,
-        deepgram: mask & 2 != 0 ? 'deep' : null,
-        tavily: mask & 4 != 0 ? 'tav' : null,
-      );
+      final me = meBody(llm: mask == 1);
       await t.pumpWidget(
         JarvisApp(
           store: MemStore({'token': 'tok'}),
@@ -395,7 +296,7 @@ void main() {
       );
       await t.pump();
       await t.pump();
-      if (mask == 7) {
+      if (mask == 1) {
         expect(find.byType(SessionScreen), findsOneWidget);
       } else {
         expect(find.byType(SessionScreen), findsNothing);
@@ -404,7 +305,7 @@ void main() {
           displayName: me['display_name'] as String?,
         );
         expect(
-          find.textContaining('Step ${step.index + 1} of 6'),
+          find.textContaining('Step ${step.index + 1} of 4'),
           findsOneWidget,
         );
         expect(AppHost.controller, isNull);

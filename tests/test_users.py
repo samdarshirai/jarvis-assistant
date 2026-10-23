@@ -108,9 +108,9 @@ def test_secret_roundtrip_and_encrypted_at_rest(pool):
     a, b = users.add("a@example.com", TZ).id, users.add("b@example.com", TZ).id
     secrets.put(a, "llm_key", "sk-plaintext-123")
     secrets.put(a, "llm_key", "sk-plaintext-456")  # replaces
-    secrets.put(a, "deepgram_key", "dg")
+    secrets.put(a, "model_fast", "m/f")
     assert secrets.get(a, "llm_key") == "sk-plaintext-456"
-    assert secrets.all(a) == {"llm_key": "sk-plaintext-456", "deepgram_key": "dg"}
+    assert secrets.all(a) == {"llm_key": "sk-plaintext-456", "model_fast": "m/f"}
     assert secrets.all(b) == {} and secrets.get(b, "llm_key") is None
     with pool.connection() as c:
         blobs = [bytes(r[0]) for r in c.execute("SELECT blob FROM user_secrets").fetchall()]
@@ -119,7 +119,18 @@ def test_secret_roundtrip_and_encrypted_at_rest(pool):
         secrets.put(a, "password", "hunter2")
     assert "hunter2" not in str(e.value)
     secrets.delete(a, "llm_key")
-    assert secrets.all(a) == {"deepgram_key": "dg"}
+    assert secrets.all(a) == {"model_fast": "m/f"}
+
+
+def test_init_schema_drops_stored_deepgram_and_tavily_keys(pool):
+    from jarvis.db import init_schema
+    uid = UserStore(pool).add("a@example.com", TZ).id
+    with pool.connection() as c:
+        for n in ("deepgram_key", "tavily_key", "llm_key"):
+            c.execute("INSERT INTO user_secrets (user_id, name, blob) VALUES (%s, %s, %s)", (uid, n, b"x"))
+    init_schema(pool)
+    with pool.connection() as c:
+        assert [r[0] for r in c.execute("SELECT name FROM user_secrets").fetchall()] == ["llm_key"]
 
 
 def test_delete_cascades_to_every_data_table(scratch):

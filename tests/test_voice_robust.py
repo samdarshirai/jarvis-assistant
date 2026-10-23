@@ -298,7 +298,7 @@ def test_rejected_deepgram_tts_response_keeps_key_out_of_logs_and_socket(caplog,
         lambda request: httpx.Response(401, json={"error": f"Rejected token {secret}"})))
     monkeypatch.setattr("jarvis.voice.tts.httpx.AsyncClient", lambda **kw: client)
     h = build(chat_scripts("Hi."), stt_script=[FINAL("hello")])
-    h.rt.secrets["deepgram_key"] = secret
+    h.tenants.s.deepgram_api_key = secret
     h.svc.tts_factory = DeepgramTTS
     with caplog.at_level("ERROR", logger="jarvis.voice.ws"), TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         read(ws)

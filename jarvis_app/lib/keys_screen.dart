@@ -12,12 +12,6 @@ const defaultLlmUrl = 'https://openrouter.ai/api/v1';
 const llmHowTo =
     'Get an OpenRouter key: sign in at openrouter.ai, open Keys, create a key and add credit. '
     'Or use another OpenAI-compatible provider.';
-const deepgramHowTo =
-    'Voice uses Deepgram to hear you. Sign up at console.deepgram.com (free credit), open API Keys, '
-    'create a key and paste it here. This key is required to finish setup.';
-const tavilyHowTo =
-    'Web search uses Tavily. Sign up at app.tavily.com (free tier) and copy the API key shown there. '
-    'This key is required to finish setup.';
 
 /// The backend's 422 `{error, model}` from a key test, in plain words.
 String keyErrorText(Object e) {
@@ -204,122 +198,16 @@ class _LlmFormState extends State<LlmForm> {
   );
 }
 
-/// One required key (Deepgram or Tavily): paste and save.
-class KeyField extends StatefulWidget {
-  const KeyField({
-    super.key,
-    required this.api,
-    required this.name,
-    required this.label,
-    required this.howTo,
-    this.onSaved,
-    this.onBusyChanged,
-  });
-  final ApiClient api;
-  final String name; // path segment: /settings/<name>
-  final String label, howTo;
-  final FutureOr<void> Function()? onSaved;
-  final ValueChanged<bool>? onBusyChanged;
-  @override
-  State<KeyField> createState() => _KeyFieldState();
-}
-
-class _KeyFieldState extends State<KeyField> {
-  final _key = TextEditingController();
-  bool _busy = false, _ok = false, _visible = false;
-  String? _msg;
-
-  InputDecoration _secretField(String label) => _field(label).copyWith(
-    suffixIcon: IconButton(
-      tooltip: _visible ? 'Hide $label' : 'Show $label',
-      onPressed: _busy ? null : () => setState(() => _visible = !_visible),
-      icon: Icon(_visible ? Icons.visibility_off : Icons.visibility),
-    ),
-  );
-
-  @override
-  void dispose() {
-    _key.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    if (_busy) return;
-    if (_key.text.trim().isEmpty) {
-      setState(() {
-        _ok = false;
-        _msg = 'Enter an API key.';
-      });
-      return;
-    }
-    widget.onBusyChanged?.call(true);
-    setState(() {
-      _busy = true;
-      _msg = null;
-    });
-    try {
-      await widget.api.put('/settings/${widget.name}', {
-        'api_key': _key.text.trim(),
-      });
-      if (!mounted) return;
-      _key.clear();
-      _visible = false;
-      _ok = true;
-      _msg = 'Saved.';
-      await widget.onSaved?.call();
-    } catch (e) {
-      if (!mounted) return;
-      _ok = false;
-      _msg = keyErrorText(e);
-    } finally {
-      if (mounted) {
-        setState(() => _busy = false);
-        widget.onBusyChanged?.call(false);
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      Text(widget.howTo, style: const TextStyle(color: mutedText, height: 1.5)),
-      const SizedBox(height: 20),
-      TextField(
-        enabled: !_busy,
-        controller: _key,
-        decoration: _secretField('${widget.label} key'),
-        obscureText: !_visible,
-        autocorrect: false,
-        enableSuggestions: false,
-      ),
-      const SizedBox(height: 16),
-      FilledButton(
-        style: FilledButton.styleFrom(
-          backgroundColor: amber,
-          foregroundColor: amberInk,
-        ),
-        onPressed: _busy ? null : _save,
-        child: Text(_busy ? 'Saving…' : 'Save'),
-      ),
-      if (_msg != null)
-        Text(_msg!, style: TextStyle(color: _ok ? cream : danger)),
-    ],
-  );
-}
-
-/// Settings > API keys: shows only "set" + last 4 from /me, never a key; replaces keys and removes required voice/search keys.
+/// Settings > API keys: shows only "set" + last 4 from /me, never a key.
 class KeysScreen extends StatefulWidget {
-  const KeysScreen({super.key, required this.api, this.onRequiredKeyRemoved});
+  const KeysScreen({super.key, required this.api});
   final ApiClient api;
-  final VoidCallback? onRequiredKeyRemoved;
   @override
   State<KeysScreen> createState() => _KeysScreenState();
 }
 
 class _KeysScreenState extends State<KeysScreen> {
   int _gen = 0; // bump to refetch /me
-  String? _error;
 
   void _reload() => setState(() => _gen++);
 
@@ -329,19 +217,8 @@ class _KeysScreenState extends State<KeysScreen> {
     _reload();
   }
 
-  Future<void> _delete(String name) async {
-    try {
-      await widget.api.delete('/settings/$name');
-      _error = null;
-      if (mounted) widget.onRequiredKeyRemoved?.call();
-    } catch (e) {
-      _error = keyErrorText(e);
-    }
-    if (mounted) _reload();
-  }
-
   // "set" comes from /me.setup: a key under 8 characters is set but has no last 4
-  Widget _status(String title, bool set, String? last4, {String? remove}) =>
+  Widget _status(String title, bool set, String? last4) =>
       Row(
         children: [
           Expanded(
@@ -363,12 +240,6 @@ class _KeysScreenState extends State<KeysScreen> {
               ],
             ),
           ),
-          if (remove != null && set)
-            IconButton(
-              tooltip: 'Remove $title key',
-              icon: const Icon(Icons.delete_outline, color: cream),
-              onPressed: () => _delete(remove),
-            ),
         ],
       );
 
@@ -401,39 +272,6 @@ class _KeysScreenState extends State<KeysScreen> {
           modelStrong: k['model_strong'] as String?,
           onSaved: () => _saved('AI key works. Saved.'),
         ),
-        const Divider(height: 32),
-        _status(
-          'Deepgram',
-          setup['deepgram'] == true,
-          k['deepgram_last4'] as String?,
-          remove: 'deepgram',
-        ),
-        KeyField(
-          api: widget.api,
-          name: 'deepgram',
-          label: 'Deepgram',
-          howTo: deepgramHowTo,
-          onSaved: () => _saved('Deepgram key saved.'),
-        ),
-        const Divider(height: 32),
-        _status(
-          'Tavily',
-          setup['tavily'] == true,
-          k['tavily_last4'] as String?,
-          remove: 'tavily',
-        ),
-        KeyField(
-          api: widget.api,
-          name: 'tavily',
-          label: 'Tavily',
-          howTo: tavilyHowTo,
-          onSaved: () => _saved('Tavily key saved.'),
-        ),
-        if (_error != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 12),
-            child: Text(_error!, style: const TextStyle(color: danger)),
-          ),
       ],
     );
   }

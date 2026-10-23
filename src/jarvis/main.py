@@ -164,10 +164,6 @@ class LLMIn(BaseModel):
     model_strong: Models | None = None
 
 
-class KeyIn(BaseModel):
-    api_key: Secret
-
-
 class FcmIn(BaseModel):
     token: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4096)]
 
@@ -451,16 +447,6 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     async def put_llm(request: Request, body: LLMIn):
         svc, rt, err = await guarded(request, "keys")
         return err or await svc.set_llm(rt, body.base_url, body.api_key, body.model_fast, body.model_strong)
-
-    @app.put("/settings/{which}")
-    async def put_key(request: Request, which: Literal["deepgram", "tavily"], body: KeyIn):
-        svc, rt, err = await guarded(request, "keys")
-        return err or await svc.set_key(rt, which, body.api_key)
-
-    @app.delete("/settings/{which}")
-    async def delete_key(request: Request, which: Literal["deepgram", "tavily"]):
-        svc, rt, err = await guarded(request, "keys")
-        return err or await svc.delete_key(rt, which)
 
     @app.put("/device/fcm")
     async def put_fcm(request: Request, body: FcmIn):

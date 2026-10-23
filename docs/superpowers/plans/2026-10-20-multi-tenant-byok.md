@@ -1,5 +1,7 @@
 # Multi-tenant, bring-your-own-keys Implementation Plan
 
+> **Superseded (2026-10-23):** Deepgram and Tavily are no longer per-user keys. They are operator-set (`JARVIS_DEEPGRAM_API_KEY`, `JARVIS_TAVILY_API_KEY`) and shared by all users; users bring only the LLM key. Per-user Deepgram/Tavily storage, `/settings/deepgram|tavily` and their onboarding steps were removed. Read the references to them below as historical.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let a few hand-added friends use the hosted Jarvis backend and Android app on their own Google account and their own LLM/Deepgram/Tavily keys, with all data isolated per user and the owner's existing data becoming user #1.

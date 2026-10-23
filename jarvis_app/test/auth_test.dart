@@ -44,18 +44,16 @@ class RecApi extends ApiClient {
   Future<Map<String, dynamic>> delete(String path) => _do('DELETE', path);
 }
 
-Map<String, dynamic> meBody({String? displayName = 'Alex', bool llm = true, String? deepgram = 'wxyz', String? tavily = 'tavy'}) => {
+Map<String, dynamic> meBody({String? displayName = 'Alex', bool llm = true}) => {
       'email': 'a@b.test',
       'display_name': displayName,
       'tz': 'Asia/Kolkata',
-      'setup': {'google': true, 'llm': llm, 'deepgram': deepgram != null, 'tavily': tavily != null},
+      'setup': {'google': true, 'llm': llm},
       'keys': {
         'llm_base_url': llm ? 'https://openrouter.ai/api/v1' : null,
         'llm_key_last4': llm ? 'abcd' : null,
         'model_fast': 'fast/model',
         'model_strong': 'strong/model',
-        'deepgram_last4': deepgram,
-        'tavily_last4': tavily,
       },
     };
 

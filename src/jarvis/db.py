@@ -128,6 +128,8 @@ def init_schema(pool: ConnectionPool) -> None:
             if (t, col) not in have:
                 conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {col} {decl}")
         finish_user_columns(conn)
+        # Deepgram and Tavily keys are operator-set now: drop any a user stored earlier
+        conn.execute("DELETE FROM user_secrets WHERE name IN ('deepgram_key', 'tavily_key')")
 
 
 def finish_user_columns(conn) -> None:

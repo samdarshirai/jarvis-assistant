@@ -83,19 +83,17 @@ async def test_me_never_returns_secret_values(pool, uids, caplog):
     r = await c.get("/me")
     assert r.status_code == 200 and r.json() == {
         "email": "a@example.com", "tz": "Europe/Berlin", "display_name": None,
-        "setup": {"google": False, "llm": False, "deepgram": False, "tavily": False},
-        "keys": {"llm_base_url": None, "llm_key_last4": None, "model_fast": None, "model_strong": None,
-                 "deepgram_last4": None, "tavily_last4": None}}
+        "setup": {"google": False, "llm": False},
+        "keys": {"llm_base_url": None, "llm_key_last4": None, "model_fast": None, "model_strong": None}}
     store = SecretStore(pool, FERNET)
-    for name, value in (("llm_key", KEY), ("deepgram_key", DG), ("tavily_key", TV), ("model_fast", "a/b, c/d")):
+    for name, value in (("llm_key", KEY), ("model_fast", "a/b, c/d")):
         store.put(uid, name, value)
     PgTokenStore(pool, uid).put(PROVIDER, b"blob")
     r = await c.get("/me")
-    assert r.json()["setup"] == {"google": True, "llm": True, "deepgram": True, "tavily": True}
+    assert r.json()["setup"] == {"google": True, "llm": True}
     assert r.json()["keys"] == {"llm_base_url": "https://openrouter.ai/api/v1", "llm_key_last4": "7f3a",
-                                "model_fast": "a/b,c/d", "model_strong": "default/strong",
-                                "deepgram_last4": "91b2", "tavily_last4": "c4d5"}
-    for v in (KEY, DG, TV, KEY[:-4], DG[:-4], TV[:-4]):
+                                "model_fast": "a/b,c/d", "model_strong": "default/strong"}
+    for v in (KEY, KEY[:-4]):
         assert v not in r.text and v not in caplog.text
     assert (await (await setup(pool, uids[1]))[0].get("/me")).json()["setup"]["llm"] is False  # B sees nothing of A
 
@@ -153,12 +151,9 @@ async def test_key_is_stripped_of_whitespace_and_newline(pool, uids):
     uid = uids[0]
     c, _ = await setup(pool, uid)
     assert (await c.put("/settings/llm", json={"base_url": "https://api.example.com/v1", "api_key": f"  {KEY}\n"})).status_code == 200
-    assert (await c.put("/settings/deepgram", json={"api_key": f"\t{DG} \r\n"})).status_code == 200
-    assert (await c.put("/settings/tavily", json={"api_key": f"{TV}\n"})).json()["keys"]["tavily_last4"] == "c4d5"
     s = secrets(pool, uid)
-    assert (s["llm_key"], s["deepgram_key"], s["tavily_key"]) == (KEY, DG, TV)
-    for path, body in (("/settings/llm", {"base_url": "https://api.example.com/v1", "api_key": " \n "}),
-                       ("/settings/deepgram", {"api_key": "\n"}), ("/settings/tavily", {"api_key": ""})):
+    assert s["llm_key"] == KEY
+    for path, body in (("/settings/llm", {"base_url": "https://api.example.com/v1", "api_key": " \n "}),):
         r = await c.put(path, json=body)
         assert r.status_code == 422 and r.json() == {"error": "bad_request"}
     assert secrets(pool, uid) == s
@@ -180,7 +175,7 @@ async def test_http_url_and_localhost_rejected_422(pool, uids, caplog):
     assert "PWSECRET" not in caplog.text and "QSECRET" not in caplog.text and "SECRET" not in audit_text(pool)
 
 
-async def test_chat_without_llm_key_is_needs_setup_even_if_operator_key_in_env(pool, uids, monkeypatch):
+async def test_chat_without_llm_key_is_needs_setup_even_if_operator_llm_key_in_env(pool, uids, monkeypatch):
     for name, value in (("JARVIS_OPENROUTER_API_KEY", OP), ("JARVIS_DEEPGRAM_API_KEY", OP), ("JARVIS_TAVILY_API_KEY", OP),
                         ("OPENROUTER_API_KEY", OP), ("OPENAI_API_KEY", OP)):
         monkeypatch.setenv(name, value)
@@ -194,26 +189,10 @@ async def test_chat_without_llm_key_is_needs_setup_even_if_operator_key_in_env(p
     rt = await t.get(uid)
     assert rt.llm is None and rt.graph is None and rt.secrets == {}
     me = (await c.get("/me")).json()
-    assert me["setup"] == {"google": False, "llm": False, "deepgram": False, "tavily": False}
+    assert me["setup"] == {"google": False, "llm": False}
     assert OP[-4:] not in str(me["keys"])
 
 
-async def test_delete_optional_key(pool, uids):
-    uid = uids[0]
-    c, t = await setup(pool, uid)
-    await c.put("/settings/deepgram", json={"api_key": DG})
-    await c.put("/settings/tavily", json={"api_key": TV})
-    before = await t.get(uid)
-    assert before.secrets["deepgram_key"] == DG
-    r = await c.delete("/settings/deepgram")
-    assert r.status_code == 200 and r.json()["setup"]["deepgram"] is False and r.json()["setup"]["tavily"] is True
-    assert r.json()["keys"]["deepgram_last4"] is None
-    assert secrets(pool, uid) == {"tavily_key": TV}
-    after = await t.get(uid)
-    assert after is not before and "deepgram_key" not in after.secrets
-    assert (await c.delete("/settings/deepgram")).status_code == 200  # already gone: still fine
-    assert (await c.delete("/settings/tavily")).json()["setup"]["tavily"] is False
-    assert (await c.delete("/settings/llm")).status_code in (404, 405, 422)  # the LLM key is replaced, not deleted
 
 
 async def test_bad_timezone_rejected(pool, uids):
@@ -235,8 +214,7 @@ async def test_unauthenticated_401(pool, uids):
     c, _ = await setup(pool, uid)
     routes = [("get", "/me", None), ("put", "/me", {"tz": "UTC"}),
               ("put", "/settings/llm", {"base_url": "https://api.example.com/v1", "api_key": KEY}),
-              ("put", "/settings/deepgram", {"api_key": DG}), ("put", "/settings/tavily", {"api_key": TV}),
-              ("delete", "/settings/deepgram", None), ("delete", "/settings/tavily", None)]
+              ]
     for hdr in ({"Authorization": ""}, {"Authorization": "Bearer nope"}):
         for m, p, body in routes:
             r = await c.request(m.upper(), p, headers=hdr, **({"json": body} if body else {}))

@@ -19,8 +19,9 @@ For the owner (you). Gets the multi-tenant, bring-your-own-keys build running on
 ### Dependencies that matter
 
 - **Operator-owned (stay yours):** the Google web OAuth client, Firebase/FCM credentials for push (`JARVIS_FCM_CREDENTIALS_PATH`, optional until you want push), the Fernet key, the Postgres database, optional default model ids (`JARVIS_MODELS_FAST`, `JARVIS_MODELS_STRONG`).
-- **Per user (brought by each person in the app wizard):** an OpenAI-compatible LLM base URL + key (required; OpenRouter is the default), a required Deepgram key (voice), a required Tavily key (web search). The server never falls back to your keys for friends.
-- **Seeded into you once, then unused:** `JARVIS_OPENROUTER_API_KEY`, `JARVIS_DEEPGRAM_API_KEY`, `JARVIS_TAVILY_API_KEY` are read a single time on first start and copied into your own account.
+- **Per user (brought by each person in the app wizard):** an OpenAI-compatible LLM base URL + key (required; OpenRouter is the default). The server never falls back to your LLM key for friends.
+- **Seeded into you once, then unused:** `JARVIS_OPENROUTER_API_KEY` is read a single time on first start and copied into your own account.
+- **Shared by every user (set on the server):** `JARVIS_DEEPGRAM_API_KEY` (voice) and `JARVIS_TAVILY_API_KEY` (web search; empty falls back to DuckDuckGo). Friends never see or enter them.
 - **Telegram:** stays your own channel (`JARVIS_TELEGRAM_BOT_TOKEN`, `JARVIS_TELEGRAM_OWNER_CHAT_ID`). Friends get push notifications only.
 - **App packages:** `app_links` (deep link), `flutter_secure_storage` (token), Firebase messaging (already present). `flutter pub get` handles them.
 
@@ -78,9 +79,7 @@ flutter build apk --release --dart-define-from-file=jarvis.env.json
 Install the APK on your phone and on the second phone. First launch with no stored token shows the wizard:
 1. Connect Google (Calendar, Gmail, Tasks; unverified warning: Advanced, Continue)
 2. AI base URL + key, tested before saving (OpenRouter default; models under Advanced)
-3. Required Deepgram key for voice, saved without a provider test
-4. Required Tavily key for search, saved without a provider test
-5. Ready: Start using Jarvis rechecks setup before opening the app
+3. Ready: Start using Jarvis rechecks setup before opening the app
 
 The app stays locked until `/me.setup` confirms Google and all three keys. There is no Skip. Existing installs and restarts resume the first missing key. Settings reuses the forms to replace keys; removing a required key immediately returns to setup. Secret inputs have visibility toggles and clear after saving.
 
@@ -102,5 +101,5 @@ Notes:
 1. You: sign in on the phone, run the wizard, chat. Your old data and history are there.
 2. Friend: add their email with the CLI, sign in on the second phone, finish the wizard, chat about their own calendar.
 3. Disable the friend: their next request returns 401.
-4. A friend missing any required key resumes that setup step; removing Deepgram or Tavily in Settings returns to setup.
+4. A friend missing the AI key resumes that setup step.
 5. Optional: Telegram still works for you only.

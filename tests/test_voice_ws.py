@@ -20,7 +20,7 @@ def test_missing_or_bad_token_is_closed_before_accept():
     assert h.stt.streams == []  # no audio pipeline was opened for a stranger
 
 
-def test_voice_uses_users_deepgram_key():
+def test_voice_uses_operator_deepgram_key():
     h = build(chat_scripts("Hi."))
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         read(ws)
@@ -224,7 +224,7 @@ AUTH2 = {"authorization": "Bearer good2"}
 def two_users(scripts, stt_script=()):
     """User 1 (token "good") and user 2 (token "good2") on one graph and saver: only the thread tells them apart."""
     h = build(scripts, stt_script=stt_script)
-    h.tenants.add(2, h.graph, {"deepgram_key": "dg-2"})
+    h.tenants.add(2, h.graph)
     h.devices.tokens["good2"] = DeviceAuth(2, 2)
     return h
 
@@ -245,7 +245,7 @@ def test_voice_sessions_of_two_users_use_own_threads():
             msgs = c.portal.call(h.graph.aget_state, thread_config(uid, voice=True)).values["messages"]
             return [m.content for m in msgs]
         assert said(1) == ["i am one", "Hi one."] and said(2) == ["i am two", "Hi two."]
-    assert ("stt", "dg-2") in h.keys and h.tenants.lock(1) is not h.tenants.lock(2)
+    assert ("stt", "dg-1") in h.keys and h.tenants.lock(1) is not h.tenants.lock(2)
 
 
 def test_deliver_reaches_only_target_user():

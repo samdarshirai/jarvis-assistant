@@ -39,7 +39,7 @@ Needs `client_secret.json` in the repo root. Redo only if the token is revoked o
 
 ## Multi-user prerequisites (by hand, in this order)
 
-Friends bring their own LLM key (and optionally Deepgram and Tavily); they sign in with Google from the app.
+Friends bring their own LLM key; set `JARVIS_DEEPGRAM_API_KEY` and `JARVIS_TAVILY_API_KEY` on the server once for everyone; they sign in with Google from the app.
 
 1. Google Cloud console, Credentials, the **web** OAuth client: add `<JARVIS_PUBLIC_BASE_URL>/auth/callback` as an authorized redirect URI.
 2. OAuth consent screen, Scopes: `openid`, `https://www.googleapis.com/auth/userinfo.email`, plus the existing Calendar, Tasks, `gmail.readonly` and `gmail.compose`.

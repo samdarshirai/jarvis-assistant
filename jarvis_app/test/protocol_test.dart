@@ -42,7 +42,7 @@ void main() {
 
   test('needs_setup error codes become friendly messages', () {
     final e = decodeServer('{"type":"error","code":"needs_deepgram"}') as ErrorEvent;
-    expect((e.message, e.needsSetup), ('Add your Deepgram key in Settings to enable voice', true));
+    expect((e.message, e.needsSetup), ('Voice is unavailable right now', true));
     expect((decodeServer('{"type":"error","code":"needs_llm"}') as ErrorEvent).message, contains('AI key'));
   });
 

@@ -4,7 +4,7 @@ import 'api.dart';
 import 'keys_screen.dart';
 import 'theme.dart';
 
-enum OnboardingStep { google, name, llm, deepgram, tavily, ready }
+enum OnboardingStep { google, name, llm, ready }
 
 const rejectionHint = 'Not on the list? Ask the owner to add your email.';
 
@@ -14,8 +14,6 @@ OnboardingStep firstMissingStep(Map setup, {String? displayName}) {
     return OnboardingStep.name;
   }
   if (setup['llm'] != true) return OnboardingStep.llm;
-  if (setup['deepgram'] != true) return OnboardingStep.deepgram;
-  if (setup['tavily'] != true) return OnboardingStep.tavily;
   return OnboardingStep.ready;
 }
 
@@ -158,8 +156,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
 
   String? get _keyName => switch (_step) {
     OnboardingStep.llm => 'llm',
-    OnboardingStep.deepgram => 'deepgram',
-    OnboardingStep.tavily => 'tavily',
     _ => null,
   };
 
@@ -184,22 +180,11 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
       if (mounted) setState(() => _busy = value);
     }
 
-    if (_step == OnboardingStep.llm) {
-      return LlmForm(
-        api: widget.api!,
-        baseUrl: _keys['llm_base_url'] as String?,
-        modelFast: _keys['model_fast'] as String?,
-        modelStrong: _keys['model_strong'] as String?,
-        onSaved: _refresh,
-        onBusyChanged: busy,
-      );
-    }
-    final deepgram = _step == OnboardingStep.deepgram;
-    return KeyField(
+    return LlmForm(
       api: widget.api!,
-      name: deepgram ? 'deepgram' : 'tavily',
-      label: deepgram ? 'Deepgram' : 'Tavily',
-      howTo: deepgram ? deepgramHowTo : tavilyHowTo,
+      baseUrl: _keys['llm_base_url'] as String?,
+      modelFast: _keys['model_fast'] as String?,
+      modelStrong: _keys['model_strong'] as String?,
       onSaved: _refresh,
       onBusyChanged: busy,
     );
@@ -209,8 +194,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     'Connect Google',
     'Your name',
     'AI key',
-    'Deepgram key',
-    'Tavily key',
     'Ready',
   ];
 
@@ -218,8 +201,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     _setup['google'] == true,
     (_me['display_name'] as String?)?.trim().isNotEmpty == true,
     _setup['llm'] == true,
-    _setup['deepgram'] == true,
-    _setup['tavily'] == true,
   ];
 
   Widget _progress() => Column(
@@ -352,8 +333,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             ),
           ),
         const Text(
-          'Then paste three required API keys: OpenRouter (or another AI provider), '
-          'Deepgram for voice, and Tavily for web search.',
+          'Then paste one API key: OpenRouter (or another AI provider).',
           style: TextStyle(color: ink, height: 1.5, fontSize: 13),
         ),
       ],
@@ -367,8 +347,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         for (final status in [
           'Google connected',
           'AI key saved',
-          'Deepgram key saved',
-          'Tavily key saved',
         ])
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 10),
@@ -414,18 +392,6 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         'Make it thoughtful.',
         'Connect an AI provider so Jarvis can think, plan and help you get things done.',
         Icons.auto_awesome_outlined,
-      ),
-      OnboardingStep.deepgram => (
-        'THE VOICE',
-        'Let’s talk.',
-        'Add Deepgram so Jarvis can hear you and answer out loud.',
-        Icons.graphic_eq_rounded,
-      ),
-      OnboardingStep.tavily => (
-        'THE CURIOSITY',
-        'A little more world.',
-        'Give Jarvis web search with Tavily, for answers beyond your day-to-day.',
-        Icons.travel_explore_rounded,
       ),
       OnboardingStep.ready => (
         'ALL CONNECTED',

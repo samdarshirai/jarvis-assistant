@@ -152,7 +152,7 @@ class Tenants:
             return cached_service(lambda: self.google_service_factory(name, version, store, s.fernet_key),
                                   epoch=lambda: epoch[0])
 
-        registry = build_registry(svc, tz, pool, secrets.get("tavily_key", ""), user_id)
+        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id)
         memories = MemoryStore(pool, user_id)
         creds = creds_for(secrets, s)
         llm = self.llm_provider_factory(creds, audit) if creds else None
