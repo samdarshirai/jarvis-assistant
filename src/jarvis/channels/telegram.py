@@ -107,7 +107,7 @@ class TelegramChannel:
     async def _invoke(self, graph, graph_input):
         """Run the graph (the caller holds the lock). None means the run failed."""
         try:
-            return await graph.ainvoke(graph_input, self.cfg)
+            return await graph.ainvoke(graph_input, {**self.cfg, "configurable": {**self.cfg["configurable"], "channel": "telegram"}})
         except Exception:
             log.error("graph run failed")
             return None

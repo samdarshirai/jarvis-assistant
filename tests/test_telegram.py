@@ -602,3 +602,21 @@ async def test_telegram_rejected_llm_response_keeps_key_out_of_logs_reply_and_au
     assert secret not in caplog.text
     assert sent(c) == [(FAIL_TEXT, {})]
     assert audit.records and secret not in str(audit.records)
+
+
+async def test_telegram_call_contact_never_reaches_the_phone():
+    got = []
+
+    async def deliver(actions):
+        got.append(actions)
+        return True
+
+    tool = Tool(name="call_contact", domain="phone", description="d", args_schema=Args, needs_confirm=False,
+                fn=lambda **kw: {"queued_for_phone": True, "client_action": {"type": "call_contact", "name": "Mom"}})
+    call_ = AIMessage("", tool_calls=[{"name": "call_contact", "args": {}, "id": "1", "type": "tool_call"}])
+    ch = make_channel({"fast": [call_, AIMessage("Calls can't be made from Telegram.")]}, [], extra=[tool])
+    ch.deliver_actions = deliver
+    c = chat()
+    await ch.on_text(text_update(c, "call Mom"), None)
+    assert got == []
+    assert sent(c) == [("Calls can't be made from Telegram.", {})]

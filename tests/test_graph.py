@@ -735,3 +735,36 @@ async def test_router_prompt_tells_model_a_which_contact_reply_is_phone():
     await g.ainvoke({"messages": [AIMessage("Which one, ending 4521 or 8830?"), HumanMessage("the second one")]}, CFG)
     router = [m for m in SEEN[0] if m.type == "system"][0].content
     assert "asked which contact to call" in router and "'call Mom' -> phone" in router
+
+
+def call_tool():
+    return tool("call_contact", "phone", [], False, fn=lambda **kw: {"client_action": {"type": "call_contact", "name": "Mom"}})
+
+
+async def test_voice_call_contact_queues_the_action():
+    g, _ = make({"fast": [AIMessage("phone"), call("call_contact"), AIMessage("ok")]}, [call_tool()])
+    out = await g.ainvoke(say(), CFG)
+    assert out["client_actions"] == [{"type": "call_contact", "name": "Mom"}]
+
+
+async def test_telegram_call_contact_is_refused_and_never_queued():
+    prompts = []
+    reg = Registry()
+    reg.add(call_tool())
+    provider = FakeProvider({"fast": [AIMessage("phone"), call("call_contact"), AIMessage("ok")]})
+    orig = provider.get
+
+    class Spy:
+        def __init__(self, llm):
+            self.llm = llm
+
+        async def ainvoke(self, msgs, *a, **k):
+            prompts.append(msgs[0].content)
+            return await self.llm.ainvoke(msgs, *a, **k)
+    provider.get = lambda tier, tools=None: Spy(orig(tier, tools))
+    g = build_graph(provider, reg, MemoryAudit(), InMemorySaver(), "Europe/Berlin")
+    out = await g.ainvoke(say(), {"configurable": {"thread_id": "t", "channel": "telegram"}, "recursion_limit": 40})
+    tm = [m for m in out["messages"] if isinstance(m, ToolMessage)][0]
+    assert "Calls cannot be placed from Telegram" in tm.content
+    assert out["client_actions"] == []
+    assert any("you cannot place calls from here" in p for p in prompts)

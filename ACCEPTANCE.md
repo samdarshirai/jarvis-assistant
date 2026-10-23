@@ -163,8 +163,8 @@ Prerequisites: phone paired, Contacts permission granted, CALL_PHONE granted for
 | 102 | Same, then answer "ending 8830" (use a real last 4) | Calls the contact whose number ends in those digits |
 | 103 | Mumble or garble the name ("call blorpt"); also say a name that is only the middle or end of a contact (e.g. "call Smith" with only "Dan Smith") | Jarvis asks to repeat or spell it (names match only the start of a contact's name); answering retries; after 2 asks it gives up |
 | 104 | Turn Contacts permission off, then "call Mom" | Jarvis says it needs contacts permission; nothing is dialled |
-| 105 | Voice app NOT connected: Telegram "call Mom" | Reply says the phone action was not run; no call starts |
+| 105 | Voice app NOT connected: Telegram "call Mom" | Jarvis says calls can't be made from Telegram and to ask by voice in the app; no call starts |
 | 106 | Any successful call request | The spoken reply only says it asked the phone; it never claims the call was placed |
-| 107 | Voice app connected (live session): Telegram "call Mom" | The call is placed on the phone, as other Telegram actions are; with two "Mom" contacts the which-one question is asked aloud on the phone |
+| 107 | Voice app connected (live session): Telegram "call Mom" | Same: a Telegram call request never calls, even with the voice app connected; Jarvis says calls can't be made from Telegram. Telegram alarms/timers/navigation still reach the phone |
 | 108 | Ask for a call while the screen is locked, from Android Auto, or via the wake word with the screen off | Either the call starts or nothing happens. Android's background-activity rules may block the launch silently, and there is no phone fallback in that case |
 | 109 | During rows 99 and 100, watch the moment the call connects | The "Asking your phone..." speech does not keep playing and the mic does not keep capturing into the connected call |

@@ -37,6 +37,10 @@ VOICE_NOTE = ("\nThis reply will be spoken aloud: use two or three short sentenc
               "read out URLs, ids or code.")
 
 
+TELEGRAM_NO_CALLS_NOTE = (" This chat is Telegram: you cannot place calls from here; never use call_contact, "
+                          "tell the user to ask by voice in the app.")
+
+
 class State(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     domains: list[str]
@@ -163,6 +167,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
             except Exception:
                 log.exception("memory load failed")
         spoken = VOICE_NOTE if voice and dom.name in ("notes", "research") else ""
+        if (config.get("configurable") or {}).get("channel") == "telegram" and dom.name == "phone":
+            spoken += TELEGRAM_NO_CALLS_NOTE
         system = SystemMessage(f"{dom.prompt}{spoken}{memory_block(rows)}\nCurrent local time: "
                                f"{now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
         reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
@@ -213,7 +219,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
                                    tool_call_id=c["id"]))
         return {"messages": out}
 
-    async def tools(state: State) -> dict:
+    async def tools(state: State, config: RunnableConfig) -> dict:
+        telegram = (config.get("configurable") or {}).get("channel") == "telegram"
         allowed = {t.name for t in registry.for_domain(state["domains"][state["idx"]])}
         actions = list(state.get("client_actions", []))
         out = []
@@ -228,6 +235,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
             label = "blocked"
             if tool is None or c["name"] not in allowed:
                 result = {"error": f"Unknown tool: {c['name']}"}
+            elif telegram and c["name"] == "call_contact":
+                result = {"error": "Calls cannot be placed from Telegram. Tell the user to ask by voice in the Jarvis app."}
             elif confirm and not state["approved"]:
                 result = {"error": "Not run: actions that need confirmation must be proposed alone, in their own "
                                    "step, after other tools have finished. Propose it again by itself."}
