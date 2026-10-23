@@ -79,6 +79,32 @@ void main() {
     expect(waCalls, ['1']);
   });
 
+  test('last4 dials the number the user named', () async {
+    const two = ContactMatch('3', 'Mom', ['+1 555 000 2222', '+1 555 000 3333']);
+    await call([two], action: {'type': 'call_contact', 'contact': 'Mom', 'last4': '3333'});
+    expect(launched.single.data, 'tel:+1 555 000 3333');
+    expect(launched.single.action, 'android.intent.action.CALL');
+  });
+
+  test('a throwing permission request falls back to DIAL, not error', () async {
+    final out = await runCall({'type': 'call_contact', 'contact': 'Mom'},
+        contacts: () async => [_mom],
+        whatsapp: (_) async => false,
+        launch: (s) async => launched.add(s),
+        canCall: () async => throw StateError('request running'),
+        report: reports.add);
+    expect(out, isNull);
+    expect(reports, isEmpty);
+    expect(launched.single.action, 'android.intent.action.DIAL');
+  });
+
+  test('contactMatch drops blank numbers', () {
+    final c = contactMatch('9', 'Mom', ['  ', '+1 555 000 4521']);
+    expect(c.numbers, ['+1 555 000 4521']);
+    expect(c.last4, '4521');
+    expect(contactMatch('9', 'Mom', [' ']).numbers, isEmpty);
+  });
+
   test('no match reports not_found', () async {
     await call([_momWork], action: {'type': 'call_contact', 'contact': 'Zed'});
     expect(reports.single['status'], 'not_found');

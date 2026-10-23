@@ -25,7 +25,7 @@ class AndroidPhoneActions implements PhoneActions {
     final all = await FlutterContacts.getAll(properties: {ContactProperty.phone});
     return [
       for (final c in all)
-        if (c.id != null) ContactMatch(c.id!, c.displayName ?? '', [for (final p in c.phones) p.number])
+        if (c.id != null) contactMatch(c.id!, c.displayName ?? '', [for (final p in c.phones) p.number])
     ];
   }
 
@@ -78,6 +78,10 @@ class AndroidPhoneActions implements PhoneActions {
   }
 }
 
+/// A [ContactMatch] without blank numbers, so a blank first number never becomes an empty `tel:` or last4.
+ContactMatch contactMatch(String id, String name, Iterable<String> numbers) =>
+    ContactMatch(id, name, [for (final n in numbers) if (n.trim().isNotEmpty) n]);
+
 /// Calls the contact: WhatsApp first, then the phone. Success reports nothing; every other outcome goes to
 /// [report] (only name and last 4 digits leave the phone), or comes back as an error string without one.
 Future<String?> runCall(
@@ -109,7 +113,14 @@ Future<String?> runCall(
     }
     final hit = hits.single;
     if (await whatsapp(hit.id)) return null;
-    await launch(buildCallIntent(hit.numbers.first, canCall: await canCall())!);
+    final number = last4 is String
+        ? hit.numbers.firstWhere((n) => n.replaceAll(RegExp(r'\D'), '').endsWith(last4), orElse: () => hit.numbers.first)
+        : hit.numbers.first;
+    var allowed = false;
+    try {
+      allowed = await canCall();
+    } catch (_) {} // a permission prompt that fails just means the dialer
+    await launch(buildCallIntent(number, canCall: allowed)!);
     return null;
   } catch (e) {
     return outcome('error', 'Could not call $name: $e');
