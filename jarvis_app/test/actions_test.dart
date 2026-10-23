@@ -72,4 +72,45 @@ void main() {
     });
     test('no match is null', () => expect(pickContact('zed', people), isNull));
   });
+
+  group('matchContacts', () {
+    const mom1 = ContactMatch('1', 'Mom', ['+49 170 1234 4521']);
+    const mom2 = ContactMatch('2', 'Mom', ['+49 170 9999 8830']);
+    test('single exact', () => expect(matchContacts('mom', [mom1]).length, 1));
+    test('two moms differ by last4', () {
+      final r = matchContacts('Mom', [mom1, mom2]);
+      expect(r.map((c) => c.last4), ['4521', '8830']);
+    });
+    test('same number under two names collapses', () {
+      const old = ContactMatch('3', 'Mom (old)', ['0170 1234 4521']);
+      expect(matchContacts('Mom', [mom1, old]).map((c) => c.id), ['1']);
+    });
+    test('mobile and home is one match', () {
+      const c = ContactMatch('4', 'Mom', ['111 222 3333', '444 555 6666']);
+      expect(matchContacts('Mom', [c]).length, 1);
+    });
+    test('last4 filters, also via second number', () {
+      expect(matchContacts('Mom', [mom1, mom2], last4: '8830').map((c) => c.id), ['2']);
+      const c = ContactMatch('5', 'Mom', ['111 222 3333', '444 555 6666']);
+      expect(matchContacts('Mom', [c], last4: '6666').length, 1);
+    });
+    test('last4 matching nothing is empty', () => expect(matchContacts('Mom', [mom1], last4: '0000'), isEmpty));
+    test('prefix beats substring', () {
+      const salmon = ContactMatch('6', 'Salmon', ['555 000 1111']);
+      expect(matchContacts('Mo', [salmon, mom1]).map((c) => c.name), ['Mom']);
+    });
+    test('empty name is empty', () => expect(matchContacts('  ', [mom1]), isEmpty));
+    test('contact without numbers ignored', () => expect(matchContacts('Mom', [const ContactMatch('7', 'Mom', [])]), isEmpty));
+  });
+
+  group('buildCallIntent', () {
+    test('CALL', () {
+      final i = buildCallIntent('+4917012345678', canCall: true)!;
+      expect((i.action, i.data), ('android.intent.action.CALL', 'tel:+4917012345678'));
+    });
+    test('DIAL', () {
+      final i = buildCallIntent('+4917012345678', canCall: false)!;
+      expect((i.action, i.data), ('android.intent.action.DIAL', 'tel:+4917012345678'));
+    });
+  });
 }

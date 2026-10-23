@@ -57,3 +57,45 @@ String? pickContact(String name, List<(String, String)> contacts) {
   }
   return null;
 }
+
+class ContactMatch {
+  const ContactMatch(this.id, this.name, this.numbers);
+  final String id, name;
+  final List<String> numbers;
+  String get last4 {
+    final d = _digits(numbers.first);
+    return d.length > 4 ? d.substring(d.length - 4) : d;
+  }
+}
+
+String _digits(String s) => s.replaceAll(RegExp(r'\D'), '');
+
+String normalizeNumber(String raw) {
+  final d = _digits(raw);
+  return d.length > 10 ? d.substring(d.length - 10) : d;
+}
+
+/// Contacts for a spoken name (same tiers as [pickContact]), narrowed by last 4 digits, duplicates collapsed.
+List<ContactMatch> matchContacts(String name, List<ContactMatch> contacts, {String? last4}) {
+  final n = name.trim().toLowerCase();
+  if (n.isEmpty) return [];
+  final withNumbers = contacts.where((c) => c.numbers.isNotEmpty).toList();
+  var hits = <ContactMatch>[];
+  for (final test in <bool Function(String)>[(s) => s == n, (s) => s.startsWith(n), (s) => s.contains(n)]) {
+    hits = withNumbers.where((c) => test(c.name.toLowerCase())).toList();
+    if (hits.isNotEmpty) break;
+  }
+  final seen = <String>{};
+  final out = <ContactMatch>[];
+  for (final c in hits) {
+    if (last4 != null && !c.numbers.any((x) => _digits(x).endsWith(last4))) continue;
+    final norm = c.numbers.map(normalizeNumber).toSet();
+    if (seen.any(norm.contains)) continue;
+    seen.addAll(norm);
+    out.add(c);
+  }
+  return out;
+}
+
+IntentSpec? buildCallIntent(String number, {required bool canCall}) =>
+    IntentSpec(action: canCall ? 'android.intent.action.CALL' : 'android.intent.action.DIAL', data: 'tel:$number');
