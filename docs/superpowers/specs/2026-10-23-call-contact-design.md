@@ -74,3 +74,13 @@ Contact names come from the address book and are untrusted text: they must reach
 - **Bad answer to "which one?":** if the chosen `last4` matches nothing or still several contacts, Jarvis re-asks once, then gives up. Same cap of 2 as the not-found loop.
 - **Phone never reports back:** after about 5 seconds Jarvis says it asked the phone to call and could not confirm, matching the existing "you asked the phone" wording. It never claims the call was placed.
 - **`CALL_PHONE` prompt:** requested at first call, not earlier. Denied or dismissed means the dialer opens instead, so a system dialog never blocks the call.
+
+## Routing (added after the owner asked how intent is classified)
+
+Intent is classified in `src/jarvis/agent/graph.py`: `KEYWORDS`/`keyword_domain` (a single-domain regex hit skips the LLM), otherwise `ROUTER_PROMPT` (a fast model sees the last 6 messages and returns domains). Only the chosen domain's tools load, so `call_contact` is invisible unless the router picks `phone`. Today the `phone` regex is `alarm|timer|navigat|directions` and the router describes phone as "alarms, timers, navigation, texting", so "call Mom" could land in `chat`, and the follow-up "the second one" has no keywords at all.
+
+Required changes:
+- Add a call keyword to the `phone` regex, word-bounded so it does not fire on "calendar", "call me later" or similar. Check it does not make an otherwise single-domain request match two domains (e.g. "call the dentist and add it to my calendar" must still route to both).
+- Add calling to the router's `phone` description and an example ("call Mom" -> phone).
+- When Jarvis has just asked "which one?" or "say the name again" for a call, the user's next reply must route to `phone`, either via the router prompt seeing that question in its 6-message window or by remembering the last domain. The builder picks; add a test that "the second one" and "ending 8830" after a which-one question reach `phone`.
+- Update the `phone` domain prompt in `src/jarvis/agent/domains.py` to list `call_contact` and the ask-then-retry behaviour; `test_wiring.py` pins tool names and tags.
