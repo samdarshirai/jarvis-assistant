@@ -236,6 +236,9 @@ class VoiceSession:
             return
         if result.get("client_actions"):  # before the speech, so an alarm is set while Jarvis is still talking
             await self.send("client_actions", actions=result["client_actions"])
+            if any(a.get("type") == "call_contact" for a in result["client_actions"]):
+                await self._say([])  # the call is the answer; the phone reports back only when it cannot place it
+                return
         await self._say(turn_replies(result["messages"]) or [EMPTY_TEXT])
 
     # --- confirmation cards ---

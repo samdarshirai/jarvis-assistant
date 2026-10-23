@@ -33,6 +33,19 @@ def test_client_actions_frame_arrives_before_the_reply_is_spoken():
         assert order.index("client_actions") < order.index("a")
 
 
+def test_a_call_is_placed_without_Jarvis_speaking():
+    h = build({"fast": [call("call_contact", {"contact": "Pogo"}), AIMessage("Calling Pogo.")]},
+              phone_tools(), [FINAL("call pogo on whatsapp")])
+    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
+        read(ws)
+        ping(ws)
+        seen = until_state(ws, "listening")
+        assert texts(seen, "client_actions") == [
+            {"type": "client_actions", "actions": [{"type": "call_contact", "contact": "Pogo"}]}]
+        assert not [1 for k, v in seen if k == "bytes" or v.get("type") == "state" and v.get("state") == "speaking"]
+        assert [v for k, v in seen if k == "text" and v.get("role") == "assistant"] == []
+
+
 def test_turn_without_actions_sends_no_frame():
     h = build({"fast": [AIMessage("chat"), AIMessage("Hi.")]}, (), [FINAL("hello")])
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
