@@ -141,8 +141,14 @@ class Brain(BaseChatModel):
     def _decide(messages) -> AIMessage:
         system = messages[0].content if isinstance(messages[0], SystemMessage) else ""
         last = messages[-1]
-        if system == ROUTER_PROMPT:
-            return AIMessage("chat")
+        if system.startswith(ROUTER_PROMPT):  # memory and situation blocks are appended to it
+            # follow-up turns skip keyword routing, so the fake router has to pick the domain itself
+            asked = str(last.content) if isinstance(last, HumanMessage) else ""
+            if asked.startswith(("remember:", "forget about")):
+                return AIMessage("memory")
+            if asked.startswith("note:"):
+                return AIMessage("notes")
+            return AIMessage("tasks" if asked == "list my tasks" else "chat")
         if system.startswith("You extract one calendar event"):
             return AIMessage('{"found": false}')
         if isinstance(last, ToolMessage) or not isinstance(last, HumanMessage):
