@@ -8,7 +8,6 @@ _KINDS_IN = ", ".join(f"'{k}'" for k in KINDS)
 _SOURCE_IN = ", ".join(f"'{k}'" for k in TRUST)
 
 KG_SCHEMA = f"""
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE TABLE IF NOT EXISTS entity (
   id SERIAL PRIMARY KEY,
   {USER_REF},
@@ -19,7 +18,6 @@ CREATE TABLE IF NOT EXISTS entity (
   UNIQUE (user_id, id),
   FOREIGN KEY (user_id, merged_into) REFERENCES entity (user_id, id) ON DELETE SET NULL (merged_into)
 );
-CREATE INDEX IF NOT EXISTS entity_name_trgm_idx ON entity USING GIN (display_name gin_trgm_ops);
 CREATE UNIQUE INDEX IF NOT EXISTS entity_one_self ON entity (user_id) WHERE kind = 'self';
 CREATE TABLE IF NOT EXISTS entity_key (
   id SERIAL PRIMARY KEY,
