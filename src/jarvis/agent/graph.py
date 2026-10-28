@@ -28,7 +28,7 @@ ROUTER_PROMPT = (
     "'what does my day look like' -> calendar; 'am I free Friday' -> calendar; 'what do I have to do' -> tasks; "
     "'add that booking email to my calendar' -> gmail, calendar; 'set an alarm for 6 and put gym at 7 in my "
     "calendar' -> calendar, phone; 'research robot vacuums and save a note' -> research, notes; "
-    "'remember I like window seats' -> memory; 'add milk and eggs to my shopping list' -> tasks; 'invite Raj to lunch Friday at 12' -> gmail, calendar; "
+    "'remember I like window seats' -> memory; 'my sister lives in Pune' -> memory; 'add milk and eggs to my shopping list' -> tasks; 'invite Raj to lunch Friday at 12' -> gmail, calendar; "
     "'call Mom' -> phone; 'should I leave now' -> calendar; 'tell her I'm running late' -> phone, or gmail if no "
     "number or address is known; 'what do I need to do today' -> calendar, tasks, gmail. A <situation> block, when "
     "present, shows the user's day: use it to decide (the next meeting's people, today's agenda). If the assistant's last message asked which contact to call, or to repeat or spell a "
@@ -211,6 +211,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         pending = [c for c in calls if gated(c["name"], seen)]
         if not pending:
             return Command(goto="tools", update={"approved": True})
+        if any((t := registry.get(c["name"])) and t.refuse_after_untrusted for c in pending) and seen:
+            return Command(goto="tools", update={"approved": False})  # refused in tools(), no prompt
         if len(pending) < len(calls):  # confirmed text must not change under the card: propose writes alone
             return Command(goto="tools", update={"approved": False})
         actions = []
@@ -276,6 +278,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
                 result = {"error": f"Unknown tool: {c['name']}"}
             elif telegram and c["name"] == "call_contact":
                 result = {"error": "Calls cannot be placed from Telegram. Tell the user to ask by voice in the Jarvis app."}
+            elif tool.refuse_after_untrusted and seen:
+                result = {"error": "Not saved: untrusted email or web text is in this conversation. Ask the user to say it again after it has scrolled out."}
             elif confirm and not state["approved"]:
                 result = {"error": "Not run: actions that need confirmation must be proposed alone, in their own "
                                    "step, after other tools have finished. Propose it again by itself."}
