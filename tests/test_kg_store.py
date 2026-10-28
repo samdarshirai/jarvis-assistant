@@ -99,3 +99,20 @@ def test_phone_normalised_and_bad_type(store):
         assert c.execute("SELECT value_norm FROM entity_key WHERE type='phone'").fetchone()[0] == "+491701234567"
     with pytest.raises(ValueError):
         store.add_key(a.id, "ssn", "1")
+
+
+def test_concurrent_add_key_flags_both(pool, uids):
+    from threading import Barrier
+    s = GraphStore(pool, uids[0])
+    a, b = s.create_entity("Anna"), s.create_entity("Anne")
+    for i in range(15):
+        bar, val = Barrier(2), f"r{i}@x.com"
+
+        def go(eid):
+            bar.wait()
+            s.add_key(eid, "email", val)
+        with ThreadPoolExecutor(2) as ex:
+            for f in [ex.submit(go, a.id), ex.submit(go, b.id)]:
+                f.result()
+        with pool.connection() as c:
+            assert [r[0] for r in c.execute("SELECT shared FROM entity_key WHERE value_norm = %s", (val,))] == [True, True]

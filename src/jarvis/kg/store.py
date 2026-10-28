@@ -78,6 +78,9 @@ class GraphStore:
         if not v:
             raise ValueError("Key value is blank.")
         with self.pool.connection() as conn:
+            # serialise holders of the same key so each sees the other's row when flagging
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                         (f"{self.user_id}\x1f{type}\x1f{v}",))
             if conn.execute("INSERT INTO entity_key (user_id, entity_id, type, value_norm) VALUES (%s, %s, %s, %s)"
                             " ON CONFLICT DO NOTHING RETURNING 1", (self.user_id, entity_id, type, v)).fetchone():
                 conn.execute("UPDATE entity_key SET shared = true WHERE user_id = %s AND type = %s AND value_norm = %s"
