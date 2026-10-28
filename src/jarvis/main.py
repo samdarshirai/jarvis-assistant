@@ -41,11 +41,11 @@ async def lifespan(app: FastAPI):
     pool = make_pool(s.database_url)
     try:
         init_schema(pool)
-        if s.graph_enabled:
-            migrate_memories(pool, s.fernet_key.encode())
         owner_id = ensure_owner(pool, s)
         if owner_id is None:
             raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")
+        if s.graph_enabled:  # after ensure_owner: it gives a pre-multi-user DB's memories their user_id
+            migrate_memories(pool, s.fernet_key.encode())
         purge_audit(pool, 90)
         purge_proactive(pool, 90)
         devices = Devices(pool)

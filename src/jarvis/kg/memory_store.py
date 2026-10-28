@@ -1,5 +1,9 @@
+import logging
+
 from jarvis.db import like_pattern
 from jarvis.memory import MAX_TEXT
+
+log = logging.getLogger(__name__)
 
 
 def _row(r) -> dict:
@@ -58,7 +62,11 @@ def migrate_memories(pool, secret: bytes = b"") -> int:
             if conn.execute("SELECT 1 FROM source WHERE user_id = %s AND kind = 'user_stated' AND ref = %s",
                             (uid, f"memory:{mid}")).fetchone():
                 continue
-        kg.add_fact(kg.self_entity().id, "note", text, source_kind="user_stated", ref=f"memory:{mid}",
-                    excerpt=text[:200], observed_at=created)
+        try:
+            kg.add_fact(kg.self_entity().id, "note", text, source_kind="user_stated", ref=f"memory:{mid}",
+                        excerpt=text[:200], observed_at=created)
+        except Exception as e:  # one bad row must not stop the rest or the boot; never log its text
+            log.warning("memory %s not migrated: %s", mid, type(e).__name__)
+            continue
         n += 1
     return n

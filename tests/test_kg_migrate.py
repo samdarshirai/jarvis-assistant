@@ -140,3 +140,15 @@ def test_forget_merged_entity_with_migrated_source_does_not_come_back(pool, uids
     assert kg.forget_entity(main.id)["merged_entities"] == 1
     assert _legacy_ids(pool, uids[0]) == []
     assert migrate_memories(pool, SECRET) == 0 and _texts(pool, uids[0]) == []
+
+
+def test_bad_legacy_rows_are_skipped_and_logged_by_id_only(pool, uids, caplog):
+    _legacy(pool, uids[0], "   ")
+    _legacy(pool, uids[0], "secret " + "y" * 400)
+    _legacy(pool, uids[0], "good one")
+    with caplog.at_level("WARNING"):
+        assert migrate_memories(pool) == 1
+    assert _texts(pool, uids[0]) == ["good one"]
+    bad = _legacy_ids(pool, uids[0])[:2]
+    assert all(f"memory {i}" in caplog.text for i in bad)
+    assert "secret" not in caplog.text and "yyyy" not in caplog.text
