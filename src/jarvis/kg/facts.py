@@ -1,3 +1,4 @@
+import re
 import unicodedata
 import uuid
 from dataclasses import dataclass
@@ -41,6 +42,18 @@ WHERE f.user_id = %s"""
 
 
 MAX_VALUE = 300
+
+
+def drop_sources(conn, user_id: int, source_ids) -> None:
+    """Delete the given sources that no fact links any more, and the legacy `memories` rows they were migrated from
+    (ref memory:N), in the caller's transaction, so the startup migration cannot bring them back."""
+    refs = [r[0] for r in conn.execute(
+        "DELETE FROM source s WHERE s.user_id = %s AND s.id = ANY(%s) AND NOT EXISTS"
+        " (SELECT 1 FROM fact_source fs WHERE fs.user_id = s.user_id AND fs.source_id = s.id) RETURNING s.ref",
+        (user_id, list(source_ids))).fetchall()]
+    mids = [int(r[7:]) for r in refs if re.fullmatch(r"memory:[0-9]+", r or "")]
+    if mids:
+        conn.execute("DELETE FROM memories WHERE user_id = %s AND id = ANY(%s)", (user_id, mids))
 
 
 def _clean(value: str) -> str:
@@ -197,8 +210,6 @@ class FactsMixin:
             if not conn.execute("DELETE FROM fact WHERE user_id = %s AND id = %s RETURNING 1",
                                 (self.user_id, fact_id)).fetchone():
                 return False
-            conn.execute("DELETE FROM source s WHERE s.user_id = %s AND s.id = ANY(%s) AND NOT EXISTS"
-                         " (SELECT 1 FROM fact_source fs WHERE fs.user_id = s.user_id AND fs.source_id = s.id)",
-                         (self.user_id, srcs))
+            drop_sources(conn, self.user_id, srcs)
             return True
         return self._write(go)

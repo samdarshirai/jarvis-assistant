@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import re
 
-from jarvis.kg.facts import norm
+from jarvis.kg.facts import drop_sources, norm
 
 HARD = ("email", "phone", "google_contact_id")
 _EDGE = "\"'`.,;:!?()[]{}<>*"
@@ -144,8 +144,7 @@ def forget_entity(store, entity_id: int, *, include_mentions: bool = True) -> di
                                            " AND fact_id = ANY(%s)", (uid, gone)).fetchall()]
         conn.execute("DELETE FROM fact WHERE user_id = %s AND id = ANY(%s)", (uid, gone))
         conn.execute("DELETE FROM entity WHERE user_id = %s AND id = ANY(%s)", (uid, ids))
-        conn.execute("DELETE FROM source s WHERE s.user_id = %s AND s.id = ANY(%s) AND NOT EXISTS"
-                     " (SELECT 1 FROM fact_source fs WHERE fs.user_id = s.user_id AND fs.source_id = s.id)", (uid, srcs))
+        drop_sources(conn, uid, srcs)
         conn.execute("UPDATE source SET excerpt = '' WHERE user_id = %s AND id = ANY(%s)", (uid, redact_ids))
         counts["suppressed"] = sum(conn.execute(
             "INSERT INTO suppression (user_id, key_type, key_hmac, kind) VALUES (%s, %s, %s, %s)"

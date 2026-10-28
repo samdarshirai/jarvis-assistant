@@ -93,3 +93,50 @@ def test_forget_leaves_other_users_legacy_rows(pool, uids):
     mem.remove(mem.all()[0]["id"])
     assert _legacy_ids(pool, uids[0]) == [] and len(_legacy_ids(pool, uids[1])) == 1
     assert migrate_memories(pool) == 0
+
+
+SECRET = b"s" * 32
+
+
+def _texts(pool, uid):
+    return sorted(f.value for f in GraphStore(pool, uid).facts_for(GraphStore(pool, uid).self_entity().id))
+
+
+def test_delete_fact_on_migrated_note_does_not_come_back(pool, uids):
+    _legacy(pool, uids[0], "keep")
+    _legacy(pool, uids[0], "drop me")
+    migrate_memories(pool)
+    kg = GraphStore(pool, uids[0])
+    gone = next(f for f in kg.facts_for(kg.self_entity().id) if f.value == "drop me")
+    assert kg.delete_fact(gone.id) is True
+    assert migrate_memories(pool) == 0
+    assert _texts(pool, uids[0]) == ["keep"] and len(_legacy_ids(pool, uids[0])) == 1
+
+
+def test_forget_person_mentioned_in_migrated_note_does_not_come_back(pool, uids):
+    _legacy(pool, uids[0], "Anna Schmidt is my dentist")
+    _legacy(pool, uids[0], "I prefer mornings")
+    migrate_memories(pool, SECRET)
+    kg = GraphStore(pool, uids[0], SECRET)
+    anna = kg.create_entity("Anna Schmidt")
+    assert kg.forget_entity(anna.id)["mentions_deleted"] == 1
+    assert migrate_memories(pool, SECRET) == 0
+    assert _texts(pool, uids[0]) == ["I prefer mornings"] and len(_legacy_ids(pool, uids[0])) == 1
+
+
+def test_forget_merged_entity_with_migrated_source_does_not_come_back(pool, uids):
+    _legacy(pool, uids[0], "Bob Jones likes tea")
+    migrate_memories(pool, SECRET)
+    kg = GraphStore(pool, uids[0], SECRET)
+    main, dup = kg.create_entity("Robert Jones"), kg.create_entity("Bobby")
+    with pool.connection() as c:  # the migrated source now also backs a fact on an entity merged into main
+        sid = c.execute("SELECT id FROM source WHERE user_id = %s AND ref LIKE 'memory:%%'", (uids[0],)).fetchone()[0]
+        c.execute("DELETE FROM fact_source WHERE user_id = %s AND source_id = %s", (uids[0], sid))
+        c.execute("UPDATE entity SET merged_into = %s WHERE id = %s", (main.id, dup.id))
+        fid = c.execute("INSERT INTO fact (user_id, subject_id, predicate, object_value) VALUES (%s, %s, 'city', 'Leeds')"
+                        " RETURNING id", (uids[0], dup.id)).fetchone()[0]
+        c.execute("INSERT INTO fact_source (user_id, fact_id, source_id) VALUES (%s, %s, %s)", (uids[0], fid, sid))
+        c.execute("DELETE FROM fact WHERE user_id = %s AND predicate = 'note'", (uids[0],))
+    assert kg.forget_entity(main.id)["merged_entities"] == 1
+    assert _legacy_ids(pool, uids[0]) == []
+    assert migrate_memories(pool, SECRET) == 0 and _texts(pool, uids[0]) == []

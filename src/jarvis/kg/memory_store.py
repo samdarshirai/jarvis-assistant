@@ -37,15 +37,6 @@ class GraphMemoryStore:
     def remove(self, memory_id: int) -> bool:
         if self.get(memory_id) is None:
             return False
-        # Drop the migrated legacy rows first so a restart cannot resurrect it; if the graph delete then fails the memory stays visible.
-        with self.pool.connection() as conn:
-            refs = [r[0] for r in conn.execute(
-                "SELECT s.ref FROM fact_source fs JOIN source s ON s.user_id = fs.user_id AND s.id = fs.source_id"
-                " WHERE fs.user_id = %s AND fs.fact_id = %s AND s.kind = 'user_stated' AND s.ref ~ '^memory:[0-9]+$'",
-                (self.user_id, memory_id)).fetchall()]
-            if refs:
-                conn.execute("DELETE FROM memories WHERE user_id = %s AND id = ANY(%s)",
-                             (self.user_id, [int(r.split(":")[1]) for r in refs]))
         return self.store.delete_fact(memory_id)
 
     def all(self) -> list[dict]:
