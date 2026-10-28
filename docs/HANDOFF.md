@@ -55,6 +55,14 @@ Friends are added by hand and bring their own LLM key (any OpenAI-compatible end
 ## Situation snapshot (merged 2026-10-28)
 `src/jarvis/situation.py`: per-user `Situation` builds a snapshot (now, phone fix + age, calendar with `[NOW]`/`[NEXT]` and attendees, tomorrow's first events in the evening or when asked; tasks, important mail, notes only for "whole day" requests) and `SituationAwareProvider` appends it as the LAST part of the system prompt (tenant wires `Memory(Situation(raw))`; proactive jobs keep the plain `llm`). Calendar text is wrapped `<untrusted_calendar>`. The router gets only time + ongoing/next event (tag `router`). 45 s cache per level, all sources in parallel, 4 s per-source timeout. Phone tools take `basis` when the recipient was inferred: the tool refuses until the user confirms. App reports location via `POST /location` on resume and voice start, and syncs the phone timezone to `/me` on resume. Full suite green (952). Not built: travel time (needs a routing service) and the privacy decision about sending mail/notes to the model on each request.
 
+## Knowledge graph (flag `JARVIS_GRAPH_ENABLED`, default off; branch `feat/knowledge-graph`)
+Spec `docs/superpowers/specs/2026-10-28-knowledge-graph-design.md`, plan `docs/superpowers/plans/2026-10-28-knowledge-graph-foundation.md`. Per-user graph in `src/jarvis/kg/` (store, facts, forget, block, memory_store, views), tools `remember_fact` / `graph_lookup` / `forget_entity` (`src/jarvis/tools/graph_tools.py`), `/graph/*` routes, and a People screen in the app. Ships dark: with the flag off nothing changes. Tenant wiring: one `GraphStore` per runtime, `GraphMemoryStore` replaces the memory table, prompt order is base, memories, `<graph>`, situation. Coexistence checks: `tests/test_kg_coexistence.py`; manual rows 110-118 in `ACCEPTANCE.md`.
+- Needs Postgres >= 15 (composite `ON DELETE SET NULL (col)`).
+- Flag asymmetry: memories added while the flag is on live in the graph and are not copied back to the legacy table when it is turned off.
+- Rotating `fernet_key` breaks the suppression HMACs: forgotten people can be recreated by extraction afterwards.
+- Later plans: calendar, Gmail, contacts, extractor, CRM, decay, retention. WhatsApp is deferred.
+- Future ingestion paths MUST pass `origin="extracted"` to `create_entity` / `add_key`; the default `"user"` is fail-open (it lifts suppression).
+
 ## Safety invariants (do not break)
 All invariants below hold per user: each user has their own runtime, lock, thread (`user:<id>`), audit rows, tokens and keys; read "owner" as "the user". Telegram serves the owner only. Nobody falls back to the operator's env keys.
 - Every side effect goes through the graph's `interrupt()` confirmation gate (in the graph, not the prompt) (one bounded exception: see the next bullet). A mixed step (confirm-gated + non-gated call) never interrupts: the gated call is refused "propose it again by itself".
