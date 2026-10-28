@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
 
-from jarvis.agent.domains import DOMAINS
+from jarvis.agent.domains import DOMAINS, domain_prompt
 from jarvis.google.auth import ReauthRequired
 from jarvis.llm import MemoryAwareProvider
 from jarvis.timeutil import now_local
@@ -187,7 +187,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         spoken = VOICE_NOTE if voice and dom.name in ("notes", "research") else ""
         if (config.get("configurable") or {}).get("channel") == "telegram" and dom.name == "phone":
             spoken += TELEGRAM_NO_CALLS_NOTE
-        system = SystemMessage(f"{dom.prompt}{spoken}\nCurrent local time: "
+        system = SystemMessage(f"{domain_prompt(dom, registry)}{spoken}\nCurrent local time: "
                                f"{now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
         reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
         return {"messages": [reply], "approved": False}
