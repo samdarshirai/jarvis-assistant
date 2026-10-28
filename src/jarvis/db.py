@@ -117,6 +117,8 @@ def make_pool(url: str) -> ConnectionPool:
 def init_schema(pool: ConnectionPool) -> None:
     """Create the schema; a database from before users existed gets a nullable user_id on every data table,
     which stays NULL until users.ensure_owner adopts the rows and calls finish_user_columns."""
+    from jarvis.kg.schema import KG_SCHEMA  # here, not at top: kg.schema imports USER_REF from this module
+
     with pool.connection() as conn:  # one transaction: committed on exit
         conn.execute(SCHEMA)
         # ALTER locks ACCESS EXCLUSIVE even as a no-op, so a re-run issues none. CREATE INDEX IF NOT EXISTS in SCHEMA
@@ -128,6 +130,7 @@ def init_schema(pool: ConnectionPool) -> None:
             if (t, col) not in have:
                 conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {col} {decl}")
         finish_user_columns(conn)
+        conn.execute(KG_SCHEMA)
         # Deepgram and Tavily keys are operator-set now: drop any a user stored earlier
         conn.execute("DELETE FROM user_secrets WHERE name IN ('deepgram_key', 'tavily_key')")
 

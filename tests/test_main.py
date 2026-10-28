@@ -51,7 +51,7 @@ def mock_lifespan_deps(monkeypatch):
         timezone="UTC",
         weather_city="",
         fernet_key="test",
-        tavily_api_key="",
+        tavily_api_key="", graph_enabled=False,
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
         deepgram_api_key="", fcm_credentials_path="", google_web_client_secrets="", public_base_url="",
@@ -97,7 +97,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
         timezone="UTC",
         weather_city="",
         fernet_key="test",
-        tavily_api_key="",
+        tavily_api_key="", graph_enabled=False,
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
         deepgram_api_key="", fcm_credentials_path="", google_web_client_secrets="", public_base_url="",
@@ -441,3 +441,21 @@ def test_location_saves_the_fix_for_the_caller_only():
     assert c.post("/location", json={"lat": 91, "lon": 0}).status_code == 422
     app.state.dashboard = _Dash(ok=False)
     assert c.post("/location", json={"lat": 1, "lon": 2}).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_lifespan_migrates_memories_after_ensure_owner(mock_lifespan_deps):
+    """A pre-multi-user DB gets user_id on its memories in ensure_owner; migrating first would skip them."""
+    mp, order = mock_lifespan_deps["monkeypatch"], mock_lifespan_deps["call_order"]
+    from jarvis.main import get_settings
+    get_settings().graph_enabled = True
+    mp.setattr("jarvis.main.ensure_owner", lambda pool, s: order.append("ensure_owner") or 1)
+    mp.setattr("jarvis.main.migrate_memories", lambda pool, secret: order.append("migrate"))
+
+    def stop(pool, days):
+        raise RuntimeError("stop here")
+    mp.setattr("jarvis.main.purge_audit", stop)
+    with pytest.raises(RuntimeError, match="stop here"):
+        async with lifespan(FastAPI()):
+            pass
+    assert order == ["ensure_owner", "migrate"]

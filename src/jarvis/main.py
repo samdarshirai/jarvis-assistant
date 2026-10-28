@@ -20,6 +20,7 @@ from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
+from jarvis.kg.memory_store import migrate_memories
 from jarvis.keys import Keys
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
@@ -43,6 +44,8 @@ async def lifespan(app: FastAPI):
         owner_id = ensure_owner(pool, s)
         if owner_id is None:
             raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")
+        if s.graph_enabled:  # after ensure_owner: it gives a pre-multi-user DB's memories their user_id
+            migrate_memories(pool, s.fernet_key.encode())
         purge_audit(pool, 90)
         purge_proactive(pool, 90)
         devices = Devices(pool)
@@ -143,6 +146,15 @@ class EventIn(BaseModel):
 class TaskIn(BaseModel):
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     due: date | None = None
+
+
+class FactIn(BaseModel):
+    value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+
+
+class SuppressionIn(BaseModel):
+    key_type: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    key_hmac: Annotated[str, StringConstraints(min_length=1, max_length=256)]
 
 
 class ChatIn(BaseModel):
@@ -417,6 +429,46 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         if err:
             return err
         return {"ok": True} if await svc.forget_memory(rt, memory_id) else JSONResponse({"error": "not_found"}, status_code=404)
+
+    # --- knowledge graph control: 404 for everything while the graph is off (rt.kg is None) ---
+    async def graph(request: Request, method: str, *args):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        code, body = await getattr(svc, method)(rt, *args)
+        return JSONResponse(body, status_code=code)
+
+    @app.get("/graph/entities")
+    async def graph_entities(request: Request):
+        return await graph(request, "graph_entities")
+
+    @app.get("/graph/entities/{entity_id}")
+    async def graph_entity(request: Request, entity_id: int):
+        return await graph(request, "graph_entity", entity_id)
+
+    @app.get("/graph/entities/{entity_id}/forget-preview")
+    async def graph_forget_preview(request: Request, entity_id: int, mentions: bool = True):
+        return await graph(request, "graph_forget_preview", entity_id, mentions)
+
+    @app.delete("/graph/entities/{entity_id}")
+    async def graph_forget(request: Request, entity_id: int, mentions: bool = True):
+        return await graph(request, "graph_forget", entity_id, mentions)
+
+    @app.patch("/graph/facts/{fact_id}")
+    async def graph_fact_correct(request: Request, fact_id: int, body: FactIn):
+        return await graph(request, "graph_fact_correct", fact_id, body.value)
+
+    @app.delete("/graph/facts/{fact_id}")
+    async def graph_fact_delete(request: Request, fact_id: int):
+        return await graph(request, "graph_fact_delete", fact_id)
+
+    @app.get("/graph/suppressions")
+    async def graph_suppressions(request: Request):
+        return await graph(request, "graph_suppressions")
+
+    @app.delete("/graph/suppressions")
+    async def graph_suppression_lift(request: Request, body: SuppressionIn):
+        return await graph(request, "graph_suppression_lift", body.key_type, body.key_hmac)
 
     @app.get("/mail")
     async def mail(request: Request, limit: int = 20):

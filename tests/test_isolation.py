@@ -562,7 +562,10 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("DELETE", "/calendar/events/e1", None), ("POST", "/calendar/events", {
               "summary": "x", "start": "2026-10-28T10:00:00+01:00", "end": "2026-10-28T11:00:00+01:00"}),
           ("GET", "/memory", None), ("DELETE", "/memory/1", None), ("GET", "/shopping", None),
-          ("POST", "/shopping", {"title": "milk"}), ("POST", "/shopping/i1/complete", None)]
+          ("POST", "/shopping", {"title": "milk"}), ("POST", "/shopping/i1/complete", None),
+          ("GET", "/graph/entities", None), ("GET", "/graph/entities/1", None), ("GET", "/graph/entities/1/forget-preview", None),
+          ("DELETE", "/graph/entities/1", None), ("PATCH", "/graph/facts/1", {"value": "x"}), ("DELETE", "/graph/facts/1", None),
+          ("GET", "/graph/suppressions", None), ("DELETE", "/graph/suppressions", {"key_type": "email", "key_hmac": "x"})]
 PUBLIC = {"/", "/privacy", "/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}
 

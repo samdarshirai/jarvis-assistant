@@ -199,3 +199,19 @@ Not run manually yet. Use the configured models in text chat and repeat the fact
 | Dispute a calendar record and ask to change it | Jarvis checks the relevant personal-data tools; the existing write-confirmation gate still applies |
 
 Automated checks additionally enforce the per-turn cap of two searches and two page-fetch attempts (including errors and batched calls), fresh budgets on later turns, strong-tier voice reviews, and safe fallback for malformed router output. The original reported conversation has not been replayed because its transcript was unavailable.
+
+# Manual acceptance (knowledge graph)
+
+Not run on a real device yet. Start the backend with `JARVIS_GRAPH_ENABLED=true` (Postgres 15 or newer).
+
+| # | Do | Expect |
+|---|----|--------|
+| 110 | Say "my sister lives in Pune" and confirm the card | Jarvis saves it ("Got it, I'll remember that."); the card read "Remember: sister — city: Pune" |
+| 111 | The next day, ask "where does my sister live?" | Jarvis answers Pune |
+| 112 | Say "she moved to Berlin" and confirm; open People | Jarvis now says Berlin; the sister shows Berlin as current and Pune under History |
+| 113 | Open People, then the person | Each fact shows its source and date |
+| 114 | Correct a fact in the person screen | The corrected value is shown and used in the next answer |
+| 115 | Forget the person from People | The dialog lists counts (facts, merged entities, other facts that mention them) and the line "Chat history, notes and the activity log are not erased." |
+| 116 | After forgetting, chat about someone else for a while | The forgotten person is not recreated and does not appear in People |
+| 117 | Restart the backend with the flag off | The previous memory behaviour returns. Memories added while the flag was on are not copied back to the legacy table |
+| 118 | Have Jarvis read an email, then in the same conversation say "remember my sister lives in Pune" | Jarvis refuses ("Not saved: untrusted ...") and nothing is stored |

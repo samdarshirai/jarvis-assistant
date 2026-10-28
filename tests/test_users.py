@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from psycopg_pool import ConnectionPool
 
 from jarvis.db import SCHEMA, init_schema
+from jarvis.kg.schema import KG_SCHEMA
 from jarvis.users import MAX_USERS, SecretStore, UserStore, ensure_owner
 
 KEY = Fernet.generate_key().decode()
@@ -52,7 +53,7 @@ NEW_PKS = {"oauth_tokens": ["user_id", "provider"], "mail_seen": ["user_id", "me
 
 def settings(**over):
     base = dict(owner_email="", timezone=TZ, fernet_key=KEY, openrouter_api_key="sk-or-secret",
-                models_fast="a/x", models_strong="b/y", deepgram_api_key="", tavily_api_key="")
+                models_fast="a/x", models_strong="b/y", deepgram_api_key="", tavily_api_key="", graph_enabled=False)
     return SimpleNamespace(**{**base, **over})
 
 
@@ -217,9 +218,11 @@ def test_init_schema_on_an_upgraded_database_runs_no_add_column(pool):
     init_schema(Pool())
     # the whole statement set of a re-run: the CREATE ... IF NOT EXISTS script, then catalog/row SELECTs only
     assert seen[0] is SCHEMA and "ALTER" not in SCHEMA.upper()
-    # the one deliberate write: drop operator-level keys that older versions stored per user
+    # then the graph's CREATE ... IF NOT EXISTS script, and the one deliberate write: drop operator-level keys
+    # that older versions stored per user
+    assert "ALTER" not in KG_SCHEMA.upper()
     assert [s for s in seen[1:] if not s.lstrip().upper().startswith("SELECT")] == [
-        "DELETE FROM user_secrets WHERE name IN ('deepgram_key', 'tavily_key')"]
+        KG_SCHEMA, "DELETE FROM user_secrets WHERE name IN ('deepgram_key', 'tavily_key')"]
     # a database still missing a guarded column gets it
     with pool.connection() as c:
         c.execute("ALTER TABLE auth_attempts DROP COLUMN finish_code_hash")

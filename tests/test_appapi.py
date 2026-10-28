@@ -397,14 +397,14 @@ class Tagged(Src):
         return [{**m, "id": self.tag} for m in super().search_emails(q, limit)]
 
 
-def tenants(pool):
-    return Tenants(pool, NS(fernet_key=Fernet.generate_key().decode(), tavily_api_key="", models=lambda tier: [tier]), InMemorySaver(),
+def tenants(pool, graph=False):
+    return Tenants(pool, NS(fernet_key=Fernet.generate_key().decode(), tavily_api_key="", graph_enabled=graph, models=lambda tier: [tier]), InMemorySaver(),
                    google_service_factory=lambda *a: object(), llm_provider_factory=lambda *a: None)
 
 
-async def users(pool, uids):
+async def users(pool, uids, graph=False):
     """(service, header_a, header_b, runtime_a, runtime_b) with each user's Google clients replaced by a Tagged fake."""
-    devices, t = Devices(pool), tenants(pool)
+    devices, t = Devices(pool), tenants(pool, graph)
     ha, hb = (f"Bearer {devices.create(u)[1]}" for u in uids)
     s = AppService(devices, t)
     ra, rb = await s.authenticate(ha), await s.authenticate(hb)
@@ -494,3 +494,217 @@ def test_http_event_create_and_delete():
     assert c.post("/calendar/events", headers=H, json={**ev, "start": "2026-10-05T12:00:00"}).status_code == 422
     assert c.delete("/calendar/events/e1", headers=H).json() == {"ok": True}
     assert client(rt(Src(RuntimeError()))).delete("/calendar/events/e1", headers=H).status_code == 502
+
+
+# --- knowledge graph control API ---
+class Rec:
+    def __init__(self):
+        self.rows = []
+
+    def record(self, *a, **kw):
+        self.rows.append((a, kw))
+
+
+async def kg_users(pool, uids):
+    """(http client A, client B, runtime A, runtime B) on real graph-enabled runtimes; audit is captured."""
+    s, ha, hb, ra, rb = await users(pool, uids, graph=True)
+    for r in (ra, rb):
+        r.audit = Rec()
+    app = create_app(with_lifespan=False)
+    app.state.app_api = s
+    c = TestClient(app)
+    return (lambda m, u, **kw: c.request(m, u, headers={"Authorization": ha}, **kw),
+            lambda m, u, **kw: c.request(m, u, headers={"Authorization": hb}, **kw), ra, rb)
+
+
+def seed_person(kg):
+    """Dana (email key, employer fact), a mention of her in another fact; returns the entity."""
+    dana = kg.create_entity("Dana Zorn", "person")
+    kg.add_key(dana.id, "email", "dana@zorn.example")
+    kg.add_fact(dana.id, "employer", "Initech Hamburg", source_kind="email", ref="m1", excerpt="Dana Zorn works at Initech Hamburg")
+    kg.add_fact(kg.self_entity().id, "note", "lunch with Dana Zorn", source_kind="user_stated")
+    return dana
+
+
+async def test_graph_routes_404_for_other_users_ids(pool, uids):
+    a, b, ra, rb = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    fid = ra.kg.facts_for(dana.id)[0].id
+    for m, u, kw in [("GET", f"/graph/entities/{dana.id}", {}), ("GET", f"/graph/entities/{dana.id}/forget-preview", {}),
+                     ("DELETE", f"/graph/entities/{dana.id}", {}), ("PATCH", f"/graph/facts/{fid}", {"json": {"value": "x"}}),
+                     ("DELETE", f"/graph/facts/{fid}", {}),
+                     ("DELETE", "/graph/suppressions", {"json": {"key_type": "email", "key_hmac": "zz"}})]:
+        r = b(m, u, **kw)
+        assert (r.status_code, r.json()) == (404, {"error": "not_found"}), (m, u)
+    assert b("GET", "/graph/entities").json() == {"entities": []}  # none of A's people
+    assert ra.kg.facts_for(dana.id)[0].value == "Initech Hamburg"
+    assert ra.audit.rows == rb.audit.rows == []
+
+
+async def test_graph_entity_shows_facts_history_pending_with_provenance(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    dana = seed_person(kg)
+    kg.add_fact(dana.id, "employer", "Globex Munich", source_kind="user_stated")  # supersedes the email-sourced phone
+    lst = a("GET", "/graph/entities").json()["entities"]
+    assert {"id": dana.id, "name": "Dana Zorn", "kind": "person", "fact_count": 1} in lst
+    assert [e["name"] for e in lst] == sorted((e["name"] for e in lst), key=str.casefold)
+    body = a("GET", f"/graph/entities/{dana.id}").json()
+    assert (body["id"], body["name"], body["kind"]) == (dana.id, "Dana Zorn", "person")
+    (f,) = body["facts"]
+    assert set(f) == {"id", "predicate", "value", "source", "excerpt", "observed_at", "recorded_at", "status"}
+    assert (f["value"], f["source"], f["status"]) == ("Globex Munich", "user_stated", "active")
+    assert f["recorded_at"].startswith("20")
+    (h,) = body["history"]
+    assert (h["value"], h["source"], h["status"], h["excerpt"]) == ("Initech Hamburg", "email", "superseded", "Dana Zorn works at Initech Hamburg")
+    assert body["pending"] == []
+
+
+async def test_graph_pending_fact_listed(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    d = kg.create_entity("Dana Zorn")
+    kg.add_fact(d.id, "employer", "Acme", source_kind="user_stated")
+    kg.add_fact(d.id, "employer", "Umbrella", source_kind="email", ref="m9")  # newer but less trusted
+    body = a("GET", f"/graph/entities/{d.id}").json()
+    assert [f["value"] for f in body["pending"]] == ["Umbrella"] and body["pending"][0]["status"] == "pending"
+
+
+async def test_graph_patch_corrects_and_returns_full_fact(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    old = ra.kg.facts_for(dana.id)[0]
+    r = a("PATCH", f"/graph/facts/{old.id}", json={"value": "  Hooli  "})
+    assert r.status_code == 200
+    f = r.json()
+    assert set(f) == {"id", "predicate", "value", "source", "excerpt", "observed_at", "recorded_at", "status"}
+    assert (f["value"], f["source"], f["status"], f["predicate"]) == ("Hooli", "user_stated", "active", "employer")
+    body = a("GET", f"/graph/entities/{dana.id}").json()
+    assert [x["id"] for x in body["facts"]] == [f["id"]]
+    assert old.id in [x["id"] for x in body["history"]]
+
+
+@pytest.mark.parametrize("value", ["", "   ", "x" * 301, None])
+async def test_graph_patch_rejects_bad_values(pool, uids, value):
+    a, _, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    fid = ra.kg.facts_for(dana.id)[0].id
+    r = a("PATCH", f"/graph/facts/{fid}", json={"value": value})
+    assert r.status_code == 422 and "error" in r.json()
+    assert ra.kg.facts_for(dana.id)[0].id == fid and ra.audit.rows == []
+
+
+async def test_graph_delete_fact(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    fid = ra.kg.facts_for(dana.id)[0].id
+    assert a("DELETE", f"/graph/facts/{fid}").json() == {"ok": True}
+    assert a("DELETE", f"/graph/facts/{fid}").status_code == 404
+    assert ra.kg.facts_for(dana.id, history=True) == []
+
+
+async def test_graph_forget_flow_preview_then_delete_then_suppressions(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    before = a("GET", "/graph/entities").json()
+    prev = a("GET", f"/graph/entities/{dana.id}/forget-preview")
+    assert prev.status_code == 200 and prev.json()["entity"] == "Dana Zorn"
+    assert a("GET", "/graph/entities").json() == before and a("GET", "/graph/suppressions").json() == {"suppressions": []}
+    assert ra.kg.facts_for(dana.id)
+    r = a("DELETE", f"/graph/entities/{dana.id}")
+    assert r.status_code == 200 and r.json() == prev.json() and r.json()["mentions_deleted"] == 1
+    assert dana.id not in [e["id"] for e in a("GET", "/graph/entities").json()["entities"]]
+    assert a("GET", f"/graph/entities/{dana.id}").status_code == 404
+    sup = a("GET", "/graph/suppressions")
+    rows = sup.json()["suppressions"]
+    assert {"hard", "name"} <= {x["kind"] for x in rows} and all(set(x) == {"kind", "key_type", "key_hmac", "created_at"} for x in rows)
+    for plain in ("dana", "Zorn", "zorn.example", "initech"):
+        assert plain not in sup.text
+
+
+async def test_graph_forget_without_mentions(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    prev = a("GET", f"/graph/entities/{dana.id}/forget-preview?mentions=false").json()
+    r = a("DELETE", f"/graph/entities/{dana.id}?mentions=false").json()
+    assert r == prev and r["mentions_deleted"] == 0
+    assert any(f.value == "lunch with Dana Zorn" for f in ra.kg.facts_for(ra.kg.self_entity().id))
+
+
+async def test_graph_delete_superseded_and_retracted_facts(pool, uids):
+    a, b, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    old = ra.kg.facts_for(dana.id)[0]
+    ra.kg.add_fact(dana.id, "employer", "Globex", source_kind="user_stated")
+    gone = ra.kg.add_fact(dana.id, "note", "plays chess", source_kind="user_stated")
+    ra.kg.retract_fact(gone.id)
+    assert {f.status for f in ra.kg.facts_for(dana.id, history=True) if f.id in (old.id, gone.id)} == {"superseded", "retracted"}
+    assert b("DELETE", f"/graph/facts/{old.id}").status_code == 404  # another user's history row
+    for fid in (old.id, gone.id):
+        assert a("DELETE", f"/graph/facts/{fid}").json() == {"ok": True}
+    assert [f.value for f in ra.kg.facts_for(dana.id, history=True)] == ["Globex"]
+
+
+async def test_graph_cannot_forget_self(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    me = ra.kg.self_entity()
+    r = a("DELETE", f"/graph/entities/{me.id}")
+    assert (r.status_code, r.json()) == (409, {"error": "cannot_forget_self"})
+    r = a("GET", f"/graph/entities/{me.id}/forget-preview")
+    assert (r.status_code, r.json()) == (409, {"error": "cannot_forget_self"})
+    assert ra.kg.get_entity(me.id) and ra.audit.rows == []
+
+
+async def test_graph_suppression_lift(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    a("DELETE", f"/graph/entities/{dana.id}")
+    s = a("GET", "/graph/suppressions").json()["suppressions"][0]
+    assert a("DELETE", "/graph/suppressions", json={"key_type": s["key_type"], "key_hmac": s["key_hmac"]}).json() == {"ok": True}
+    assert s not in a("GET", "/graph/suppressions").json()["suppressions"]
+    assert a("DELETE", "/graph/suppressions", json={"key_type": s["key_type"], "key_hmac": s["key_hmac"]}).status_code == 404
+    assert a("DELETE", "/graph/suppressions", json={"key_type": "", "key_hmac": "x"}).status_code == 422
+
+
+async def test_graph_routes_404_with_flag_off(pool, uids):
+    s, ha, _, ra, _ = await users(pool, uids)
+    app = create_app(with_lifespan=False)
+    app.state.app_api = s
+    c = TestClient(app)
+    for m, u in [("GET", "/graph/entities"), ("GET", "/graph/entities/1"), ("GET", "/graph/suppressions"),
+                 ("DELETE", "/graph/entities/1"), ("DELETE", "/graph/facts/1")]:
+        assert c.request(m, u, headers={"Authorization": ha}).status_code == 404, u
+
+
+async def test_graph_audit_has_ids_and_counts_only(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    f1, = ra.kg.facts_for(dana.id)
+    other = ra.kg.add_fact(dana.id, "note", "secret plan", source_kind="user_stated")
+    a("PATCH", f"/graph/facts/{f1.id}", json={"value": "Hooli-corrected"})
+    a("DELETE", f"/graph/facts/{other.id}")
+    a("DELETE", f"/graph/entities/{dana.id}")
+    s = a("GET", "/graph/suppressions").json()["suppressions"][0]
+    a("DELETE", "/graph/suppressions", json={"key_type": s["key_type"], "key_hmac": s["key_hmac"]})
+    names = [row[0][1] for row in ra.audit.rows]
+    assert names == ["graph_fact_correct", "graph_fact_delete", "graph_forget", "graph_suppression_lift"]
+    dump = repr(ra.audit.rows).casefold()
+    for secret in ("dana", "zorn", "+4915", "Hooli", "secret plan", "@", s["key_hmac"]):
+        assert secret.casefold() not in dump, secret
+
+
+async def test_graph_list_excludes_merged_away_entities(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    d = ra.kg.create_entity("Dana Zorn")
+    gone = ra.kg.create_entity("D. Zorn")
+    with pool.connection() as conn:
+        conn.execute("UPDATE entity SET merged_into = %s WHERE id = %s", (d.id, gone.id))
+    ids = [e["id"] for e in a("GET", "/graph/entities").json()["entities"]]
+    assert d.id in ids and gone.id not in ids
+
+
+async def test_graph_store_failure_is_502(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    ra.kg.list_entities = lambda: (_ for _ in ()).throw(RuntimeError("db down"))
+    r = a("GET", "/graph/entities")
+    assert (r.status_code, r.json()) == (502, {"error": "unavailable"})
