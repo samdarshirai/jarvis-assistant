@@ -78,17 +78,32 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
                        (uid, entity_id)).fetchone()
     if not row:
         raise ValueError("unknown entity")
-    if row[0] == "self":
+    # everything merged into it, transitively; UNION (not ALL) stops on merged_into cycles
+    group = conn.execute(
+        "WITH RECURSIVE g(id) AS (SELECT %s::int UNION SELECT e.id FROM entity e JOIN g ON e.merged_into = g.id"
+        " WHERE e.user_id = %s) SELECT e.id, e.kind, e.display_name FROM entity e JOIN g ON g.id = e.id"
+        " WHERE e.user_id = %s ORDER BY e.id FOR UPDATE OF e", (entity_id, uid, uid)).fetchall()
+    if any(k == "self" for _, k, _ in group):
         raise ValueError("The self entity cannot be forgotten.")
-    keys = conn.execute("SELECT type, value_norm FROM entity_key WHERE user_id = %s AND entity_id = %s",
-                        (uid, entity_id)).fetchall()
-    names = {v for t, v in keys if t in ("name", "alias")} | {norm(row[1])}
-    # a full name is one that is not just a token of another name ("anna" inside "anna müller")
-    full = {v for v in names if not any(v != w and v in w.split() for w in names)}
-    terms = full | {v for v in names if len(v) >= 3} | {v for t, v in keys if t in HARD}
+    ids = [i for i, _, _ in group]
+    by_ent = {i: [] for i in ids}
+    for e, t, v in conn.execute("SELECT entity_id, type, value_norm FROM entity_key WHERE user_id = %s"
+                                " AND entity_id = ANY(%s)", (uid, ids)).fetchall():
+        by_ent[e].append((t, v))
+    terms, rows = set(), []
+    for i, _, display in group:
+        keys = by_ent[i]
+        names = {v for t, v in keys if t in ("name", "alias")} | {norm(display)}
+        # a full name is one that is not just a token of another name ("anna" inside "anna müller")
+        full = {v for v in names if not any(v != w and v in w.split() for w in names)}
+        terms |= full | {v for v in names if len(v) >= 3} | {v for t, v in keys if t in HARD}
+        rows += [("hard", t, v) for t, v in keys if t in HARD]
+        rows += [("name", t, v) for t, v in keys if t in ("name", "alias") and v in full]
+        if not any(t == "name" and v in full for t, v in keys):  # display name counts even if its key went missing
+            rows.append(("name", "name", norm(display)))
 
-    own = [r[0] for r in conn.execute("SELECT id FROM fact WHERE user_id = %s AND (subject_id = %s"
-                                      " OR object_entity_id = %s)", (uid, entity_id, entity_id)).fetchall()]
+    own = [r[0] for r in conn.execute("SELECT id FROM fact WHERE user_id = %s AND (subject_id = ANY(%s)"
+                                      " OR object_entity_id = ANY(%s))", (uid, ids, ids)).fetchall()]
     mentions = []
     if include_mentions:
         # ponytail: scans every value of the user's graph in Python; fine for a personal graph, trigram index if huge
@@ -104,17 +119,13 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
         "  OR NOT EXISTS (SELECT 1 FROM fact_source fs WHERE fs.user_id = s.user_id AND fs.source_id = s.id))",
         (uid, gone)).fetchall() if _mentions(ex, terms)]
 
-    rows = [("hard", t, v) for t, v in keys if t in HARD] + [("name", t, v) for t, v in keys if t in ("name", "alias")
-                                                             and v in full]
-    if not any(t == "name" for _, t, _ in rows):  # display name always counts, even if its key went missing
-        rows.append(("name", "name", norm(row[1])))
     sup = list({(t, h): (k, t, h) for (k, t, _), h in zip(rows, hmacs(store, conn, [v for *_, v in rows]))}.values())
     existing = set(conn.execute("SELECT key_type, key_hmac FROM suppression WHERE user_id = %s",
                                 (uid,)).fetchall())
     new = [s for s in sup if (s[1], s[2]) not in existing]
     counts = {"entity": row[1], "facts": len(own), "redacted_excerpts": len(redact_ids),
-              "mentions_deleted": len(mentions), "suppressed": len(new)}
-    return counts, gone, redact_ids, sup
+              "mentions_deleted": len(mentions), "suppressed": len(new), "merged_entities": len(ids) - 1}
+    return counts, ids, gone, redact_ids, sup
 
 
 def preview_forget(store, entity_id: int, *, include_mentions: bool = True) -> dict:
@@ -125,14 +136,14 @@ def preview_forget(store, entity_id: int, *, include_mentions: bool = True) -> d
 
 
 def forget_entity(store, entity_id: int, *, include_mentions: bool = True) -> dict:
-    """Delete the entity, its facts, facts about or mentioning it; redact excerpts; suppress its names and keys."""
+    """Delete the entity (and all merged into it), its facts, facts about or mentioning it; redact excerpts; suppress its names and keys."""
     uid = store.user_id
     with store.pool.connection() as conn:
-        counts, gone, redact_ids, sup = _plan(store, conn, entity_id, include_mentions)
+        counts, ids, gone, redact_ids, sup = _plan(store, conn, entity_id, include_mentions)
         srcs = [r[0] for r in conn.execute("SELECT DISTINCT source_id FROM fact_source WHERE user_id = %s"
                                            " AND fact_id = ANY(%s)", (uid, gone)).fetchall()]
         conn.execute("DELETE FROM fact WHERE user_id = %s AND id = ANY(%s)", (uid, gone))
-        conn.execute("DELETE FROM entity WHERE user_id = %s AND id = %s", (uid, entity_id))
+        conn.execute("DELETE FROM entity WHERE user_id = %s AND id = ANY(%s)", (uid, ids))
         conn.execute("DELETE FROM source s WHERE s.user_id = %s AND s.id = ANY(%s) AND NOT EXISTS"
                      " (SELECT 1 FROM fact_source fs WHERE fs.user_id = s.user_id AND fs.source_id = s.id)", (uid, srcs))
         conn.execute("UPDATE source SET excerpt = '' WHERE user_id = %s AND id = ANY(%s)", (uid, redact_ids))

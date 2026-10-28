@@ -160,7 +160,8 @@ def test_preview_forget_writes_nothing(pool, store, anna):
     assert _count(pool, "SELECT count(*) FROM source WHERE excerpt <> ''") == 1
     assert len(store.facts_for(maria.id)) == 2
     assert p == store.forget_entity(anna.id)
-    assert p == {"entity": "Anna Müller", "facts": 1, "redacted_excerpts": 1, "mentions_deleted": 1, "suppressed": 4}
+    assert p == {"entity": "Anna Müller", "facts": 1, "redacted_excerpts": 1, "mentions_deleted": 1, "suppressed": 4,
+                 "merged_entities": 0}
 
 
 def test_list_and_lift_suppressions(store, anna):
@@ -219,3 +220,58 @@ def test_forget_bumps_version(store, anna):
     v = store.version
     store.forget_entity(anna.id)
     assert store.version == v + 1
+
+
+def _merge(pool, child, parent):
+    with pool.connection() as c:
+        c.execute("UPDATE entity SET merged_into = %s WHERE id = %s", (parent, child))
+
+
+def test_forget_also_forgets_entities_merged_into_it(pool, store, anna):
+    dup = store.create_entity("A. Müller")
+    store.add_key(dup.id, "email", "am@work.com")
+    store.add_fact(dup.id, "employer", "Acme", source_kind="user_stated", excerpt="A. Müller joined Acme")
+    maria = store.create_entity("Maria")
+    store.add_fact(maria.id, "note", "met A. Müller at work", source_kind="user_stated")
+    _merge(pool, dup.id, anna.id)
+    r = store.forget_entity(anna.id)
+    assert (r["merged_entities"], r["facts"], r["mentions_deleted"]) == (1, 1, 1)
+    assert store.get_entity(dup.id) is None and store.get_entity(anna.id) is None
+    assert [e.id for e in store.list_entities()] == [maria.id]
+    assert store.find_by_name("A. Müller") == [] and store.find_by_name("Anna Müller") == []
+    for t, v in (("email", "am@work.com"), ("email", "anna@x.com"), ("name", "A. Müller"), ("name", "Anna Müller")):
+        assert store.is_suppressed(t, v), (t, v)
+    assert _count(pool, "SELECT count(*) FROM source") == 0
+
+
+def test_forget_follows_merge_chain_transitively(pool, store, anna):
+    b, c = store.create_entity("Ann M"), store.create_entity("Annie Mueller")
+    store.add_key(c.id, "phone", "+1 555 0100")
+    _merge(pool, b.id, anna.id)
+    _merge(pool, c.id, b.id)
+    p = store.preview_forget(anna.id)
+    assert p["merged_entities"] == 2
+    assert store.get_entity(c.id) is not None
+    assert store.forget_entity(anna.id) == p
+    assert store.get_entity(b.id) is None and store.get_entity(c.id) is None
+    assert store.is_suppressed("phone", "+15550100")
+
+
+def test_forget_merge_cycle_does_not_hang(pool, store, anna):
+    b = store.create_entity("Bea")
+    _merge(pool, b.id, anna.id)
+    _merge(pool, anna.id, b.id)
+    assert store.forget_entity(anna.id)["merged_entities"] == 1
+    assert store.get_entity(b.id) is None
+
+
+def test_suppressed_message_never_carries_the_value(store, anna):
+    store.forget_entity(anna.id)
+    with pytest.raises(Suppressed) as e1:
+        store.create_entity("Anna Müller", origin="extracted")
+    other = store.create_entity("Someone")
+    with pytest.raises(Suppressed) as e2:
+        store.add_key(other.id, "email", "anna@x.com", origin="extracted")
+    for e in (e1, e2):
+        msg = (str(e.value) + repr(e.value)).lower()
+        assert "anna" not in msg and "müller" not in msg and "x.com" not in msg

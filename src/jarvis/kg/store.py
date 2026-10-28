@@ -10,7 +10,8 @@ ORIGINS = ("user", "extracted")
 
 
 class Suppressed(Exception):
-    """The user asked to forget this name or key; extracted data about it is dropped."""
+    """The user asked to forget this name or key; extracted data about it is dropped.
+    The message is only "name" or "key", never the value, so logging it leaks nothing."""
 
 
 def _norm_key(type: str, value: str) -> str:
@@ -58,7 +59,7 @@ class GraphStore(FactsMixin):
         with self.pool.connection() as conn:
             if origin == "extracted":
                 if self._suppressed(conn, "name", named):
-                    raise Suppressed(name)
+                    raise Suppressed("name")
             elif self.secret:  # the user's own statement brings the name back
                 conn.execute("DELETE FROM suppression WHERE user_id = %s AND kind = 'name' AND key_hmac = ANY(%s)",
                              (self.user_id, forget.hmacs(self, conn, named)))
@@ -92,7 +93,7 @@ class GraphStore(FactsMixin):
             raise ValueError("Key value is blank.")
         with self.pool.connection() as conn:
             if origin == "extracted" and self._suppressed(conn, type, [v]):
-                raise Suppressed(type)
+                raise Suppressed("key")
             # serialise holders of the same key so each sees the other's row when flagging
             conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                          (f"{self.user_id}\x1f{type}\x1f{v}",))
