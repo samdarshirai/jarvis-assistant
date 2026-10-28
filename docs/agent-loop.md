@@ -14,6 +14,8 @@ Telegram and voice share one conversation thread and one `asyncio.Lock`, so only
 | `approved` | The gate cleared the current tool step |
 | `client_actions` | Phone-side actions (alarms, timers...) collected for the device |
 | `read_untrusted` | Email or web content has been read this turn |
+| `review_mode` | Per-turn `normal`, `reason`, or `lookup`; reviews use the strong tier |
+| `research_calls` | Per-turn search/fetch attempt counts, capped at two each |
 
 ## Graph
 
@@ -99,11 +101,14 @@ flowchart TD
 ## Nodes
 
 - **router**: Picks domains (`calendar, tasks, gmail, phone, memory, notes, research, chat`).
-  `keyword_domain` regex runs first; exactly one hit skips the LLM. Otherwise the "fast" model gets
-  `ROUTER_PROMPT` and `parse_domains` cleans the answer. A multi-domain request becomes an ordered plan.
+  On an initial turn, exactly one `keyword_domain` hit skips the LLM. Follow-ups always use the
+  "fast" contextual router, which returns validated domains and a review mode. Invalid output
+  falls back to strong chat without tools. A multi-domain request becomes an ordered plan.
 - **agent**: One LLM call for `domains[idx]`. The domain supplies prompt, model tier and tools
   (`DOMAINS`, `registry.lc_tools`). Memories and local time are added to the system prompt.
-  Voice turns use the fast tier except for gmail and research. History is trimmed by `window` (last 40)
+  Voice turns use the fast tier except for gmail, research and answer reviews. Lookup reviews require
+  an initial search; research is capped at two searches and two fetches per turn. See
+  [answer reassessment](answer-review.md) for behavior and evaluation. History is trimmed by `window` (last 40)
   and `repair_tool_gaps` answers orphan tool calls.
 - **gate**: Human-in-the-loop. If a tool needs confirmation (`registry.needs_confirm`), or is flagged
   `confirm_after_untrusted` and untrusted content was seen, it calls `interrupt(payload)`. The graph pauses
