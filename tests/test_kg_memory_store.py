@@ -103,3 +103,8 @@ def test_writes_bump_store_version(store):
     v = store.store.version
     store.remove(m["id"])
     assert store.store.version > v
+
+
+def test_duplicate_text_returns_same_id(store):
+    assert store.add("x")["id"] == store.add("x")["id"]
+    assert len(store.all()) == 1

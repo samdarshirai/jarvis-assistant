@@ -52,3 +52,44 @@ def test_migrates_300_char_memory(pool, uids):
     assert migrate_memories(pool) == 1
     f = _notes(pool, uids[0])[1][0]
     assert f.value == "x" * 300 and f.excerpt == "x" * 200
+
+
+def _legacy_ids(pool, uid):
+    with pool.connection() as c:
+        return [r[0] for r in c.execute("SELECT id FROM memories WHERE user_id = %s ORDER BY id", (uid,)).fetchall()]
+
+
+def test_forget_then_migrate_again_does_not_resurrect(pool, uids):
+    from jarvis.kg.memory_store import GraphMemoryStore
+    _legacy(pool, uids[0], "keep")
+    _legacy(pool, uids[0], "forget me")
+    migrate_memories(pool)
+    kg = GraphStore(pool, uids[0])
+    mem = GraphMemoryStore(kg)
+    gone = next(m for m in mem.all() if m["text"] == "forget me")
+    assert mem.remove(gone["id"]) is True
+    assert migrate_memories(pool) == 0
+    assert [m["text"] for m in mem.all()] == ["keep"]
+    assert len(_legacy_ids(pool, uids[0])) == 1
+
+
+def test_forget_duplicate_text_removes_both_legacy_rows(pool, uids):
+    from jarvis.kg.memory_store import GraphMemoryStore
+    _legacy(pool, uids[0], "same")
+    _legacy(pool, uids[0], "same")
+    migrate_memories(pool)
+    mem = GraphMemoryStore(GraphStore(pool, uids[0]))
+    assert len(mem.all()) == 1
+    assert mem.remove(mem.all()[0]["id"]) is True
+    assert migrate_memories(pool) == 0 and mem.all() == [] and _legacy_ids(pool, uids[0]) == []
+
+
+def test_forget_leaves_other_users_legacy_rows(pool, uids):
+    from jarvis.kg.memory_store import GraphMemoryStore
+    _legacy(pool, uids[0], "mine")
+    _legacy(pool, uids[1], "mine")
+    migrate_memories(pool)
+    mem = GraphMemoryStore(GraphStore(pool, uids[0]))
+    mem.remove(mem.all()[0]["id"])
+    assert _legacy_ids(pool, uids[0]) == [] and len(_legacy_ids(pool, uids[1])) == 1
+    assert migrate_memories(pool) == 0
