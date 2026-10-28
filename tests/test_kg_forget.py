@@ -301,8 +301,9 @@ def test_preview_lists_exactly_what_forget_deletes(store, anna):
     me = store.self_entity()
     a = store.add_fact(me.id, "note", "dinner with Anna Müller on Friday", source_kind="user_stated")
     b = store.add_fact(me.id, "note", "send slides to anna@x.com", source_kind="user_stated")
-    c = store.add_fact(me.id, "note", "Annie " + "x" * 200, source_kind="user_stated")
+    c = store.add_fact(me.id, "note", "Anna Müller " + "x" * 200, source_kind="user_stated")
     store.add_fact(me.id, "note", "Anna from the gym", source_kind="user_stated")
+    store.add_fact(me.id, "note", "Annie from the gym", source_kind="user_stated")  # alias alone deletes nothing
     p = store.preview_forget(anna.id)
     assert [m["id"] for m in p["mention_facts"]] == [a.id, b.id, c.id]
     assert p["mention_facts"][0] == {"id": a.id, "entity": "Me", "predicate": "note",
@@ -310,7 +311,7 @@ def test_preview_lists_exactly_what_forget_deletes(store, anna):
     assert len(p["mention_facts"][2]["value"]) == 120 and "mention_facts_more" not in p
     assert store.preview_forget(anna.id, include_mentions=False)["mention_facts"] == []
     assert store.forget_entity(anna.id) == p
-    assert [f.value for f in store.facts_for(me.id)] == ["Anna from the gym"]
+    assert sorted(f.value for f in store.facts_for(me.id)) == ["Anna from the gym", "Annie from the gym"]
 
 
 def test_preview_caps_the_listed_mentions_at_20(store, anna):
@@ -319,3 +320,31 @@ def test_preview_caps_the_listed_mentions_at_20(store, anna):
         store.add_fact(me.id, "note", f"Anna Müller item {i}", source_kind="user_stated")
     p = store.preview_forget(anna.id)
     assert (len(p["mention_facts"]), p["mention_facts_more"], p["mentions_deleted"]) == (20, 3, 23)
+
+
+def test_forget_one_of_two_sisters_keeps_the_others_relation_fact(store):
+    s1 = store.create_entity("Priya Rao", aliases=("sister",))
+    s2 = store.create_entity("Meera Rao", aliases=("sister",))
+    for s in (s1, s2):
+        store.add_fact(s.id, "relation_to_user", "sister", source_kind="user_stated")
+    note = store.add_fact(store.self_entity().id, "note", "my sister's birthday is in May", source_kind="user_stated")
+    p = store.preview_forget(s1.id)
+    assert p["mention_facts"] == [] and p["mentions_deleted"] == 0
+    assert store.forget_entity(s1.id) == p
+    assert [f.value for f in store.facts_for(s2.id)] == ["sister"]
+    assert note.id in {f.id for f in store.facts_for(store.self_entity().id)}
+
+
+def test_forget_still_deletes_full_name_mentions(store, anna):
+    maria = store.create_entity("Maria")
+    f1 = store.add_fact(maria.id, "note", "her boss is Anna Müller", source_kind="user_stated")
+    f2 = store.add_fact(maria.id, "note", "mail anna@x.com", source_kind="user_stated")
+    p = store.preview_forget(anna.id)
+    assert [m["id"] for m in p["mention_facts"]] == [f1.id, f2.id]
+    assert store.forget_entity(anna.id)["mentions_deleted"] == 2
+
+
+def test_alias_suppression_still_written(store):
+    s = store.create_entity("Priya Rao", aliases=("sister",))
+    store.forget_entity(s.id)
+    assert store.is_suppressed("name", "sister")

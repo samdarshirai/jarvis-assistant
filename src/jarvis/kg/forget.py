@@ -99,7 +99,8 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
         full = {v for v in names if not any(v != w and v in w.split() for w in names)}
         hard = {v for t, v in keys if t in HARD}
         # deleting a fact needs a whole full name or a hard key; redacting an excerpt also takes a single name token
-        phrases |= full | hard
+        # ponytail: alias keys ("sister") are generic words, so they never drive fact deletion, only redaction/suppression
+        phrases |= (full & ({v for t, v in keys if t == "name"} | {norm(display)})) | hard
         terms |= full | {v for v in names if len(v) >= 3} | hard
         rows += [("hard", t, v) for t, v in keys if t in HARD]
         rows += [("name", t, v) for t, v in keys if t in ("name", "alias") and v in full]
