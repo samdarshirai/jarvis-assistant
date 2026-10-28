@@ -89,3 +89,29 @@ def test_describe_text(reg):
     assert t.describe({"subject": "Meera", "predicate": "city", "value": "Pune"}) == "Remember: Meera — city: Pune"
     assert t.needs_confirm and t.refuse_after_untrusted
     assert LookupArgs(name="x") and not reg.get("graph_lookup").needs_confirm
+
+
+@pytest.mark.parametrize("field,bad", [("subject", ""), ("subject", "  "), ("value", "   "), ("relation", "   ")])
+def test_blank_inputs_rejected(field, bad):
+    args = {"subject": "Meera", "predicate": "city", "value": "Pune", field: bad}
+    with pytest.raises(ValidationError):
+        RememberFactArgs(**args)
+
+
+def test_inputs_are_stripped():
+    a = RememberFactArgs(subject=" Meera ", predicate="city", value=" Pune ", relation=" sister ")
+    assert (a.subject, a.value, a.relation) == ("Meera", "Pune", "sister")
+
+
+def test_failed_write_leaves_no_half_created_entity(reg, store, monkeypatch):
+    real = store.add_fact
+
+    def boom(eid, predicate, *a, **k):
+        if predicate == "city":
+            raise RuntimeError("db down")
+        return real(eid, predicate, *a, **k)
+
+    monkeypatch.setattr(store, "add_fact", boom)
+    with pytest.raises(RuntimeError):
+        run(reg, "remember_fact", subject="Meera", predicate="city", value="Pune", relation="sister")
+    assert store.find_by_name("Meera") == [] and store.find_by_name("sister") == []

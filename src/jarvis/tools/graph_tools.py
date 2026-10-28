@@ -1,6 +1,7 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
+from typing import Annotated
 
 from jarvis.kg.predicates import PREDICATES
 from jarvis.kg.store import GraphStore
@@ -10,10 +11,11 @@ _SELF_WORDS = {"me", "i", "self", "myself"}
 
 
 class RememberFactArgs(BaseModel):
-    subject: str = Field(description="Who the fact is about: a name, a kin word like 'sister', or 'me'")
+    subject: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] = Field(
+        description="Who the fact is about: a name, a kin word like 'sister', or 'me'")
     predicate: Literal[tuple(sorted(PREDICATES))]  # type: ignore[valid-type]
-    value: str = Field(min_length=1, max_length=200)
-    relation: str | None = Field(default=None, description="How the subject relates to the user, e.g. 'sister'; pass when introducing someone")
+    value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    relation: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)] | None = Field(default=None, description="How the subject relates to the user, e.g. 'sister'; pass when introducing someone")
     kind: Literal["person", "place", "org", "thing"] = "person"
 
 
@@ -25,6 +27,10 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
     def _has_relation(entity_id):
         return any(f.predicate == "relation_to_user" for f in store.facts_for(entity_id))
 
+    def _save(ent, predicate, value):
+        f = store.add_fact(ent.id, predicate, value, source_kind="user_stated", excerpt=value)
+        return {"remembered": {"subject": ent.display_name, "predicate": predicate, "value": f.value, "fact_id": f.id}}
+
     def remember_fact(subject, predicate, value, relation=None, kind="person"):
         if subject.strip().lower() in _SELF_WORDS:
             ent = store.self_entity()
@@ -32,11 +38,21 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
             found = store.find_by_name(subject)
             if len(found) > 1:
                 return {"error": "ambiguous", "candidates": [{"id": e.id, "name": e.display_name} for e in found]}
-            ent = found[0] if found else store.create_entity(subject, kind=kind, aliases=(relation,) if relation else ())
-            if relation and not _has_relation(ent.id):
-                store.add_fact(ent.id, "relation_to_user", relation, source_kind="user_stated", excerpt=relation)
-        f = store.add_fact(ent.id, predicate, value, source_kind="user_stated", excerpt=value[:200])
-        return {"remembered": {"subject": ent.display_name, "predicate": predicate, "value": f.value, "fact_id": f.id}}
+            if found:
+                ent = found[0]
+                if relation and not _has_relation(ent.id):
+                    store.add_fact(ent.id, "relation_to_user", relation, source_kind="user_stated", excerpt=relation)
+            else:
+                ent = store.create_entity(subject, kind=kind, aliases=(relation,) if relation else ())
+                try:
+                    if relation:
+                        store.add_fact(ent.id, "relation_to_user", relation, source_kind="user_stated", excerpt=relation)
+                    return _save(ent, predicate, value)
+                except Exception:  # no half-created entity; facts cascade
+                    with store.pool.connection() as conn:
+                        conn.execute("DELETE FROM entity WHERE user_id = %s AND id = %s", (store.user_id, ent.id))
+                    raise
+        return _save(ent, predicate, value)
 
     def _facts(fs):
         return [{"predicate": f.predicate, "value": f.value, "source": f.source_kind,
