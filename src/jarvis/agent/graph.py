@@ -29,8 +29,10 @@ ROUTER_PROMPT = (
     "'add that booking email to my calendar' -> gmail, calendar; 'set an alarm for 6 and put gym at 7 in my "
     "calendar' -> calendar, phone; 'research robot vacuums and save a note' -> research, notes; "
     "'remember I like window seats' -> memory; 'add milk and eggs to my shopping list' -> tasks; 'invite Raj to lunch Friday at 12' -> gmail, calendar; "
-    "'call Mom' -> phone. If the assistant's last message asked which contact to call, or to repeat or spell a "
-    "name, the user's reply is phone."
+    "'call Mom' -> phone; 'should I leave now' -> calendar; 'tell her I'm running late' -> phone, or gmail if no "
+    "number or address is known; 'what do I need to do today' -> calendar, tasks, gmail. A <situation> block, when "
+    "present, shows the user's day: use it to decide (the next meeting's people, today's agenda). If the assistant's last message asked which contact to call, or to repeat or spell a "
+    "name, or to confirm who to message or call, the user's reply is phone."
 )
 HISTORY = 40
 VOICE_NOTE = ("\nThis reply will be spoken aloud: use two or three short sentences, name sources by site, and never "
@@ -116,12 +118,12 @@ def repair_tool_gaps(messages: list) -> list:
     return out
 
 
-UNTRUSTED_TAGS = ("untrusted_email", "untrusted_web")
+UNTRUSTED_TAGS = ("untrusted_email", "untrusted_web", "untrusted_calendar")
 
 
 def wrap_untrusted(text: str, tag: str = "untrusted_email") -> str:
     """Mark third-party text as data; rewrite any closing wrapper tag so the content cannot end it early."""
-    safe = re.sub(r"</\s*(untrusted_(?:email|web))", r"&lt;/\1", text, flags=re.IGNORECASE)
+    safe = re.sub(r"</\s*(untrusted_(?:email|web|calendar))", r"&lt;/\1", text, flags=re.IGNORECASE)
     return f"<{tag}>{safe}</{tag}>"
 
 
@@ -158,7 +160,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
         quick = keyword_domain(last.content) if isinstance(last, HumanMessage) and isinstance(last.content, str) else None
         if quick:
             return {"domains": quick, "idx": 0, "approved": False, "client_actions": [], "read_untrusted": False}
-        resp = await provider.get("fast").ainvoke([SystemMessage(ROUTER_PROMPT), *repair_tool_gaps(window(state["messages"], 6))])
+        resp = await provider.get("fast").ainvoke([SystemMessage(ROUTER_PROMPT), *repair_tool_gaps(window(state["messages"], 6))],
+                                                  config={"tags": ["router"]})
         return {"domains": parse_domains(str(resp.content)), "idx": 0, "approved": False, "client_actions": [],
                 "read_untrusted": False}
 

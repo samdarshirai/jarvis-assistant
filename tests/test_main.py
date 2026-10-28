@@ -423,3 +423,21 @@ async def test_lifespan_wires_sign_in_when_the_web_client_is_configured(mock_lif
         await asyncio.sleep(0)
         assert FakeTenants.made[0].invalidated == [7]
     assert app.state.signin is None
+
+
+def test_location_saves_the_fix_for_the_caller_only():
+    from types import SimpleNamespace
+    saved = []
+
+    class Dash(_Dash):
+        async def authenticate(self, header):
+            return SimpleNamespace(proactive=SimpleNamespace(set_state=lambda k, v: saved.append((k, v))))
+
+    app = create_app(with_lifespan=False)
+    app.state.dashboard = Dash()
+    c = TestClient(app)
+    assert c.post("/location", json={"lat": 52.5, "lon": 13.4}).status_code == 200
+    assert ("last_location", "52.5000,13.4000") in saved
+    assert c.post("/location", json={"lat": 91, "lon": 0}).status_code == 422
+    app.state.dashboard = _Dash(ok=False)
+    assert c.post("/location", json={"lat": 1, "lon": 2}).status_code == 401

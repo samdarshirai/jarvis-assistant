@@ -26,7 +26,7 @@ FERNET = Fernet.generate_key().decode()
 
 
 def settings(**kw):
-    return NS(fernet_key=FERNET, models=lambda tier: [f"default/{tier}"], **kw)
+    return NS(**{"fernet_key": FERNET, "tavily_api_key": "", "models": lambda tier: [f"default/{tier}"], **kw})
 
 
 def public(host, port, **kw):
@@ -142,7 +142,7 @@ async def test_put_llm_failure_saves_nothing_and_names_model(pool, uids, caplog)
     r = await c.put("/settings/llm", json=body)
     assert r.status_code == 422 and r.json() == {"error": "bad_url", "model": None}
     assert secrets(pool, uid) == {} and KEY not in caplog.text and KEY not in audit_text(pool)
-    c, _ = await setup(pool, uid, s=NS(fernet_key=FERNET, models=lambda tier: []))  # no models anywhere to test
+    c, _ = await setup(pool, uid, s=NS(fernet_key=FERNET, tavily_api_key="", models=lambda tier: []))  # no models anywhere to test
     r = await c.put("/settings/llm", json={"base_url": "https://api.example.com/v1", "api_key": KEY})
     assert r.status_code == 422 and r.json()["error"] == "no_models" and secrets(pool, uid) == {}
 

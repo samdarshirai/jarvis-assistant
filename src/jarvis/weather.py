@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import lru_cache
 
 import httpx
@@ -39,6 +39,13 @@ def load_coords(store) -> tuple[float, float] | None:
 
 def save_coords(store, lat: float, lon: float) -> None:
     store.set_state("last_location", f"{lat:.4f},{lon:.4f}")
+    store.set_state("last_location_at", datetime.now(timezone.utc).isoformat())
+
+
+def load_fix_time(store) -> datetime | None:
+    """When the phone last reported its location; None for fixes saved before this was recorded."""
+    raw = store.get_state("last_location_at")
+    return datetime.fromisoformat(raw) if raw else None
 
 
 def fetch(city: str, tz: str, now: datetime, coords: tuple[float, float] | None = None) -> str | None:

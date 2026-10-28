@@ -10,9 +10,10 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import AwareDatetime, BaseModel, StringConstraints
+from pydantic import AwareDatetime, BaseModel, Field, StringConstraints
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
+from jarvis import weather
 from jarvis.appapi import AppService
 from jarvis.audit import purge_all as purge_audit
 from jarvis.channels.telegram import TelegramChannel
@@ -146,6 +147,11 @@ class TaskIn(BaseModel):
 
 class ChatIn(BaseModel):
     text: Annotated[str, StringConstraints(min_length=1, max_length=2000)]
+
+
+class LocationIn(BaseModel):
+    lat: Annotated[float, Field(ge=-90, le=90)]
+    lon: Annotated[float, Field(ge=-180, le=180)]
 
 
 class ConfirmIn(BaseModel):
@@ -316,6 +322,15 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         if token is None:
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         return {"token": token, "needs_setup": await asyncio.to_thread(svc.needs_setup, token)}
+
+    @app.post("/location")
+    async def location(request: Request, body: LocationIn):
+        """The app reports where the phone is on foreground and at voice start, so Jarvis reads a fresh fix."""
+        svc, rt, err = await guarded(request, "dashboard")
+        if err:
+            return err
+        await asyncio.to_thread(weather.save_coords, rt.proactive, body.lat, body.lon)
+        return {"ok": True}
 
     @app.get("/calendar")
     async def calendar(request: Request, days: int = 7):

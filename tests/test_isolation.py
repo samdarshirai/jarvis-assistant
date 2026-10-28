@@ -557,8 +557,12 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("GET", "/notes", None), ("GET", "/notes/1", None), ("POST", "/chat", {"text": "hi"}),
           ("POST", "/chat/confirm", {"interrupt_id": "i", "decision": "yes"}), ("GET", "/me", None),
           ("PUT", "/me", {"tz": "UTC"}), ("PUT", "/settings/llm", {"base_url": "https://x.example.com/v1", "api_key": "k"}),
-          ("GET", "/dashboard", None),
-          ("PUT", "/device/fcm", {"token": "fcm-x"})]
+          ("GET", "/dashboard", None), ("POST", "/location", {"lat": 1.0, "lon": 2.0}),
+          ("PUT", "/device/fcm", {"token": "fcm-x"}),
+          ("DELETE", "/calendar/events/e1", None), ("POST", "/calendar/events", {
+              "summary": "x", "start": "2026-10-28T10:00:00+01:00", "end": "2026-10-28T11:00:00+01:00"}),
+          ("GET", "/memory", None), ("DELETE", "/memory/1", None), ("GET", "/shopping", None),
+          ("POST", "/shopping", {"title": "milk"}), ("POST", "/shopping/i1/complete", None)]
 PUBLIC = {"/", "/privacy", "/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}
 

@@ -24,11 +24,13 @@ class ComposeArgs(BaseModel):
     app: Literal["whatsapp", "sms"]
     contact: str = Field(min_length=1, description="Saved contact alias resolved from memories; otherwise the user's supplied name. The phone matches it.")
     text: str = Field(min_length=1)
+    basis: str | None = Field(None, description="Only when you chose the recipient from the user's situation instead of a name they said: why, e.g. 'your 3pm meeting'. The user must confirm first.")
 
 
 class CallArgs(BaseModel):
     contact: str = Field(min_length=1, description="Saved contact alias resolved from memories; otherwise the user's supplied name. The phone matches it.")
     last4: str | None = Field(None, pattern=r"^\d{4}$", description="Last four digits of the chosen number")
+    basis: str | None = Field(None, description="Only when you chose the person from the user's situation instead of a name they said: why, e.g. 'your 3pm meeting'. The user must confirm first.")
 
 
 class ClarifyContactArgs(BaseModel):
@@ -50,11 +52,22 @@ def register_phone_tools(registry: Registry) -> None:
     def start_navigation(**kw):
         return queue("start_navigation", **kw)
 
+    def inferred(verb: str, contact: str, basis: str | None, kw: dict) -> dict | None:
+        """An error that makes the model confirm a recipient it inferred before anything is queued."""
+        if "@" in contact:
+            return {"error": "That is an email address, not a phone contact. Use email, or ask for the contact name."}
+        if basis:
+            return {"error": f"Not done: you chose this person yourself. Ask the user '{verb} {contact} ({basis})?' and "
+                             "act only after they say yes, then call again without basis."}
+        return None
+
     def compose_message(**kw):
-        return queue("compose_message", **kw)
+        basis = kw.pop("basis", None)
+        return inferred("WhatsApp" if kw["app"] == "whatsapp" else "Text", kw["contact"], basis, kw) or queue("compose_message", **kw)
 
     def call_contact(**kw):
-        return queue("call_contact", **kw)
+        basis = kw.pop("basis", None)
+        return inferred("Call", kw["contact"], basis, kw) or queue("call_contact", **kw)
 
     def clarify_contact(question):
         return {"question": question}

@@ -52,6 +52,9 @@ Friends are added by hand and bring their own LLM key (any OpenAI-compatible end
 - The 100-user cap check is count-then-insert and can overshoot under concurrent adds (CLI only).
 - Test counts and the acceptance rows in this file predate multi-tenant; multi-tenant rows are 84-98 in `ACCEPTANCE.md`, not run.
 
+## Situation snapshot (merged 2026-10-28)
+`src/jarvis/situation.py`: per-user `Situation` builds a snapshot (now, phone fix + age, calendar with `[NOW]`/`[NEXT]` and attendees, tomorrow's first events in the evening or when asked; tasks, important mail, notes only for "whole day" requests) and `SituationAwareProvider` appends it as the LAST part of the system prompt (tenant wires `Memory(Situation(raw))`; proactive jobs keep the plain `llm`). Calendar text is wrapped `<untrusted_calendar>`. The router gets only time + ongoing/next event (tag `router`). 45 s cache per level, all sources in parallel, 4 s per-source timeout. Phone tools take `basis` when the recipient was inferred: the tool refuses until the user confirms. App reports location via `POST /location` on resume and voice start, and syncs the phone timezone to `/me` on resume. Full suite green (952). Not built: travel time (needs a routing service) and the privacy decision about sending mail/notes to the model on each request.
+
 ## Safety invariants (do not break)
 All invariants below hold per user: each user has their own runtime, lock, thread (`user:<id>`), audit rows, tokens and keys; read "owner" as "the user". Telegram serves the owner only. Nobody falls back to the operator's env keys.
 - Every side effect goes through the graph's `interrupt()` confirmation gate (in the graph, not the prompt) (one bounded exception: see the next bullet). A mixed step (confirm-gated + non-gated call) never interrupts: the gated call is refused "propose it again by itself".
