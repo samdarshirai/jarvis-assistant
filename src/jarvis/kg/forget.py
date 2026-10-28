@@ -6,6 +6,7 @@ import re
 from jarvis.kg.facts import drop_sources, norm
 
 HARD = ("email", "phone", "google_contact_id")
+MAX_LISTED = 20  # mention facts listed in a forget preview
 _EDGE = "\"'`.,;:!?()[]{}<>*"
 
 
@@ -90,13 +91,16 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
     for e, t, v in conn.execute("SELECT entity_id, type, value_norm FROM entity_key WHERE user_id = %s"
                                 " AND entity_id = ANY(%s)", (uid, ids)).fetchall():
         by_ent[e].append((t, v))
-    terms, rows = set(), []
+    terms, phrases, rows = set(), set(), []
     for i, _, display in group:
         keys = by_ent[i]
         names = {v for t, v in keys if t in ("name", "alias")} | {norm(display)}
         # a full name is one that is not just a token of another name ("anna" inside "anna müller")
         full = {v for v in names if not any(v != w and v in w.split() for w in names)}
-        terms |= full | {v for v in names if len(v) >= 3} | {v for t, v in keys if t in HARD}
+        hard = {v for t, v in keys if t in HARD}
+        # deleting a fact needs a whole full name or a hard key; redacting an excerpt also takes a single name token
+        phrases |= full | hard
+        terms |= full | {v for v in names if len(v) >= 3} | hard
         rows += [("hard", t, v) for t, v in keys if t in HARD]
         rows += [("name", t, v) for t, v in keys if t in ("name", "alias") and v in full]
         if not any(t == "name" and v in full for t, v in keys):  # display name counts even if its key went missing
@@ -107,10 +111,12 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
     mentions = []
     if include_mentions:
         # ponytail: scans every value of the user's graph in Python; fine for a personal graph, trigram index if huge
-        mentions = [i for i, v in conn.execute(
-            "SELECT id, object_value FROM fact WHERE user_id = %s AND id <> ALL(%s) AND object_value IS NOT NULL",
-            (uid, own)).fetchall() if _mentions(v, terms)]
-    gone = own + mentions
+        mentions = [r for r in conn.execute(
+            "SELECT f.id, e.display_name, f.predicate, f.object_value FROM fact f"
+            " JOIN entity e ON e.user_id = f.user_id AND e.id = f.subject_id"
+            " WHERE f.user_id = %s AND f.id <> ALL(%s) AND f.object_value IS NOT NULL ORDER BY f.id",
+            (uid, own)).fetchall() if _mentions(r[3], phrases)]
+    gone = own + [r[0] for r in mentions]
     # sources that keep a link to a surviving fact (or never had one) stay, and get redacted if they mention X
     redact_ids = [i for i, ex in conn.execute(
         "SELECT s.id, s.excerpt FROM source s WHERE s.user_id = %s AND coalesce(s.excerpt, '') <> ''"
@@ -124,7 +130,11 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
                                 (uid,)).fetchall())
     new = [s for s in sup if (s[1], s[2]) not in existing]
     counts = {"entity": row[1], "facts": len(own), "redacted_excerpts": len(redact_ids),
-              "mentions_deleted": len(mentions), "suppressed": len(new), "merged_entities": len(ids) - 1}
+              "mentions_deleted": len(mentions), "suppressed": len(new), "merged_entities": len(ids) - 1,
+              "mention_facts": [{"id": i, "entity": n, "predicate": p, "value": v[:120]}
+                                for i, n, p, v in mentions[:MAX_LISTED]]}
+    if len(mentions) > MAX_LISTED:
+        counts["mention_facts_more"] = len(mentions) - MAX_LISTED
     return counts, ids, gone, redact_ids, sup
 
 

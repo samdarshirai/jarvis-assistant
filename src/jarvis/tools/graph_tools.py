@@ -76,13 +76,18 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
             c = store.preview_forget(a["entity_id"])
         except ValueError:
             return "Forget this person. I could not find them, so nothing will change."
+        listed = c["mention_facts"][:5]
+        more = c["mentions_deleted"] - len(listed)
+        shown = (": " + "; ".join(f'"{m["value"]}"' for m in listed) + (f" and {more} more" if more else "")) if listed else ""
         return (f"Forget everything about {c['entity']}: {_plural(c['facts'], 'fact')}, "
                 f"{_plural(c['merged_entities'], 'merged entity')} and {_plural(c['mentions_deleted'], 'other fact')} "
-                "that mention them. Chat history, notes and the activity log are not erased.")
+                f"that mention them{shown}. Chat history, notes and the activity log are not erased.")
 
     def forget_entity(entity_id):
         try:
-            return store.forget_entity(entity_id)
+            r = store.forget_entity(entity_id)
+            # graph.py audits tool results: counts only, never the name or the deleted values
+            return {"forgotten": True, **{k: v for k, v in r.items() if isinstance(v, int)}}
         except ValueError:
             return {"error": "I could not forget that: it is unknown or cannot be forgotten."}
 
@@ -90,7 +95,9 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
         name="remember_fact", domain="memory", args_schema=RememberFactArgs, fn=remember_fact,
         description="Save a structured fact about the user or someone in their life (employer, city, birthday, relation, ...).",
         needs_confirm=True, refuse_after_untrusted=True,
-        describe=lambda a: f"Remember: {a['subject']} — {a['predicate']}: {a['value']}",
+        describe=lambda a: f"Remember: {a['subject']} — {a['predicate']}: {a['value']}" + "".join(
+            f" ({k}: {v})" for k, v in (("relation", a.get("relation")), ("kind", a.get("kind")))
+            if v and not (k == "kind" and v == "person")),
         done=lambda r: "Got it, I'll remember that."))
     registry.add(Tool(
         name="graph_lookup", domain="memory", args_schema=LookupArgs, fn=graph_lookup,

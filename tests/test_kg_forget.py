@@ -45,18 +45,19 @@ def test_forget_deletes_facts_pointing_at_entity(pool, store, anna, uids):
 
 def test_forget_deletes_mentions_in_other_facts_by_default_and_can_skip(pool, store, anna):
     maria = store.create_entity("Maria")
-    store.add_fact(maria.id, "note", "her boss is Anna", source_kind="user_stated")
+    store.add_fact(maria.id, "note", "her boss is Anna Müller", source_kind="user_stated")
     trip = store.add_fact(maria.id, "note", "hiked Annapurna", source_kind="user_stated")
+    first = store.add_fact(maria.id, "note", "her boss is Anna", source_kind="user_stated")  # a first name alone stays
     store.add_fact(maria.id, "note", "cc anna@x.com on invites", source_kind="user_stated")
     r = store.forget_entity(anna.id)
     assert r["mentions_deleted"] == 2
-    assert {f.id for f in store.facts_for(maria.id)} == {trip.id}
+    assert {f.id for f in store.facts_for(maria.id)} == {trip.id, first.id}
 
     bo = store.create_entity("Bo Li")
     store.add_fact(maria.id, "note", "her boss is Bo Li", source_kind="user_stated")
     short = store.add_fact(maria.id, "note", "bo is a word", source_kind="user_stated")
     assert store.forget_entity(bo.id)["mentions_deleted"] == 1  # full name matches, the short token alone does not
-    assert {f.id for f in store.facts_for(maria.id)} == {trip.id, short.id}
+    assert {f.id for f in store.facts_for(maria.id)} == {trip.id, first.id, short.id}
 
     carl = store.create_entity("Carl")
     kept = store.add_fact(maria.id, "note", "dates Carl", source_kind="user_stated")
@@ -161,7 +162,8 @@ def test_preview_forget_writes_nothing(pool, store, anna):
     assert len(store.facts_for(maria.id)) == 2
     assert p == store.forget_entity(anna.id)
     assert p == {"entity": "Anna Müller", "facts": 1, "redacted_excerpts": 1, "mentions_deleted": 1, "suppressed": 4,
-                 "merged_entities": 0}
+                 "merged_entities": 0, "mention_facts": [{"id": p["mention_facts"][0]["id"], "entity": "Maria",
+                                                          "predicate": "note", "value": "her boss is Anna Müller"}]}
 
 
 def test_list_and_lift_suppressions(store, anna):
@@ -275,3 +277,45 @@ def test_suppressed_message_never_carries_the_value(store, anna):
     for e in (e1, e2):
         msg = (str(e.value) + repr(e.value)).lower()
         assert "anna" not in msg and "müller" not in msg and "x.com" not in msg
+
+
+def test_forget_will_smith_keeps_the_window_seat(store):
+    me = store.self_entity()
+    seat = store.add_fact(me.id, "note", "I will take the window seat", source_kind="user_stated")
+    gone = store.add_fact(me.id, "note", "Will Smith owes me lunch", source_kind="user_stated")
+    will = store.create_entity("Will Smith")
+    assert store.forget_entity(will.id)["mentions_deleted"] == 1
+    assert {f.id for f in store.facts_for(me.id)} == {seat.id}
+    assert gone.id not in {f.id for f in store.facts_for(me.id, history=True)}
+
+
+def test_forget_anna_mueller_keeps_anna_schmidt(store, anna):
+    schmidt = store.create_entity("Anna Schmidt")
+    kept = store.add_fact(store.self_entity().id, "note", "Anna Schmidt is my dentist", source_kind="user_stated")
+    assert store.forget_entity(anna.id)["mentions_deleted"] == 0
+    assert kept.id in {f.id for f in store.facts_for(store.self_entity().id)}
+    assert store.get_entity(schmidt.id) is not None
+
+
+def test_preview_lists_exactly_what_forget_deletes(store, anna):
+    me = store.self_entity()
+    a = store.add_fact(me.id, "note", "dinner with Anna Müller on Friday", source_kind="user_stated")
+    b = store.add_fact(me.id, "note", "send slides to anna@x.com", source_kind="user_stated")
+    c = store.add_fact(me.id, "note", "Annie " + "x" * 200, source_kind="user_stated")
+    store.add_fact(me.id, "note", "Anna from the gym", source_kind="user_stated")
+    p = store.preview_forget(anna.id)
+    assert [m["id"] for m in p["mention_facts"]] == [a.id, b.id, c.id]
+    assert p["mention_facts"][0] == {"id": a.id, "entity": "Me", "predicate": "note",
+                                     "value": "dinner with Anna Müller on Friday"}
+    assert len(p["mention_facts"][2]["value"]) == 120 and "mention_facts_more" not in p
+    assert store.preview_forget(anna.id, include_mentions=False)["mention_facts"] == []
+    assert store.forget_entity(anna.id) == p
+    assert [f.value for f in store.facts_for(me.id)] == ["Anna from the gym"]
+
+
+def test_preview_caps_the_listed_mentions_at_20(store, anna):
+    me = store.self_entity()
+    for i in range(23):
+        store.add_fact(me.id, "note", f"Anna Müller item {i}", source_kind="user_stated")
+    p = store.preview_forget(anna.id)
+    assert (len(p["mention_facts"]), p["mention_facts_more"], p["mentions_deleted"]) == (20, 3, 23)

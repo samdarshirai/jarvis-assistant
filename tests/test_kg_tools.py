@@ -87,6 +87,12 @@ def test_graph_lookup_other_user_invisible(reg, pool, uids):
 def test_describe_text(reg):
     t = reg.get("remember_fact")
     assert t.describe({"subject": "Meera", "predicate": "city", "value": "Pune"}) == "Remember: Meera — city: Pune"
+    assert t.describe({"subject": "sister", "predicate": "city", "value": "Pune", "relation": "sister"}) == \
+        "Remember: sister — city: Pune (relation: sister)"
+    assert t.describe({"subject": "Acme", "predicate": "note", "value": "my gym", "kind": "org"}) == \
+        "Remember: Acme — note: my gym (kind: org)"
+    assert t.describe({"subject": "Ravi", "predicate": "city", "value": "Goa", "relation": "boss", "kind": "person"}) == \
+        "Remember: Ravi — city: Goa (relation: boss)"
     assert t.needs_confirm and t.refuse_after_untrusted
     assert LookupArgs(name="x") and not reg.get("graph_lookup").needs_confirm
 
@@ -143,7 +149,7 @@ def test_forget_entity_removes_everything_and_suppresses(freg, fstore):
     e = fstore.create_entity("Meera")
     fstore.add_fact(e.id, "city", "Pune", source_kind="user_stated", excerpt="Pune")
     r = run(freg, "forget_entity", entity_id=e.id)
-    assert r["entity"] == "Meera" and r["facts"] == 1
+    assert r["forgotten"] is True and r["facts"] == 1
     assert fstore.find_by_name("Meera") == []
     assert fstore.is_suppressed("name", "Meera")
     assert freg.get("forget_entity").done(r) == "Okay, forgotten."
@@ -165,3 +171,24 @@ def test_forget_other_users_entity_refused(pool, uids, fstore, freg):
     e = other.create_entity("Meera")
     assert set(run(freg, "forget_entity", entity_id=e.id)) == {"error"}
     assert other.find_by_name("Meera")
+
+
+def test_forget_entity_result_has_counts_only_never_the_name(freg, fstore):
+    import json
+    e = fstore.create_entity("Meera Iyer")
+    fstore.add_fact(fstore.self_entity().id, "note", "lunch with Meera Iyer", source_kind="user_stated")
+    r = run(freg, "forget_entity", entity_id=e.id)  # graph.py writes this result to audit_log
+    assert "Meera" not in json.dumps(r) and "lunch" not in json.dumps(r)
+    assert r["forgotten"] is True and r["mentions_deleted"] == 1
+    assert all(isinstance(v, int) for v in r.values())
+
+
+def test_forget_entity_describe_lists_the_mentioned_facts(freg, fstore):
+    e = fstore.create_entity("Meera Iyer")
+    me = fstore.self_entity().id
+    for i in range(7):
+        fstore.add_fact(me, "note", f"lunch {i} with Meera Iyer", source_kind="user_stated")
+    text = freg.get("forget_entity").describe({"entity_id": e.id})
+    assert '"lunch 0 with Meera Iyer"' in text and '"lunch 4 with Meera Iyer"' in text
+    assert "lunch 5" not in text and "and 2 more" in text
+    assert text.endswith("Chat history, notes and the activity log are not erased.")
