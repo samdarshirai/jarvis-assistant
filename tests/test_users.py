@@ -217,7 +217,9 @@ def test_init_schema_on_an_upgraded_database_runs_no_add_column(pool):
     init_schema(Pool())
     # the whole statement set of a re-run: the CREATE ... IF NOT EXISTS script, then catalog/row SELECTs only
     assert seen[0] is SCHEMA and "ALTER" not in SCHEMA.upper()
-    assert [s for s in seen[1:] if not s.lstrip().upper().startswith("SELECT")] == []
+    # the one deliberate write: drop operator-level keys that older versions stored per user
+    assert [s for s in seen[1:] if not s.lstrip().upper().startswith("SELECT")] == [
+        "DELETE FROM user_secrets WHERE name IN ('deepgram_key', 'tavily_key')"]
     # a database still missing a guarded column gets it
     with pool.connection() as c:
         c.execute("ALTER TABLE auth_attempts DROP COLUMN finish_code_hash")
