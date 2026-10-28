@@ -17,12 +17,21 @@ class MemoryScreen extends StatefulWidget {
 
 class _MemoryScreenState extends State<MemoryScreen> {
   List<({int id, String text})>? _rows;
-  bool _loading = true, _error = false;
+  bool _loading = true, _error = false, _graph = false;
 
   @override
   void initState() {
     super.initState();
     _load();
+    _probeGraph();
+  }
+
+  /// People is shown only when the server has the knowledge graph on; off answers 404.
+  Future<void> _probeGraph() async {
+    try {
+      await widget.api.get('/graph/entities');
+      if (mounted) setState(() => _graph = true);
+    } catch (_) {}
   }
 
   Future<void> _load() async {
@@ -84,16 +93,17 @@ class _MemoryScreenState extends State<MemoryScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 110),
       children: [
-        Align(
-          alignment: Alignment.centerLeft,
-          child: TextButton.icon(
-            icon: const Icon(Icons.people_outline),
-            label: const Text('People'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => PeopleScreen(api: widget.api, onAskJarvis: widget.onAskJarvis)),
+        if (_graph)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.people_outline),
+              label: const Text('People'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(builder: (_) => PeopleScreen(api: widget.api, onAskJarvis: widget.onAskJarvis)),
+              ),
             ),
           ),
-        ),
         if (rows.isEmpty)
           Padding(
             padding: const EdgeInsets.all(24),

@@ -41,7 +41,9 @@ class _PeopleScreenState extends State<PeopleScreen> {
       _error = false;
     });
     try {
-      final p = _maps((await widget.api.get('/graph/entities'))['entities']);
+      // the user's own entity first, as "Me"; the rest keep the server's order
+      final all = _maps((await widget.api.get('/graph/entities'))['entities']);
+      final p = [for (final e in all) if (e['kind'] == 'self') e, for (final e in all) if (e['kind'] != 'self') e];
       final s = _maps((await widget.api.get('/graph/suppressions'))['suppressions']);
       if (mounted) {
         setState(() {
@@ -91,11 +93,14 @@ class _PeopleScreenState extends State<PeopleScreen> {
       for (final p in _people)
         _tile(
           ListTile(
-            title: Text('${p['name']}', style: const TextStyle(color: ink, fontSize: 16)),
+            title: Text(p['kind'] == 'self' ? 'Me' : '${p['name']}', style: const TextStyle(color: ink, fontSize: 16)),
             subtitle: Text('${p['kind']} · ${p['fact_count']} facts', style: TextStyle(color: ink.withValues(alpha: 0.6))),
             onTap: () async {
               await Navigator.of(context).push(
-                MaterialPageRoute<void>(builder: (_) => _PersonDetail(api: widget.api, id: p['id'] as int, name: '${p['name']}')),
+                MaterialPageRoute<void>(
+                  builder: (_) => _PersonDetail(
+                      api: widget.api, id: p['id'] as int, name: p['kind'] == 'self' ? 'Me' : '${p['name']}', self: p['kind'] == 'self'),
+                ),
               );
               if (mounted) _load();
             },
@@ -130,10 +135,11 @@ Widget _tile(Widget child) => Container(
 );
 
 class _PersonDetail extends StatefulWidget {
-  const _PersonDetail({required this.api, required this.id, required this.name});
+  const _PersonDetail({required this.api, required this.id, required this.name, this.self = false});
   final ApiClient api;
   final int id;
   final String name;
+  final bool self; // the user's own entity: it cannot be forgotten
 
   @override
   State<_PersonDetail> createState() => _PersonDetailState();
@@ -199,41 +205,62 @@ class _PersonDetailState extends State<_PersonDetail> {
   Future<void> _delete(Map<String, dynamic> f) async {
     try {
       await widget.api.delete('/graph/facts/${f['id']}');
-      if (mounted) setState(() => _facts = [for (final x in _facts) if (x != f) x]);
+      if (mounted) {
+        setState(() {
+          _facts = [for (final x in _facts) if (x != f) x];
+          _history = [for (final x in _history) if (x != f) x];
+        });
+      }
     } catch (_) {
       if (mounted) _toast(context, "Couldn't delete that");
     }
   }
 
-  Future<void> _forget() async {
-    final Map<String, dynamic> pv;
+  Future<Map<String, dynamic>?> _preview(bool mentions) async {
     try {
-      pv = await widget.api.get('/graph/entities/${widget.id}/forget-preview');
+      return await widget.api.get('/graph/entities/${widget.id}/forget-preview', {'mentions': '$mentions'});
     } catch (_) {
       if (mounted) _toast(context, "Couldn't load the preview");
-      return;
+      return null;
     }
-    if (!mounted) return;
+  }
+
+  Future<void> _forget() async {
+    var pv = await _preview(true);
+    if (pv == null || !mounted) return;
     var mentions = true;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, set) => AlertDialog(
-          title: Text('Forget ${pv['entity']}?'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('${pv['facts']} facts and ${pv['redacted_excerpts']} excerpts will be erased, '
-                  '${pv['mentions_deleted']} mentions deleted.'),
-              CheckboxListTile(
-                contentPadding: EdgeInsets.zero,
-                value: mentions,
-                onChanged: (v) => set(() => mentions = v ?? true),
-                title: const Text('Also delete mentions'),
-              ),
-              const Text('Chat history, notes and the activity log are not erased'),
-            ],
+          title: Text('Forget ${pv!['entity']}?'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('${pv!['facts']} facts and ${pv!['redacted_excerpts']} excerpts will be erased, '
+                    '${pv!['mentions_deleted']} mentions deleted.'),
+                for (final m in _maps(pv!['mention_facts']))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text('${m['entity']} — ${m['predicate']}: ${m['value']}', style: const TextStyle(fontSize: 13)),
+                  ),
+                if (pv!['mention_facts_more'] is int)
+                  Text('and ${pv!['mention_facts_more']} more', style: const TextStyle(fontSize: 13)),
+                CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: mentions,
+                  onChanged: (v) async {
+                    final want = v ?? true;
+                    final next = await _preview(want); // the counts and the list depend on it
+                    if (next != null) set(() => (mentions, pv) = (want, next));
+                  },
+                  title: const Text('Also delete mentions'),
+                ),
+                const Text('Chat history, notes and the activity log are not erased'),
+              ],
+            ),
           ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -251,7 +278,7 @@ class _PersonDetailState extends State<_PersonDetail> {
     }
   }
 
-  Widget _fact(Map<String, dynamic> f, {bool editable = false}) => _tile(
+  Widget _fact(Map<String, dynamic> f, {bool editable = false, bool deletable = false}) => _tile(
     ListTile(
       title: Text('${f['predicate']}: ${f['value']}', style: const TextStyle(color: ink, fontSize: 15)),
       subtitle: Text(
@@ -263,6 +290,8 @@ class _PersonDetailState extends State<_PersonDetail> {
               IconButton(key: ValueKey('edit-${f['id']}'), tooltip: 'Edit', icon: const Icon(Icons.edit_outlined), onPressed: () => _edit(f)),
               IconButton(key: ValueKey('delete-${f['id']}'), tooltip: 'Delete', icon: const Icon(Icons.delete_outline), onPressed: () => _delete(f)),
             ])
+          : deletable
+          ? IconButton(key: ValueKey('delete-${f['id']}'), tooltip: 'Delete', icon: const Icon(Icons.delete_outline), onPressed: () => _delete(f))
           : null,
     ),
   );
@@ -283,10 +312,12 @@ class _PersonDetailState extends State<_PersonDetail> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 110),
             children: [
               for (final f in _facts) _fact(f, editable: true),
-              if (_history.isNotEmpty) ...[_head('History'), for (final f in _history) _fact(f)],
+              if (_history.isNotEmpty) ...[_head('History'), for (final f in _history) _fact(f, deletable: true)],
               if (_pending.isNotEmpty) ...[_head('Pending'), for (final f in _pending) _fact(f)],
-              const SizedBox(height: 16),
-              FilledButton.tonal(onPressed: _forget, child: const Text('Forget person')),
+              if (!widget.self) ...[
+                const SizedBox(height: 16),
+                FilledButton.tonal(onPressed: _forget, child: const Text('Forget person')),
+              ],
             ],
           ),
   );

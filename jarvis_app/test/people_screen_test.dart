@@ -18,8 +18,9 @@ class GraphApi extends ApiClient {
 
   @override
   Future<Map<String, dynamic>> get(String path, [Map<String, String>? query]) async {
-    calls.add('GET $path');
-    return _r(path) as Map<String, dynamic>;
+    final k = query == null ? path : '$path?${[for (final e in query.entries) '${e.key}=${e.value}'].join('&')}';
+    calls.add('GET $k');
+    return _r(routes.containsKey(k) ? k : path) as Map<String, dynamic>;
   }
 
   @override
@@ -140,6 +141,83 @@ void main() {
     await t.pumpAndSettle();
     expect(api.calls, contains('DELETE /graph/entities/1'));
     expect(api.lastQuery, {'mentions': 'true'});
+  });
+
+  testWidgets('forget dialog lists mentions and refetches the preview when mentions are toggled', (t) async {
+    final r = routes()
+      ..['/graph/entities/1/forget-preview?mentions=true'] = {
+        'entity': 'Priya', 'facts': 3, 'redacted_excerpts': 4, 'mentions_deleted': 22, 'suppressed': 1,
+        'mention_facts': [
+          {'id': 20, 'entity': 'Me', 'predicate': 'note', 'value': 'lunch with Priya Rao'},
+          {'id': 21, 'entity': 'Sam', 'predicate': 'note', 'value': 'met Priya Rao at work'},
+        ],
+        'mention_facts_more': 20,
+      }
+      ..['/graph/entities/1/forget-preview?mentions=false'] = {
+        'entity': 'Priya', 'facts': 3, 'redacted_excerpts': 4, 'mentions_deleted': 0, 'suppressed': 1,
+        'mention_facts': [],
+      }
+      ..['DELETE /graph/entities/1'] = {};
+    final api = GraphApi(r);
+    await pump(t, api);
+    await t.tap(find.text('Priya'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('Forget person'));
+    await t.pumpAndSettle();
+    expect(find.textContaining('Me — note: lunch with Priya Rao'), findsOneWidget);
+    expect(find.textContaining('Sam — note: met Priya Rao at work'), findsOneWidget);
+    expect(find.textContaining('and 20 more'), findsOneWidget);
+    expect(find.text('Chat history, notes and the activity log are not erased'), findsOneWidget);
+    await t.tap(find.text('Also delete mentions'));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('GET /graph/entities/1/forget-preview?mentions=false'));
+    expect(find.textContaining('lunch with Priya Rao'), findsNothing);
+    expect(find.textContaining('0 mentions'), findsOneWidget);
+    await t.tap(find.text('Forget'));
+    await t.pumpAndSettle();
+    expect(api.lastQuery, {'mentions': 'false'});
+  });
+
+  testWidgets('history rows can be deleted', (t) async {
+    final api = GraphApi(routes());
+    await pump(t, api);
+    await t.tap(find.text('Priya'));
+    await t.pumpAndSettle();
+    expect(find.byKey(const ValueKey('edit-11')), findsNothing);
+    await t.tap(find.byKey(const ValueKey('delete-11')));
+    await t.pumpAndSettle();
+    expect(api.calls, contains('DELETE /graph/facts/11'));
+    expect(find.text('works_at: OldCo'), findsNothing);
+    expect(find.text('History'), findsNothing);
+  });
+
+  testWidgets('a failed history delete shows a snackbar and keeps the row', (t) async {
+    final api = GraphApi(routes()..['DELETE /graph/facts/11'] = Exception('x'));
+    await pump(t, api);
+    await t.tap(find.text('Priya'));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const ValueKey('delete-11')));
+    await t.pumpAndSettle();
+    expect(find.text("Couldn't delete that"), findsOneWidget);
+    expect(find.text('works_at: OldCo'), findsOneWidget);
+  });
+
+  testWidgets('self entity is listed first as Me and cannot be forgotten', (t) async {
+    final r = routes()
+      ..['/graph/entities'] = {
+        'entities': [
+          {'id': 1, 'name': 'Aaron', 'kind': 'person', 'fact_count': 2},
+          {'id': 5, 'name': 'Me', 'kind': 'self', 'fact_count': 1},
+        ]
+      }
+      ..['/graph/entities/5'] = {'id': 5, 'name': 'Me', 'kind': 'self', 'facts': [fact(30, 'home', 'Pune')], 'history': [], 'pending': []};
+    await pump(t, GraphApi(r));
+    final tiles = t.widgetList<ListTile>(find.byType(ListTile)).map((l) => (l.title as Text).data).toList();
+    expect(tiles.take(2), ['Me', 'Aaron']);
+    await t.tap(find.text('Me'));
+    await t.pumpAndSettle();
+    expect(find.text('home: Pune'), findsOneWidget);
+    expect(find.text('Forget person'), findsNothing);
   });
 
   testWidgets('lift suppression', (t) async {
