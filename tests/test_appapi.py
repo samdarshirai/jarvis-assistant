@@ -631,10 +631,26 @@ async def test_graph_forget_without_mentions(pool, uids):
     assert any(f.value == "lunch with Dana Zorn" for f in ra.kg.facts_for(ra.kg.self_entity().id))
 
 
+async def test_graph_delete_superseded_and_retracted_facts(pool, uids):
+    a, b, ra, _ = await kg_users(pool, uids)
+    dana = seed_person(ra.kg)
+    old = ra.kg.facts_for(dana.id)[0]
+    ra.kg.add_fact(dana.id, "employer", "Globex", source_kind="user_stated")
+    gone = ra.kg.add_fact(dana.id, "note", "plays chess", source_kind="user_stated")
+    ra.kg.retract_fact(gone.id)
+    assert {f.status for f in ra.kg.facts_for(dana.id, history=True) if f.id in (old.id, gone.id)} == {"superseded", "retracted"}
+    assert b("DELETE", f"/graph/facts/{old.id}").status_code == 404  # another user's history row
+    for fid in (old.id, gone.id):
+        assert a("DELETE", f"/graph/facts/{fid}").json() == {"ok": True}
+    assert [f.value for f in ra.kg.facts_for(dana.id, history=True)] == ["Globex"]
+
+
 async def test_graph_cannot_forget_self(pool, uids):
     a, _, ra, _ = await kg_users(pool, uids)
     me = ra.kg.self_entity()
     r = a("DELETE", f"/graph/entities/{me.id}")
+    assert (r.status_code, r.json()) == (409, {"error": "cannot_forget_self"})
+    r = a("GET", f"/graph/entities/{me.id}/forget-preview")
     assert (r.status_code, r.json()) == (409, {"error": "cannot_forget_self"})
     assert ra.kg.get_entity(me.id) and ra.audit.rows == []
 

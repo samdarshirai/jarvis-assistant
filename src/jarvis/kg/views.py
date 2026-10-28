@@ -50,7 +50,8 @@ def fact_delete(store, fact_id: int) -> dict:
 
 
 def forget_preview(store, entity_id: int, mentions: bool = True) -> dict:
-    _entity(store, entity_id)
+    if _entity(store, entity_id).kind == "self":
+        raise SelfEntity
     return store.preview_forget(entity_id, include_mentions=mentions)
 
 
