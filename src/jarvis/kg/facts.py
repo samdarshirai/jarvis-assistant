@@ -50,7 +50,7 @@ def _clean(value: str) -> str:
 
 
 class FactsMixin:
-    """Facts with provenance; needs self.pool, self.user_id, self.version."""
+    """Facts with provenance; needs self.pool, self.user_id, self.version and self._redact(conn, excerpt)."""
 
     def _write(self, fn):
         """Run fn(conn) in one transaction; retry once if a concurrent writer took the active slot."""
@@ -95,7 +95,7 @@ class FactsMixin:
         obs = observed_at or datetime.now(timezone.utc)
         ref = ref or f"user:{uuid.uuid4()}"
         return self._write(lambda conn: self._add(conn, subject_id, predicate, value, source_kind, ref,
-                                                  excerpt[:200], obs))
+                                                  self._redact(conn, excerpt[:200]), obs))
 
     def _trust(self, conn, fact_id: int) -> int:
         """Trust of a fact's highest-trust live source."""
