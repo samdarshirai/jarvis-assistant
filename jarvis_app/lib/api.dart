@@ -28,6 +28,13 @@ class ApiClient {
 
   Future<Map<String, dynamic>> delete(String path) => _send('DELETE', config.apiUri(path));
 
+  Future<Map<String, dynamic>> patch(String path, Map<String, dynamic> body) =>
+      _send('PATCH', config.apiUri(path), body: body);
+
+  /// DELETE with an optional query and/or JSON body (the plain [delete] has neither).
+  Future<Map<String, dynamic>> deleteWith(String path, {Map<String, String>? query, Map<String, dynamic>? body}) =>
+      _send('DELETE', config.apiUri(path, query), body: body);
+
   Future<Map<String, dynamic>> _send(String method, Uri uri, {Map<String, dynamic>? body}) async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
     try {

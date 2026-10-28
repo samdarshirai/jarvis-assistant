@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'calendar_screen.dart';
+import 'people_screen.dart';
 import 'theme.dart';
 
 /// What Jarvis remembers about the user; swipe-free delete via the trash icon.
@@ -83,6 +84,16 @@ class _MemoryScreenState extends State<MemoryScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 110),
       children: [
+        Align(
+          alignment: Alignment.centerLeft,
+          child: TextButton.icon(
+            icon: const Icon(Icons.people_outline),
+            label: const Text('People'),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => PeopleScreen(api: widget.api, onAskJarvis: widget.onAskJarvis)),
+            ),
+          ),
+        ),
         if (rows.isEmpty)
           Padding(
             padding: const EdgeInsets.all(24),
