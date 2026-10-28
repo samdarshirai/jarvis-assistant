@@ -158,7 +158,23 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _dashboard?.refresh();
+    if (state != AppLifecycleState.resumed) return;
+    _dashboard?.refresh();
+    final c = _config;
+    if (c?.token != null && _ready) {
+      unawaited(reportLocation(widget.apiFor(c!)));
+      unawaited(_syncTz(c));
+    }
+  }
+
+  /// The server reads "now" in the user's timezone: follow the phone when it changes (travel).
+  Future<void> _syncTz(Config c) async {
+    try {
+      final tz = await widget.tz();
+      if (tz == null || _me['tz'] == null || _me['tz'] == tz || _config?.token != c.token) return;
+      await widget.apiFor(c).put('/me', {'tz': tz});
+      _me = {..._me, 'tz': tz};
+    } catch (_) {} // best effort: the server keeps the previous timezone
   }
 
   /// Decides wizard or home for [c]: no token is sign-in, a token with missing credentials resumes setup.
@@ -274,7 +290,10 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
               widget.onSessionEnded?.call();
               _dashboard?.refresh(); // a spoken "add task" should show up
             },
-            onStarted: widget.onSessionStarted,
+            onStarted: () {
+              widget.onSessionStarted?.call();
+              unawaited(reportLocation(widget.apiFor(c))); // a fresh fix before the first question
+            },
           );
     AppHost.ready = voiceReady;
     if (!voiceReady) {

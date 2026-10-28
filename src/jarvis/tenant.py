@@ -17,6 +17,7 @@ from jarvis.llm import LLMProvider, MemoryAwareProvider, creds_for
 from jarvis.memory import MemoryStore
 from jarvis.notes import NoteStore
 from jarvis.proactive.store import ProactiveStore
+from jarvis.situation import Situation, SituationAwareProvider
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
 from jarvis.tools.memory_tools import register_memory_tools
@@ -155,11 +156,17 @@ class Tenants:
         registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id)
         memories = MemoryStore(pool, user_id)
         creds = creds_for(secrets, s)
-        llm = MemoryAwareProvider(self.llm_provider_factory(creds, audit), memories.all) if creds else None
-        graph = build_graph(llm, registry, audit, self.saver, tz) if llm else None
+        raw = self.llm_provider_factory(creds, audit) if creds else None
+        llm = MemoryAwareProvider(raw, memories.all) if raw else None
+        proactive = ProactiveStore(pool, user_id)
+        calendar, tasks, gmail = CalendarClient(svc("calendar", "v3"), tz), TasksClient(svc("tasks", "v1")), GmailClient(svc("gmail", "v1"))
+        # Only the chat graph sees the situation (proactive jobs and mail extraction use `llm`). Memory wraps it, so the
+        # prompt reads: base, memories, situation: the fast-changing part comes last and the rest stays cacheable.
+        graph = build_graph(MemoryAwareProvider(SituationAwareProvider(raw, Situation(
+            calendar, tasks, gmail, proactive, tz, NoteStore(pool, user_id))), memories.all),
+            registry, audit, self.saver, tz) if raw else None
         return UserRuntime(user=user, secrets=secrets, audit=audit, memories=memories, notes=NoteStore(pool, user_id),
-                           proactive=ProactiveStore(pool, user_id), calendar=CalendarClient(svc("calendar", "v3"), tz),
-                           tasks=TasksClient(svc("tasks", "v1")), gmail=GmailClient(svc("gmail", "v1")),
+                           proactive=proactive, calendar=calendar, tasks=tasks, gmail=gmail,
                            registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch)
 
 

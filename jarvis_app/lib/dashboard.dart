@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 
+import 'api.dart';
 import 'config.dart';
 
 String? _s(Object? v) => v is String ? v : null;
@@ -108,6 +109,14 @@ Future<Position?> _where() async {
   } catch (_) {
     return null; // the brief just falls back to the server's configured city
   }
+}
+
+/// Tells the server where the phone is, so "from where I am" is fresh; silent when location is denied or off.
+Future<void> reportLocation(ApiClient api) async {
+  try {
+    final pos = await _where();
+    if (pos != null) await api.post('/location', {'lat': pos.latitude, 'lon': pos.longitude});
+  } catch (_) {} // best effort: the server keeps the last fix
 }
 
 Future<DashboardData> fetchDashboard(Config c) async {

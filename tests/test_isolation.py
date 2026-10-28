@@ -557,7 +557,7 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("GET", "/notes", None), ("GET", "/notes/1", None), ("POST", "/chat", {"text": "hi"}),
           ("POST", "/chat/confirm", {"interrupt_id": "i", "decision": "yes"}), ("GET", "/me", None),
           ("PUT", "/me", {"tz": "UTC"}), ("PUT", "/settings/llm", {"base_url": "https://x.example.com/v1", "api_key": "k"}),
-          ("GET", "/dashboard", None),
+          ("GET", "/dashboard", None), ("POST", "/location", {"lat": 1.0, "lon": 2.0}),
           ("PUT", "/device/fcm", {"token": "fcm-x"})]
 PUBLIC = {"/", "/privacy", "/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}

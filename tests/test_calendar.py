@@ -194,7 +194,8 @@ def test_list_for_proactive_maps_flags_and_drops_cancelled():
     assert set(out) == {"a", "b", "c", "e"}
     assert out["a"] == {"id": "a", "summary": "Standup", "start": "2026-10-06T09:00:00+02:00",
                         "end": "2026-10-06T09:15:00+02:00", "location": "Office", "all_day": False,
-                        "declined": False, "busy": True, "source_message": None}
+                        "declined": False, "busy": True, "source_message": None, "attendees": []}
+    assert out["c"]["attendees"] == [{"name": "", "email": "x@y.z"}]
     assert out["b"]["all_day"] is True and out["b"]["busy"] is False and out["b"]["summary"] == ""
     assert out["c"]["declined"] is True
     assert out["e"]["source_message"] == "m1"

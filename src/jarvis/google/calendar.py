@@ -32,6 +32,8 @@ def _proactive(e: dict) -> dict:
         "declined": me.get("responseStatus") == "declined",
         "busy": e.get("transparency", "opaque") != "transparent",
         "source_message": private.get("jarvisMsgId"),
+        "attendees": [{"name": a.get("displayName") or "", "email": a.get("email") or ""}
+                      for a in e.get("attendees", []) if not a.get("self") and not a.get("resource")],
     }
 
 
