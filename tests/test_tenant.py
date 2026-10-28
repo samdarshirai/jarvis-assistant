@@ -172,3 +172,66 @@ async def test_graph_flag_off_keeps_legacy_memories(pool, uids):
     from jarvis.memory import MemoryStore
     rt = await tenants(pool).get(uids[0])
     assert rt.kg is None and isinstance(rt.memories, MemoryStore)
+
+
+SITUATION = "Right now"
+GRAPH_TOOLS = {"remember_fact", "graph_lookup", "forget_entity"}
+
+
+async def test_graph_flag_on_registers_graph_tools_in_memory_domain(pool, uids):
+    rt = await tenants(pool, graph=True).get(uids[0])
+    for n in GRAPH_TOOLS:
+        assert rt.registry.get(n).domain == "memory"
+
+
+async def test_graph_flag_off_registers_no_graph_tools(pool, uids):
+    rt = await tenants(pool).get(uids[0])
+    assert rt.kg is None
+    for n in GRAPH_TOOLS:
+        assert rt.registry.get(n) is None
+
+
+class RecordingProvider:
+    def __init__(self, creds, audit):
+        self.seen = []
+
+    def get(self, tier, tools=None, tool_choice=None):
+        from langchain_core.runnables import RunnableLambda
+        return RunnableLambda(lambda msgs: self.seen.append(msgs[0].content) or "ok")
+
+    async def aclose(self):
+        pass
+
+
+async def _prompt(pool, uid, graph, monkeypatch):
+    from langchain_core.messages import HumanMessage, SystemMessage
+    import jarvis.tenant as tn
+    captured = []
+    monkeypatch.setattr(tn, "build_graph", lambda provider, *a, **k: captured.append(provider) or object())
+    SecretStore(pool, KEY).put(uid, "llm_key", "sk-x")
+    t = tenants(pool, graph=graph)
+    t.llm_provider_factory = RecordingProvider
+    rt = await t.get(uid)
+    rt.registry.get("remember").fn(text="I like tea")
+    if graph:
+        rt.registry.get("remember_fact").fn(subject="Meera", predicate="city", value="Pune", relation="sister")
+    await captured[0].get("fast").ainvoke([SystemMessage("BASE"), HumanMessage("call Meera")], config={})
+    return _seen(captured[0])
+
+
+def _seen(p):
+    while not hasattr(p, "seen"):
+        p = p.provider
+    return p.seen[-1]
+
+
+async def test_graph_flag_on_prompt_order_is_base_memories_graph_situation(pool, uids, monkeypatch):
+    text = await _prompt(pool, uids[0], True, monkeypatch)
+    marks = [text.index(m) for m in ("BASE", "I like tea", "<graph>", "Pune")]
+    assert marks == sorted(marks)
+    assert text.rindex("</graph>") < text.index(SITUATION)
+
+
+async def test_graph_flag_off_prompt_has_no_graph_block(pool, uids, monkeypatch):
+    text = await _prompt(pool, uids[0], False, monkeypatch)
+    assert "<graph>" not in text and text.index("BASE") < text.index("I like tea") < text.index(SITUATION)

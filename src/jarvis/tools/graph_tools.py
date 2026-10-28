@@ -23,6 +23,10 @@ class LookupArgs(BaseModel):
     name: str = Field(description="A name, a kin word like 'sister', or 'me'")
 
 
+class ForgetEntityArgs(BaseModel):
+    entity_id: int = Field(description="The id of the person, place or organisation to forget, from graph_lookup")
+
+
 def register_graph_tools(registry: Registry, store: GraphStore) -> None:
     def _has_relation(entity_id):
         return any(f.predicate == "relation_to_user" for f in store.facts_for(entity_id))
@@ -64,6 +68,24 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
                  "facts": _facts(store.facts_for(e.id)), "pending": _facts(store.pending_for(e.id))}
                 for e in ents[:8]]
 
+    def _plural(n, word):
+        return f"{n} {word}" + ("" if n == 1 else "s")
+
+    def forget_describe(a):
+        try:
+            c = store.preview_forget(a["entity_id"])
+        except ValueError:
+            return "Forget this person. I could not find them, so nothing will change."
+        return (f"Forget everything about {c['entity']}: {_plural(c['facts'], 'fact')}, "
+                f"{_plural(c['merged_entities'], 'merged entity')} and {_plural(c['mentions_deleted'], 'other fact')} "
+                "that mention them. Chat history, notes and the activity log are not erased.")
+
+    def forget_entity(entity_id):
+        try:
+            return store.forget_entity(entity_id)
+        except ValueError:
+            return {"error": "I could not forget that: it is unknown or cannot be forgotten."}
+
     registry.add(Tool(
         name="remember_fact", domain="memory", args_schema=RememberFactArgs, fn=remember_fact,
         description="Save a structured fact about the user or someone in their life (employer, city, birthday, relation, ...).",
@@ -74,3 +96,8 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
         name="graph_lookup", domain="memory", args_schema=LookupArgs, fn=graph_lookup,
         description="Look up what is known about a person, place or organisation (or 'me'), with sources and times.",
         needs_confirm=False))
+    registry.add(Tool(
+        name="forget_entity", domain="memory", args_schema=ForgetEntityArgs, fn=forget_entity,
+        description="Forget everything the graph holds about a person, place or organisation. Look them up with "
+                    "graph_lookup first to get the id.",
+        needs_confirm=True, describe=forget_describe, done=lambda r: "Okay, forgotten."))

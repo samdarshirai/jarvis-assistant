@@ -115,3 +115,53 @@ def test_failed_write_leaves_no_half_created_entity(reg, store, monkeypatch):
     with pytest.raises(RuntimeError):
         run(reg, "remember_fact", subject="Meera", predicate="city", value="Pune", relation="sister")
     assert store.find_by_name("Meera") == [] and store.find_by_name("sister") == []
+
+
+@pytest.fixture
+def fstore(pool, uids):
+    return GraphStore(pool, uids[0], b"s" * 32)
+
+
+@pytest.fixture
+def freg(fstore):
+    r = Registry()
+    register_graph_tools(r, fstore)
+    return r
+
+
+def test_forget_entity_describe_includes_counts_and_not_erased_line(freg, fstore):
+    e = fstore.create_entity("Meera")
+    fstore.add_fact(e.id, "city", "Pune", source_kind="user_stated", excerpt="Pune")
+    t = freg.get("forget_entity")
+    text = t.describe({"entity_id": e.id})
+    assert "Meera" in text and "1 fact" in text
+    assert "Chat history, notes and the activity log are not erased." in text
+    assert fstore.find_by_name("Meera")  # preview is read-only
+
+
+def test_forget_entity_removes_everything_and_suppresses(freg, fstore):
+    e = fstore.create_entity("Meera")
+    fstore.add_fact(e.id, "city", "Pune", source_kind="user_stated", excerpt="Pune")
+    r = run(freg, "forget_entity", entity_id=e.id)
+    assert r["entity"] == "Meera" and r["facts"] == 1
+    assert fstore.find_by_name("Meera") == []
+    assert fstore.is_suppressed("name", "Meera")
+    assert freg.get("forget_entity").done(r) == "Okay, forgotten."
+
+
+def test_forget_entity_unknown_or_self_returns_error(freg, fstore):
+    t = freg.get("forget_entity")
+    for eid in (999999, fstore.self_entity().id):
+        assert set(run(freg, "forget_entity", entity_id=eid)) == {"error"}
+        assert isinstance(t.describe({"entity_id": eid}), str)
+
+
+def test_forget_entity_requires_confirmation(freg):
+    assert freg.get("forget_entity").needs_confirm is True
+
+
+def test_forget_other_users_entity_refused(pool, uids, fstore, freg):
+    other = GraphStore(pool, uids[1], b"s" * 32)
+    e = other.create_entity("Meera")
+    assert set(run(freg, "forget_entity", entity_id=e.id)) == {"error"}
+    assert other.find_by_name("Meera")

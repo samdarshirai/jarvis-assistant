@@ -14,6 +14,7 @@ from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
 from jarvis.llm import LLMProvider, MemoryAwareProvider, creds_for
+from jarvis.kg.block import GraphAwareProvider
 from jarvis.kg.memory_store import GraphMemoryStore
 from jarvis.kg.store import GraphStore
 from jarvis.memory import MemoryStore
@@ -22,6 +23,7 @@ from jarvis.proactive.store import ProactiveStore
 from jarvis.situation import Situation, SituationAwareProvider
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
+from jarvis.tools.graph_tools import register_graph_tools
 from jarvis.tools.memory_tools import register_memory_tools
 from jarvis.tools.note_tools import register_note_tools
 from jarvis.tools.phone_tools import register_phone_tools
@@ -55,7 +57,7 @@ def cached_service(build, ttl: float = 1800.0, clock=time.monotonic, epoch=lambd
 
 
 def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int | None = None,
-                   memory_store=None) -> Registry:
+                   memory_store=None, graph_store=None) -> Registry:
     registry = Registry()
     gmail = GmailClient(svc("gmail", "v1"))
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz, gmail.sent_to)
@@ -65,6 +67,8 @@ def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int |
     if pool is not None:
         register_memory_tools(registry, memory_store or MemoryStore(pool, user_id))
         register_note_tools(registry, NoteStore(pool, user_id))
+    if graph_store is not None:
+        register_graph_tools(registry, graph_store)
     register_research_tools(registry, WebSearch(tavily_key) if tavily_key else DdgSearch())
     return registry
 
@@ -158,18 +162,22 @@ class Tenants:
                                   epoch=lambda: epoch[0])
 
         kg = GraphStore(pool, user_id, s.fernet_key.encode()) if s.graph_enabled else None
-        memories = GraphMemoryStore(kg) if kg else MemoryStore(pool, user_id)
-        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id, memory_store=memories)
+        memories = GraphMemoryStore(kg) if kg is not None else MemoryStore(pool, user_id)
+        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id, memory_store=memories, graph_store=kg)
         creds = creds_for(secrets, s)
         raw = self.llm_provider_factory(creds, audit) if creds else None
         llm = MemoryAwareProvider(raw, memories.all) if raw else None
         proactive = ProactiveStore(pool, user_id)
         calendar, tasks, gmail = CalendarClient(svc("calendar", "v3"), tz), TasksClient(svc("tasks", "v1")), GmailClient(svc("gmail", "v1"))
         # Only the chat graph sees the situation (proactive jobs and mail extraction use `llm`). Memory wraps it, so the
-        # prompt reads: base, memories, situation: the fast-changing part comes last and the rest stays cacheable.
-        graph = build_graph(MemoryAwareProvider(SituationAwareProvider(raw, Situation(
-            calendar, tasks, gmail, proactive, tz, NoteStore(pool, user_id))), memories.all),
-            registry, audit, self.saver, tz) if raw else None
+        # prompt reads: base, memories, graph (flag on), situation: the fast-changing part comes last and the rest stays cacheable.
+        chat = None
+        if raw:
+            chat = SituationAwareProvider(raw, Situation(calendar, tasks, gmail, proactive, tz, NoteStore(pool, user_id)))
+            if kg is not None:  # graph block sits between memories and situation
+                chat = GraphAwareProvider(chat, kg)
+            chat = MemoryAwareProvider(chat, memories.all)
+        graph = build_graph(chat, registry, audit, self.saver, tz) if raw else None
         return UserRuntime(user=user, secrets=secrets, audit=audit, memories=memories, notes=NoteStore(pool, user_id),
                            proactive=proactive, calendar=calendar, tasks=tasks, gmail=gmail,
                            registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch, kg=kg)
