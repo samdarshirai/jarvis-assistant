@@ -18,6 +18,7 @@ class Tool:
     untrusted: bool = False  # output carries third-party text (email): wrapped, redacted in audit, flags later writes
     untrusted_tag: str = "untrusted_email"  # wrapper tag for this tool's output: untrusted_email or untrusted_web
     confirm_after_untrusted: bool = False  # ungated normally; gated while untrusted email/web text was read this turn or is in the history window
+    refuse_after_untrusted: bool = False  # never runs and never prompts while untrusted email/web text is in play
 
 
 class Registry:

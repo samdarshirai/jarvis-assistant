@@ -794,3 +794,32 @@ async def test_other_phone_requests_leave_the_tool_choice_to_the_model(text):
 async def test_telegram_never_forces_a_call():
     cfg = {"configurable": {"thread_id": "t", "channel": "telegram"}, "recursion_limit": 40}
     assert await forced_choices("Call Mom", [AIMessage("no calls here")], cfg) == [None]
+
+
+# --- refuse_after_untrusted ---
+def remember_tool(saved):
+    return Tool(name="remember_fact", domain="memory", description="d", args_schema=Args,
+                fn=lambda **kw: saved.append(kw) or {"ok": True}, refuse_after_untrusted=True)
+
+
+async def test_remember_fact_refused_when_untrusted_email_in_window():
+    saved = []
+    g, audit = make({"fast": [AIMessage("gmail, memory"), call("remember_fact", {"summary": "x"}, id="c2"),
+                              AIMessage("ok")],
+                     "strong": [call("read_email", {"message_id": "m1"}), AIMessage("read")]},
+                    [untrusted_tool(), remember_tool(saved)])
+    out = await g.ainvoke(say(), CFG)
+    assert "__interrupt__" not in out
+    assert saved == []
+    msg = [m for m in tool_messages(out) if m.tool_call_id == "c2"][0]
+    assert "Not saved: untrusted" in msg.content
+
+
+async def test_remember_fact_still_confirms_without_untrusted_text():
+    saved = []
+    g, _ = make({"fast": [AIMessage("memory"), call("remember_fact", {"summary": "x"}), AIMessage("ok")]},
+                [remember_tool(saved)])
+    out = await g.ainvoke(say(), CFG)
+    assert out["__interrupt__"][0].value["actions"][0]["tool"] == "remember_fact"
+    await g.ainvoke(Command(resume=True), CFG)
+    assert len(saved) == 1
