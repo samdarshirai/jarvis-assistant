@@ -398,7 +398,7 @@ class Tagged(Src):
 
 
 def tenants(pool):
-    return Tenants(pool, NS(fernet_key=Fernet.generate_key().decode(), tavily_api_key="", models=lambda tier: [tier]), InMemorySaver(),
+    return Tenants(pool, NS(fernet_key=Fernet.generate_key().decode(), tavily_api_key="", graph_enabled=False, models=lambda tier: [tier]), InMemorySaver(),
                    google_service_factory=lambda *a: object(), llm_provider_factory=lambda *a: None)
 
 
