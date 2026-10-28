@@ -1,7 +1,7 @@
 import unicodedata
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from psycopg.errors import UniqueViolation
 
@@ -97,7 +97,23 @@ class FactsMixin:
         return self._write(lambda conn: self._add(conn, subject_id, predicate, value, source_kind, ref,
                                                   excerpt[:200], obs))
 
-    def _add(self, conn, subject_id, predicate, value, kind, ref, excerpt, obs) -> Fact:
+    def _trust(self, conn, fact_id: int) -> int:
+        """Trust of a fact's highest-trust live source."""
+        return conn.execute("SELECT coalesce(max(s.trust), 0) FROM fact_source fs"
+                            " JOIN source s ON s.user_id = fs.user_id AND s.id = fs.source_id"
+                            " WHERE fs.user_id = %s AND fs.fact_id = %s AND s.status = 'live'",
+                            (self.user_id, fact_id)).fetchone()[0]
+
+    def _promote(self, conn, fact_id: int, valid_from, active) -> None:
+        """Make fact_id the active fact, superseding `active` (id, valid_from, trust) if there is one."""
+        if active:
+            conn.execute("UPDATE fact SET status = 'superseded', valid_to = %s, superseded_by = %s"
+                         " WHERE user_id = %s AND id = %s", (max(valid_from, active[1]), fact_id, self.user_id, active[0]))
+        conn.execute("UPDATE fact SET status = 'active', valid_to = NULL, superseded_by = NULL"
+                     " WHERE user_id = %s AND id = %s", (self.user_id, fact_id))
+
+    def _add(self, conn, subject_id, predicate, value, kind, ref, excerpt, obs, force=False) -> Fact:
+        """One add_fact decision; force (corrections) makes the value the active one for single-valued predicates."""
         uid = self.user_id
         # locking the subject serialises its fact writers: N racers, dedupe of multi values (FK checks still pass)
         if not conn.execute("SELECT 1 FROM entity WHERE user_id = %s AND id = %s FOR NO KEY UPDATE",
@@ -106,12 +122,12 @@ class FactsMixin:
         t_in = TRUST[kind]
         active = None
         if predicate in SINGLE:
-            active = conn.execute(
-                "SELECT f.id, coalesce(f.valid_from, f.recorded_at), coalesce((SELECT max(s.trust) FROM fact_source fs"
-                " JOIN source s ON s.user_id = fs.user_id AND s.id = fs.source_id"
-                " WHERE fs.user_id = f.user_id AND fs.fact_id = f.id AND s.status = 'live'), 0)"
-                " FROM fact f WHERE f.user_id = %s AND f.subject_id = %s AND f.predicate = %s AND f.status = 'active'"
-                " FOR UPDATE OF f", (uid, subject_id, predicate)).fetchone()
+            row = conn.execute("SELECT id, coalesce(valid_from, recorded_at) FROM fact WHERE user_id = %s"
+                               " AND subject_id = %s AND predicate = %s AND status = 'active' FOR UPDATE",
+                               (uid, subject_id, predicate)).fetchone()
+            active = row and (row[0], row[1], self._trust(conn, row[0]))
+            if force and active and obs <= active[1]:
+                obs = active[1] + timedelta(microseconds=1)  # a correction is always the newest statement
         src = conn.execute(
             "INSERT INTO source (user_id, kind, ref, observed_at, excerpt, trust) VALUES (%s, %s, %s, %s, %s, %s)"
             " ON CONFLICT (user_id, kind, ref) DO UPDATE SET last_seen_at = now() RETURNING id",
@@ -128,24 +144,26 @@ class FactsMixin:
                 " superseded_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                 (uid, subject_id, predicate, value, obs, valid_to, status, superseded_by)).fetchone()[0]
 
+        def wins(t, frm):
+            return not active or t > active[2] or (t == active[2] and frm > active[1])
+
         same = norm(value)
-        for fid, v in conn.execute("SELECT id, object_value FROM fact WHERE user_id = %s AND subject_id = %s"
-                                   " AND predicate = %s AND status IN ('active', 'pending') ORDER BY id",
-                                   (uid, subject_id, predicate)).fetchall():
-            if norm(v) == same:
-                return link(fid)  # repeat observation: confirm, never duplicate
-        if active is None:
-            return link(insert("active"))
-        a_id, a_from, t_a = active
-        if t_in > t_a or (t_in == t_a and obs > a_from):
-            conn.execute("UPDATE fact SET status = 'superseded', valid_to = %s WHERE user_id = %s AND id = %s",
-                         (max(obs, a_from), uid, a_id))
-            new = insert("active")
-            conn.execute("UPDATE fact SET superseded_by = %s WHERE user_id = %s AND id = %s", (new, uid, a_id))
-            return link(new)
-        if obs > a_from:  # newer but less trusted: ask the user
+        for fid, v, status, frm in conn.execute(
+                "SELECT id, object_value, status, coalesce(valid_from, recorded_at) FROM fact WHERE user_id = %s"
+                " AND subject_id = %s AND predicate = %s AND status IN ('active', 'pending') ORDER BY id",
+                (uid, subject_id, predicate)).fetchall():
+            if norm(v) == same:  # repeat observation: confirm, never duplicate
+                link(fid)
+                if status == "pending" and (force or wins(self._trust(conn, fid), frm)):
+                    self._promote(conn, fid, frm, active)  # the extra source now outranks the active fact
+                return self._fact(conn, fid)
+        if wins(t_in, obs):
+            fid = insert("pending")  # becomes active in _promote, after the old one leaves the unique slot
+            self._promote(conn, fid, obs, active)
+            return link(fid)
+        if obs > active[1]:  # newer but less trusted: ask the user
             return link(insert("pending"))
-        return link(insert("superseded", a_from, a_id))  # older than the active fact: history
+        return link(insert("superseded", active[1], active[0]))  # older than the active fact: history
 
     def correct_fact(self, fact_id: int, value: str) -> Fact:
         value, ref = _clean(value), f"user:{uuid.uuid4()}"
@@ -155,7 +173,7 @@ class FactsMixin:
             if old is None:
                 raise ValueError("unknown fact")
             new = self._add(conn, old.subject_id, old.predicate, value, "user_stated", ref, "corrected by user",
-                            datetime.now(timezone.utc))
+                            datetime.now(timezone.utc), force=True)
             # supersession leaves pending and multi-valued originals alone; retire them explicitly
             conn.execute("UPDATE fact SET status = 'superseded', superseded_by = %s,"
                          " valid_to = greatest(coalesce(valid_from, now()), now())"

@@ -229,3 +229,75 @@ def test_two_active_single_valued_writes_race_to_one(store, anna):
         t.join()
     assert errors == []
     assert len(store.facts_for(anna.id)) == 1
+
+
+def test_pending_promoted_when_higher_trust_confirms_it(pool, store, anna):
+    cel = store.add_fact(anna.id, "employer", "Celonis", source_kind="contacts", ref="c1", observed_at=day(1))
+    acme = store.add_fact(anna.id, "employer", "Acme", source_kind="email", ref="m1", observed_at=day(5))
+    assert acme.status == "pending"
+    again = store.add_fact(anna.id, "employer", "acme", source_kind="user_stated", observed_at=day(6))
+    assert (again.id, again.status, again.valid_from, again.source_kind) == (acme.id, "active", day(5), "user_stated")
+    assert store.facts_for(anna.id) == [again] and store.pending_for(anna.id) == []
+    hist = {f.value: f for f in store.facts_for(anna.id, history=True)}
+    assert (hist["Celonis"].status, hist["Celonis"].valid_to) == ("superseded", day(5))
+    with pool.connection() as c:
+        assert c.execute("SELECT superseded_by FROM fact WHERE id = %s", (cel.id,)).fetchone()[0] == acme.id
+
+
+def test_pending_promoted_when_no_active_fact(store, anna):
+    cel = store.add_fact(anna.id, "employer", "Celonis", source_kind="user_stated", observed_at=day(1))
+    acme = store.add_fact(anna.id, "employer", "Acme", source_kind="email", ref="m1", observed_at=day(5))
+    store.retract_fact(cel.id)
+    again = store.add_fact(anna.id, "employer", "Acme", source_kind="email", ref="m2", observed_at=day(7))
+    assert (again.id, again.status) == (acme.id, "active")
+
+
+def test_lower_trust_confirmation_keeps_pending(store, anna):
+    store.add_fact(anna.id, "employer", "Celonis", source_kind="user_stated", observed_at=day(1))
+    acme = store.add_fact(anna.id, "employer", "Acme", source_kind="email", ref="m1", observed_at=day(5))
+    again = store.add_fact(anna.id, "employer", "Acme", source_kind="contacts", ref="c1", observed_at=day(6))
+    assert (again.id, again.status) == (acme.id, "pending")
+    assert [f.value for f in store.facts_for(anna.id)] == ["Celonis"]
+
+
+def test_correct_fact_onto_pending_value(store, anna):
+    cel = store.add_fact(anna.id, "employer", "Celonis", source_kind="user_stated", observed_at=day(5))
+    acme = store.add_fact(anna.id, "employer", "Acme", source_kind="email", ref="m1", observed_at=day(9))
+    new = store.correct_fact(cel.id, "Acme")
+    assert (new.id, new.status) == (acme.id, "active")
+    assert store.facts_for(anna.id) == [new] and store.pending_for(anna.id) == []
+    # user_stated active with a later valid_from than the pending value still yields to the correction
+    store.add_fact(anna.id, "employer", "Globex", source_kind="email", ref="m2", observed_at=day(30))
+    store.add_fact(anna.id, "employer", "Initech", source_kind="user_stated", observed_at=day(40))
+    globex = store.pending_for(anna.id)[0]
+    fixed = store.correct_fact(globex.id, "Globex")
+    assert fixed.status == "active" and [f.value for f in store.facts_for(anna.id)] == ["Globex"]
+    for f in store.facts_for(anna.id, history=True):
+        assert f.valid_to is None or f.valid_to >= f.valid_from
+
+
+def test_correct_fact_when_active_valid_from_in_future(store, anna):
+    future = datetime.now(timezone.utc) + timedelta(days=30)
+    old = store.add_fact(anna.id, "city", "Pune", source_kind="user_stated", observed_at=future)
+    new = store.correct_fact(old.id, "Berlin")
+    assert new.status == "active" and new.valid_from > future
+    assert store.facts_for(anna.id) == [new]
+    (pune,) = [f for f in store.facts_for(anna.id, history=True) if f.value == "Pune"]
+    assert pune.status == "superseded" and pune.valid_to >= pune.valid_from
+
+
+def test_correct_fact_on_multi_fact(store, anna):
+    bob = store.add_fact(anna.id, "friend_of", "Bob", source_kind="email", ref="m1")
+    store.add_fact(anna.id, "friend_of", "Carl", source_kind="email", ref="m2")
+    new = store.correct_fact(bob.id, "Rob")
+    assert new.status == "active"
+    assert sorted(f.value for f in store.facts_for(anna.id)) == ["Carl", "Rob"]
+
+
+def test_correct_fact_on_superseded_facts_predicate(store, anna):
+    old = store.add_fact(anna.id, "city", "Pune", source_kind="user_stated", observed_at=day(1))
+    store.add_fact(anna.id, "city", "Berlin", source_kind="user_stated", observed_at=day(5))
+    new = store.correct_fact(old.id, "Rome")
+    assert new.status == "active" and [f.value for f in store.facts_for(anna.id)] == ["Rome"]
+    assert {f.value: f.status for f in store.facts_for(anna.id, history=True)} == {
+        "Rome": "active", "Berlin": "superseded", "Pune": "superseded"}
