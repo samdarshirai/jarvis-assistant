@@ -9,6 +9,7 @@ from langgraph.types import Command
 from jarvis.agent.graph import turn_replies
 from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.google.auth import ReauthRequired
+from jarvis.kg import views
 from jarvis.llm import MemoryContextError
 from jarvis.tenant import auth_runtime, thread_config
 from jarvis.timeutil import now_local
@@ -141,6 +142,57 @@ class AppService:
         if ok:
             await self._audit(rt, "forget", {"memory_id": memory_id}, {"removed": True})
         return bool(ok)
+
+    # --- knowledge graph control: (status, body); audit rows carry ids and counts only, never names or values ---
+    async def _kg(self, rt, fn, *args) -> tuple[int, dict]:
+        if rt.kg is None:
+            return 404, {"error": "not_found"}
+        try:
+            return 200, await asyncio.wait_for(asyncio.to_thread(fn, rt.kg, *args), self.source_timeout)
+        except LookupError:
+            return 404, {"error": "not_found"}
+        except views.SelfEntity:
+            return 409, {"error": "cannot_forget_self"}
+        except Exception:
+            log.exception("graph call failed")
+            return 502, {"error": "unavailable"}
+
+    async def graph_entities(self, rt):
+        return await self._kg(rt, views.entity_list)
+
+    async def graph_entity(self, rt, entity_id: int):
+        return await self._kg(rt, views.entity_detail, entity_id)
+
+    async def graph_forget_preview(self, rt, entity_id: int, mentions: bool):
+        return await self._kg(rt, views.forget_preview, entity_id, mentions)
+
+    async def graph_suppressions(self, rt):
+        return await self._kg(rt, views.suppressions)
+
+    async def graph_fact_correct(self, rt, fact_id: int, value: str):
+        code, body = await self._kg(rt, views.fact_correct, fact_id, value)
+        if code == 200:
+            await self._audit(rt, "graph_fact_correct", {"fact_id": fact_id}, {"fact_id": body["id"]})
+        return code, body
+
+    async def graph_fact_delete(self, rt, fact_id: int):
+        code, body = await self._kg(rt, views.fact_delete, fact_id)
+        if code == 200:
+            await self._audit(rt, "graph_fact_delete", {"fact_id": fact_id}, {"deleted": True})
+        return code, body
+
+    async def graph_forget(self, rt, entity_id: int, mentions: bool):
+        code, body = await self._kg(rt, views.forget, entity_id, mentions)
+        if code == 200:
+            counts = {k: v for k, v in body.items() if isinstance(v, int)}  # `entity` is the name: leave it out
+            await self._audit(rt, "graph_forget", {"entity_id": entity_id, "mentions": mentions}, counts)
+        return code, body
+
+    async def graph_suppression_lift(self, rt, key_type: str, key_hmac: str):
+        code, body = await self._kg(rt, views.lift, key_type, key_hmac)
+        if code == 200:
+            await self._audit(rt, "graph_suppression_lift", {}, {"lifted": True})  # the hmac is a name fingerprint
+        return code, body
 
     # --- mail (display only: never passed to the LLM) ---
     async def mail_list(self, rt, limit: int) -> dict:
