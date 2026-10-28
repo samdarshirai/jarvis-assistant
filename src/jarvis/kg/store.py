@@ -1,15 +1,10 @@
 import re
-import unicodedata
 from dataclasses import dataclass
 
+from jarvis.kg.facts import Fact, FactsMixin, norm  # noqa: F401  (Fact re-exported for callers)
 from jarvis.kg.predicates import KINDS
 
 KEY_TYPES = ("email", "phone", "google_contact_id", "alias", "name")
-
-
-def norm(text: str) -> str:
-    """NFKC, casefold, collapse whitespace, strip."""
-    return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
 def _norm_key(type: str, value: str) -> str:
@@ -30,7 +25,7 @@ def _ent(r) -> Entity:
     return Entity(r[0], r[1], r[2])
 
 
-class GraphStore:
+class GraphStore(FactsMixin):
     def __init__(self, pool, user_id: int, secret: bytes = b""):
         self.pool, self.user_id, self.secret = pool, user_id, secret
         self.version: int = 0
