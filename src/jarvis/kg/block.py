@@ -30,7 +30,7 @@ JOIN LATERAL (
   WHERE fs.user_id = f.user_id AND fs.fact_id = f.id ORDER BY s.trust DESC, fs.first_seen, s.id LIMIT 1
 ) s ON s.kind = 'user_stated'
 WHERE f.user_id = %s AND f.status = 'active' AND f.object_value IS NOT NULL
-  AND (f.subject_id = ANY(%s) OR e.kind = 'self')
+  AND (f.subject_id = ANY(%s) OR (e.kind = 'self' AND f.predicate <> 'note'))  -- self notes are the <memory> block
 ORDER BY coalesce(f.valid_from, f.recorded_at) DESC, f.id DESC"""
 
 

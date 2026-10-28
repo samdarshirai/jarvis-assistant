@@ -26,11 +26,11 @@ def test_block_empty_when_no_match_and_no_self_facts(store):
 
 def test_block_has_pinned_self_and_matched_person(store):
     me, anna = store.self_entity(), store.create_entity("Anna Roy")
-    told(store, me, "note", "I work night shifts")
+    told(store, me, "employer", "Night Shift Co")
     told(store, anna, "city", "Pune")
     b = block_for(store, "tell Anna I'm late")
     assert b.startswith("\n") and b.endswith("</graph>") and "<graph>" in b
-    assert "About the user:" in b and "note: I work night shifts" in b
+    assert "About the user:" in b and "employer: Night Shift Co" in b
     assert "- Anna Roy (person): city: Pune [told " in b
 
 
@@ -82,7 +82,7 @@ def test_pending_and_non_user_facts_not_rendered(store):
 def test_other_users_graph_never_in_block(pool, uids):
     a, b = GraphStore(pool, uids[0]), GraphStore(pool, uids[1])
     told(b, b.create_entity("Anna"), "city", "Secretville")
-    told(b, b.self_entity(), "note", "other self")
+    told(b, b.self_entity(), "home", "other self")
     a.create_entity("Anna")
     assert block_for(a, "Anna") == ""
     assert "Secretville" in block_for(b, "Anna") and "other self" in block_for(b, "Anna")
@@ -186,3 +186,15 @@ async def test_provider_cache_refreshes_after_write(store):
     seen = raw._models["fast"].seen
     assert "Pune" in seen[0][0].content and "Pune" in seen[1][0].content
     assert "Berlin" in seen[2][0].content and "Pune" not in seen[2][0].content
+
+
+def test_self_notes_stay_in_memory_block_not_graph_block(store):
+    from jarvis.kg.memory_store import GraphMemoryStore
+    mem = GraphMemoryStore(store)
+    mem.add("I prefer aisle seats")
+    told(store, store.self_entity(), "home", "Pune")
+    anna = store.create_entity("Anna")
+    told(store, anna, "note", "plays cello")
+    assert [m["text"] for m in mem.all()] == ["I prefer aisle seats"]
+    b = block_for(store, "call Anna")
+    assert "aisle" not in b and "home: Pune" in b and "note: plays cello" in b
