@@ -14,6 +14,8 @@ from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
 from jarvis.llm import LLMProvider, MemoryAwareProvider, creds_for
+from jarvis.kg.memory_store import GraphMemoryStore
+from jarvis.kg.store import GraphStore
 from jarvis.memory import MemoryStore
 from jarvis.notes import NoteStore
 from jarvis.proactive.store import ProactiveStore
@@ -52,7 +54,8 @@ def cached_service(build, ttl: float = 1800.0, clock=time.monotonic, epoch=lambd
     return get
 
 
-def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int | None = None) -> Registry:
+def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int | None = None,
+                   memory_store=None) -> Registry:
     registry = Registry()
     gmail = GmailClient(svc("gmail", "v1"))
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz, gmail.sent_to)
@@ -60,7 +63,7 @@ def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int |
     register_gmail_tools(registry, gmail)
     register_phone_tools(registry)
     if pool is not None:
-        register_memory_tools(registry, MemoryStore(pool, user_id))
+        register_memory_tools(registry, memory_store or MemoryStore(pool, user_id))
         register_note_tools(registry, NoteStore(pool, user_id))
     register_research_tools(registry, WebSearch(tavily_key) if tavily_key else DdgSearch())
     return registry
@@ -75,7 +78,7 @@ class UserRuntime:
     user: User
     secrets: dict[str, str] = field(repr=False)
     audit: Audit
-    memories: MemoryStore
+    memories: "MemoryStore | GraphMemoryStore"
     notes: NoteStore
     proactive: ProactiveStore
     calendar: CalendarClient
@@ -87,6 +90,7 @@ class UserRuntime:
     lock: asyncio.Lock
     tz: str
     google_epoch: list[int] = field(default_factory=lambda: [0], repr=False)  # bumped by invalidate()
+    kg: "GraphStore | None" = None  # the user's knowledge graph; None while graph_enabled is off
 
     @property
     def llm_ready(self) -> bool:
@@ -153,8 +157,9 @@ class Tenants:
             return cached_service(lambda: self.google_service_factory(name, version, store, s.fernet_key),
                                   epoch=lambda: epoch[0])
 
-        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id)
-        memories = MemoryStore(pool, user_id)
+        kg = GraphStore(pool, user_id, s.fernet_key.encode()) if s.graph_enabled else None
+        memories = GraphMemoryStore(kg) if kg else MemoryStore(pool, user_id)
+        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id, memory_store=memories)
         creds = creds_for(secrets, s)
         raw = self.llm_provider_factory(creds, audit) if creds else None
         llm = MemoryAwareProvider(raw, memories.all) if raw else None
@@ -167,7 +172,7 @@ class Tenants:
             registry, audit, self.saver, tz) if raw else None
         return UserRuntime(user=user, secrets=secrets, audit=audit, memories=memories, notes=NoteStore(pool, user_id),
                            proactive=proactive, calendar=calendar, tasks=tasks, gmail=gmail,
-                           registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch)
+                           registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch, kg=kg)
 
 
 async def _close(rt: UserRuntime) -> None:

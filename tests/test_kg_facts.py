@@ -128,7 +128,7 @@ def test_unknown_predicate_rejected(store, anna):
         store.add_fact(anna.id, "shoe_size", "42", source_kind="user_stated")
     with pytest.raises(ValueError):
         store.add_fact(anna.id, "city", "Pune", source_kind="rumour")
-    for v in ("", "   \t", "x" * 201):
+    for v in ("", "   \t", "x" * 301):
         with pytest.raises(ValueError):
             store.add_fact(anna.id, "city", v, source_kind="user_stated")
 

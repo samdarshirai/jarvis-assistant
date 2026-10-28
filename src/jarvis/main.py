@@ -20,6 +20,7 @@ from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
+from jarvis.kg.memory_store import migrate_memories
 from jarvis.keys import Keys
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
@@ -40,6 +41,8 @@ async def lifespan(app: FastAPI):
     pool = make_pool(s.database_url)
     try:
         init_schema(pool)
+        if s.graph_enabled:
+            migrate_memories(pool, s.fernet_key.encode())
         owner_id = ensure_owner(pool, s)
         if owner_id is None:
             raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")

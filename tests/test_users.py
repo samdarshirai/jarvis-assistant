@@ -53,7 +53,7 @@ NEW_PKS = {"oauth_tokens": ["user_id", "provider"], "mail_seen": ["user_id", "me
 
 def settings(**over):
     base = dict(owner_email="", timezone=TZ, fernet_key=KEY, openrouter_api_key="sk-or-secret",
-                models_fast="a/x", models_strong="b/y", deepgram_api_key="", tavily_api_key="")
+                models_fast="a/x", models_strong="b/y", deepgram_api_key="", tavily_api_key="", graph_enabled=False)
     return SimpleNamespace(**{**base, **over})
 
 

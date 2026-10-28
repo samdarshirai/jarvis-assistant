@@ -40,12 +40,15 @@ FROM fact f LEFT JOIN LATERAL (
 WHERE f.user_id = %s"""
 
 
+MAX_VALUE = 300
+
+
 def _clean(value: str) -> str:
     value = " ".join(value.split())
     if not value:
         raise ValueError("Fact value is blank.")
-    if len(value) > 200:
-        raise ValueError("Fact value is longer than 200 characters.")
+    if len(value) > MAX_VALUE:
+        raise ValueError(f"Fact value is longer than {MAX_VALUE} characters.")
     return value
 
 

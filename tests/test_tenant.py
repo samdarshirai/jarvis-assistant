@@ -23,13 +23,14 @@ class FakeLLM:
         self.closed = True
 
 
-def settings(tavily=""):
-    return SimpleNamespace(fernet_key=KEY, tavily_api_key=tavily, models=lambda tier: [f"{tier}-model"])
+def settings(tavily="", graph=False):
+    return SimpleNamespace(fernet_key=KEY, tavily_api_key=tavily, graph_enabled=graph, models=lambda tier: [f"{tier}-model"])
 
 
 def tenants(pool, **kw):
     tavily = kw.pop("tavily", "")
-    return Tenants(pool, settings(tavily), InMemorySaver(), google_service_factory=lambda name, version, store, key: object(),
+    graph = kw.pop("graph", False)
+    return Tenants(pool, settings(tavily, graph), InMemorySaver(), google_service_factory=lambda name, version, store, key: object(),
                    llm_provider_factory=FakeLLM, **kw)
 
 
@@ -154,3 +155,20 @@ async def test_scheduler_scans_of_every_user_retire_no_runtime(pool, uids):
         await run_for_users("sweep", job, users, t, lambda uid: True, lambda u: None)
     assert len(t._cache) == 40 and t._retired == []
     await t.close()
+
+
+async def test_graph_flag_on_backs_memories_with_the_graph(pool, uids):
+    from jarvis.kg.memory_store import GraphMemoryStore
+    from jarvis.kg.store import GraphStore
+    rt = await tenants(pool, graph=True).get(uids[0])
+    assert isinstance(rt.kg, GraphStore) and isinstance(rt.memories, GraphMemoryStore)
+    assert rt.memories.store is rt.kg
+    rt.registry.get("remember").fn(text="Priya is my manager")
+    facts = rt.kg.facts_for(rt.kg.self_entity().id)
+    assert [f.value for f in facts] == ["Priya is my manager"]
+
+
+async def test_graph_flag_off_keeps_legacy_memories(pool, uids):
+    from jarvis.memory import MemoryStore
+    rt = await tenants(pool).get(uids[0])
+    assert rt.kg is None and isinstance(rt.memories, MemoryStore)
