@@ -53,11 +53,21 @@ void main() {
   testWidgets('dragging rotates', (t) async {
     final s = _scene();
     final taps = await _pump(t, s);
+    final f = find.byKey(const Key('memory-graph'));
     final before = _at(t, s, 1);
-    await t.drag(find.byKey(const Key('memory-graph')), const Offset(100, 0));
+    // Hold still before lifting so there is no fling; ~0.01 rad per px.
+    final g = await t.startGesture(t.getCenter(f));
+    await g.moveBy(const Offset(50, 0));
+    await g.moveBy(const Offset(50, 0));
+    await t.pump(const Duration(milliseconds: 500));
+    await g.up();
     await t.pumpAndSettle();
     await t.tapAt(before);
     expect(taps, [null]);
+    final p = project(s, yaw: initialYaw + 1.0, pitch: initialPitch, zoom: 1, size: t.getSize(f))
+        .firstWhere((e) => e.node.entityId == 1);
+    await t.tapAt(t.getTopLeft(f) + p.pos);
+    expect(taps.last, 1);
   });
 
   testWidgets('autoRotate false leaves no running ticker', (t) async {

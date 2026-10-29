@@ -10,7 +10,6 @@ import 'theme.dart';
 const initialYaw = 0.0, initialPitch = 0.6;
 const _autoSpeed = 0.15; // rad/s
 const _idlePause = 3.0; // s after a touch before auto-rotate resumes
-const _darkBlush = Color(0xFFE3B5A4);
 
 class MemoryGraph extends StatefulWidget {
   const MemoryGraph(
@@ -29,7 +28,7 @@ class _MemoryGraphState extends State<MemoryGraph> with SingleTickerProviderStat
   double _yaw = initialYaw, _pitch = initialPitch, _zoom = 1;
   double _vYaw = 0, _vPitch = 0; // rad/s, decaying after release
   double _pause = 0; // seconds of auto-rotate pause left
-  bool _touching = false;
+  bool _touching = false, _pinched = false;
   Duration _last = Duration.zero;
   double _zoomStart = 1;
   Size _size = Size.zero;
@@ -101,16 +100,23 @@ class _MemoryGraphState extends State<MemoryGraph> with SingleTickerProviderStat
             _touching = true;
             _vYaw = _vPitch = 0;
             _zoomStart = _zoom;
+            _pinched = false;
           },
           onScaleUpdate: (d) => setState(() {
-            _yaw += d.focalPointDelta.dx * 0.01;
-            _pitch = (_pitch - d.focalPointDelta.dy * 0.01).clamp(pitchMin, pitchMax);
+            if (d.pointerCount > 1) _pinched = true;
+            if (d.pointerCount == 1) {
+              _yaw += d.focalPointDelta.dx * 0.01;
+              _pitch = (_pitch - d.focalPointDelta.dy * 0.01).clamp(pitchMin, pitchMax);
+            }
             _zoom = (_zoomStart * d.scale).clamp(zoomMin, zoomMax);
-            _vYaw = d.focalPointDelta.dx * 0.6; // px/frame at ~60fps -> rad/s
-            _vPitch = -d.focalPointDelta.dy * 0.6;
           }),
           onScaleEnd: (d) {
             _touching = false;
+            if (!_pinched) {
+              final v = d.velocity.pixelsPerSecond; // px/s -> rad/s at 0.01 rad/px
+              _vYaw = v.dx * 0.01;
+              _vPitch = -v.dy * 0.01;
+            }
             _pause = _idlePause;
             _syncTicker();
           },
@@ -187,13 +193,13 @@ class _GraphPainter extends CustomPainter {
       final r = p.radius;
       canvas.drawOval(
           Rect.fromCenter(center: p.pos + Offset(0, r * 1.5), width: r * 1.8, height: r * 0.5),
-          Paint()..color = Colors.black.withValues(alpha: 0.28 * fade));
+          Paint()..color = ink.withValues(alpha: 0.28 * fade));
 
       final List<Color> colors = n.kind == 'self'
           ? [amberLight, amberDeep]
           : n.isHub
               ? [cocoaTop, darkPill]
-              : [Colors.white, blush, _darkBlush];
+              : [cream, blush, mutedText];
       final rect = Rect.fromCircle(center: p.pos, radius: r);
       canvas.drawCircle(
           p.pos,
