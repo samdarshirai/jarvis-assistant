@@ -51,7 +51,7 @@ def mock_lifespan_deps(monkeypatch):
         timezone="UTC",
         weather_city="",
         fernet_key="test",
-        tavily_api_key="", graph_enabled=False,
+        tavily_api_key="",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
         deepgram_api_key="", fcm_credentials_path="", google_web_client_secrets="", public_base_url="",
@@ -97,7 +97,7 @@ async def test_lifespan_closes_pool_on_graph_build_failure(monkeypatch):
         timezone="UTC",
         weather_city="",
         fernet_key="test",
-        tavily_api_key="", graph_enabled=False,
+        tavily_api_key="",
         telegram_owner_chat_id=123,
         telegram_bot_token="test",
         deepgram_api_key="", fcm_credentials_path="", google_web_client_secrets="", public_base_url="",
@@ -448,7 +448,6 @@ async def test_lifespan_migrates_memories_after_ensure_owner(mock_lifespan_deps)
     """A pre-multi-user DB gets user_id on its memories in ensure_owner; migrating first would skip them."""
     mp, order = mock_lifespan_deps["monkeypatch"], mock_lifespan_deps["call_order"]
     from jarvis.main import get_settings
-    get_settings().graph_enabled = True
     mp.setattr("jarvis.main.ensure_owner", lambda pool, s: order.append("ensure_owner") or 1)
     mp.setattr("jarvis.main.migrate_memories", lambda pool, secret: order.append("migrate"))
 

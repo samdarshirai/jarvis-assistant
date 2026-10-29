@@ -202,7 +202,7 @@ Automated checks additionally enforce the per-turn cap of two searches and two p
 
 # Manual acceptance (knowledge graph)
 
-Not run on a real device yet. Start the backend with `JARVIS_GRAPH_ENABLED=true` (Postgres 15 or newer).
+Not run on a real device yet. The graph is always on (Postgres 15 or newer). Memory pill opens the graph screen.
 
 | # | Do | Expect |
 |---|----|--------|
@@ -213,5 +213,4 @@ Not run on a real device yet. Start the backend with `JARVIS_GRAPH_ENABLED=true`
 | 114 | Correct a fact in the person screen | The corrected value is shown and used in the next answer |
 | 115 | Forget the person from People | The dialog lists counts (facts, merged entities, other facts that mention them) and the line "Chat history, notes and the activity log are not erased." |
 | 116 | After forgetting, chat about someone else for a while | The forgotten person is not recreated and does not appear in People |
-| 117 | Restart the backend with the flag off | The previous memory behaviour returns. Memories added while the flag was on are not copied back to the legacy table |
 | 118 | Have Jarvis read an email, then in the same conversation say "remember my sister lives in Pune" | Jarvis refuses ("Not saved: untrusted ...") and nothing is stored |

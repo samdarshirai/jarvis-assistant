@@ -55,12 +55,6 @@ class Src:
     def shopping_list_id(self):
         return "shop"
 
-    def all(self):
-        return self._go("memories", ret=[{"id": 3, "text": "likes tea"}])
-
-    def remove(self, mid):
-        return self._go("forget", mid, ret=mid == 3)
-
     def create_task(self, title, due=None, *a):
         return self._go("create", title, due, ret={"id": "t9", "title": title, "due": due and due.isoformat(), "status": "needsAction"})
 
@@ -106,7 +100,7 @@ class Graph:
 def rt(src=None, graph=None, audit=None, uid=1):
     """A stand-in UserRuntime: the service reads every client, the graph, the lock and the audit from it."""
     src = src or Src()
-    return NS(user=NS(id=uid), calendar=src, tasks=src, memories=src, gmail=src, notes=src, graph=graph or Graph(),
+    return NS(user=NS(id=uid), calendar=src, tasks=src, gmail=src, notes=src, graph=graph or Graph(),
               lock=asyncio.Lock(), audit=audit or Audit(), tz=TZ, llm_ready=graph is not False)
 
 
@@ -397,14 +391,14 @@ class Tagged(Src):
         return [{**m, "id": self.tag} for m in super().search_emails(q, limit)]
 
 
-def tenants(pool, graph=False):
-    return Tenants(pool, NS(fernet_key=Fernet.generate_key().decode(), tavily_api_key="", graph_enabled=graph, models=lambda tier: [tier]), InMemorySaver(),
+def tenants(pool):
+    return Tenants(pool, NS(fernet_key=Fernet.generate_key().decode(), tavily_api_key="", models=lambda tier: [tier]), InMemorySaver(),
                    google_service_factory=lambda *a: object(), llm_provider_factory=lambda *a: None)
 
 
-async def users(pool, uids, graph=False):
+async def users(pool, uids):
     """(service, header_a, header_b, runtime_a, runtime_b) with each user's Google clients replaced by a Tagged fake."""
-    devices, t = Devices(pool), tenants(pool, graph)
+    devices, t = Devices(pool), tenants(pool)
     ha, hb = (f"Bearer {devices.create(u)[1]}" for u in uids)
     s = AppService(devices, t)
     ra, rb = await s.authenticate(ha), await s.authenticate(hb)
@@ -475,14 +469,12 @@ async def test_disabled_user_gets_401_on_next_request(pool, uids):
     assert (await s.authenticate(hb)).user.id == uids[1]  # the stale cached flag does not lock them out
 
 
-def test_http_shopping_and_memory_contract():
+def test_http_shopping_contract():
     c = client(rt())
     assert c.get("/shopping", headers=H).json()["items"][0] == {"id": "t2", "title": "B"}
     assert c.post("/shopping", headers=H, json={"title": " eggs "}).json()["item"]["title"] == "eggs"
     assert c.post("/shopping/t1/complete", headers=H).json() == {"ok": True}
-    assert c.get("/memory", headers=H).json() == {"memories": [{"id": 3, "text": "likes tea"}]}
-    assert c.delete("/memory/3", headers=H).json() == {"ok": True}
-    assert c.delete("/memory/4", headers=H).status_code == 404
+    assert c.get("/memory", headers=H).status_code == 404  # the flat memory list is gone: /graph/* replaces it
     assert client(rt(Src(RuntimeError()))).post("/shopping/x/complete", headers=H).status_code == 502
 
 
@@ -506,8 +498,8 @@ class Rec:
 
 
 async def kg_users(pool, uids):
-    """(http client A, client B, runtime A, runtime B) on real graph-enabled runtimes; audit is captured."""
-    s, ha, hb, ra, rb = await users(pool, uids, graph=True)
+    """(http client A, client B, runtime A, runtime B) on real runtimes; audit is captured."""
+    s, ha, hb, ra, rb = await users(pool, uids)
     for r in (ra, rb):
         r.audit = Rec()
     app = create_app(with_lifespan=False)
@@ -664,16 +656,6 @@ async def test_graph_suppression_lift(pool, uids):
     assert s not in a("GET", "/graph/suppressions").json()["suppressions"]
     assert a("DELETE", "/graph/suppressions", json={"key_type": s["key_type"], "key_hmac": s["key_hmac"]}).status_code == 404
     assert a("DELETE", "/graph/suppressions", json={"key_type": "", "key_hmac": "x"}).status_code == 422
-
-
-async def test_graph_routes_404_with_flag_off(pool, uids):
-    s, ha, _, ra, _ = await users(pool, uids)
-    app = create_app(with_lifespan=False)
-    app.state.app_api = s
-    c = TestClient(app)
-    for m, u in [("GET", "/graph/entities"), ("GET", "/graph/entities/1"), ("GET", "/graph/suppressions"),
-                 ("DELETE", "/graph/entities/1"), ("DELETE", "/graph/facts/1")]:
-        assert c.request(m, u, headers={"Authorization": ha}).status_code == 404, u
 
 
 async def test_graph_audit_has_ids_and_counts_only(pool, uids):

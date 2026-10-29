@@ -132,21 +132,8 @@ class AppService:
         await self._audit(rt, "complete_shopping_item", {"id": item_id}, {"status": t.get("status")})
         return True
 
-    # --- memory ---
-    async def memory_list(self, rt) -> dict:
-        rows, _ = await self._call(rt.memories.all)
-        return {"memories": rows}
-
-    async def forget_memory(self, rt, memory_id: int) -> bool:
-        ok, _ = await self._call(rt.memories.remove, memory_id)
-        if ok:
-            await self._audit(rt, "forget", {"memory_id": memory_id}, {"removed": True})
-        return bool(ok)
-
     # --- knowledge graph control: (status, body); audit rows carry ids and counts only, never names or values ---
     async def _kg(self, rt, fn, *args) -> tuple[int, dict]:
-        if rt.kg is None:
-            return 404, {"error": "not_found"}
         try:
             return 200, await asyncio.wait_for(asyncio.to_thread(fn, rt.kg, *args), self.source_timeout)
         except LookupError:

@@ -1,4 +1,5 @@
 """Memory plumbing tests use scripted models; actual alias reasoning needs device acceptance."""
+import asyncio
 import traceback
 
 import pytest
@@ -9,7 +10,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from jarvis.agent.domains import DOMAINS
 from jarvis.agent.graph import build_graph
-from jarvis.llm import MemoryAwareProvider, MemoryContextError
+from jarvis.kg.block import GraphAwareProvider
+from jarvis.llm import MemoryContextError
 from jarvis.proactive.scheduler import WatchedLLM
 from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
@@ -18,6 +20,23 @@ from tests.test_graph import CFG, call, say
 
 MEMORIES = [{"id": 1, "text": "Ronali is my wife"},
             {"id": 2, "text": "My wife's contact is saved as Pogo"}]
+
+
+class MemoryAwareProvider(GraphAwareProvider):
+    """The real graph provider with the DB lookup replaced by a callable of rows: the plumbing is what these tests check."""
+
+    def __init__(self, provider, memories):
+        super().__init__(provider, None)
+        self.memories = memories
+
+    async def _block(self, text):
+        try:
+            rows = await asyncio.to_thread(self.memories)
+        except Exception:
+            rows = None
+        if rows is None:
+            raise MemoryContextError()
+        return "\n<graph>\n" + "\n".join(f"- {r['text']}" for r in rows) + "\n</graph>" if rows else ""
 
 
 class RecordingChat(FakeChat):
@@ -46,9 +65,9 @@ async def test_context_is_fresh_without_mutating_messages_or_crossing_users():
     rows.clear()
     await runnable.ainvoke(messages)
     seen = raw._models["fast"].seen
-    assert all(m[0].content.count("<memory>") == 1 for m in seen[:2])
+    assert all(m[0].content.count("<graph>") == 1 for m in seen[:2])
     assert "Pogo" in seen[0][0].content and "Pogo" not in seen[1][0].content
-    assert "<memory>" not in seen[2][0].content
+    assert "<graph>" not in seen[2][0].content
     assert messages[0].content == "task instructions"
     other, other_llm = provider([AIMessage("ok")], lambda: [{"id": 3, "text": "Other user's fact"}])
     await other_llm.get("fast").ainvoke(messages)
@@ -86,7 +105,7 @@ async def test_fallbacks_get_identical_context_from_one_memory_load():
     llm = MemoryAwareProvider(Raw(), lambda: loads.append(1) or MEMORIES)
     await llm.get("fast").ainvoke([SystemMessage("task")])
     assert loads == [1] and seen[0] == seen[1]
-    assert seen[0][0].content.count("<memory>") == 1
+    assert seen[0][0].content.count("<graph>") == 1
 
 
 async def test_background_callback_configuration_survives_wrapper():
@@ -110,7 +129,9 @@ async def test_router_and_every_domain_receive_memories(domain):
     await g.ainvoke(say("help me"), CFG)
     seen = [messages for model in raw._models.values() for messages in model.seen]
     assert len(seen) == 2
-    assert all(messages[0].content.count("<memory>") == 1 and "Pogo" in messages[0].content for messages in seen)
+    router, step = seen[0], seen[1]  # the router sees the time only; the domain step gets the user's facts
+    assert "<graph>" not in router[0].content
+    assert step[0].content.count("<graph>") == 1 and "Pogo" in step[0].content
 
 
 @pytest.mark.parametrize("phrase", ["call my wife", "call Ronali"])
@@ -214,16 +235,19 @@ async def test_tenant_runtime_uses_fresh_scoped_memories_for_chat_and_background
                       google_service_factory=lambda *args: object())
     try:
         a, b = [await tenants.get(uid) for uid in uids]
-        a.memories.add("Ronali is my wife")
-        b.memories.add("Other user's fact")
+        def note(rt, text):
+            return rt.kg.add_fact(rt.kg.self_entity().id, "note", text, source_kind="user_stated")
+
+        note(a, "Ronali is my wife")
+        note(b, "Other user's fact")
         for rt in (a, b):
             await rt.graph.ainvoke(say("help me"), {**CFG, "configurable": {"thread_id": str(rt.user.id)}})
-        alias = a.memories.add("My wife's contact is saved as Pogo")
+        alias = note(a, "My wife's contact is saved as Pogo")
         await WatchedLLM(a.llm).get("fast").ainvoke([SystemMessage("background")])
         assert "Pogo" in a.llm.chat.seen[-1][0].content
         assert all("Other user's fact" not in m[0].content for m in a.llm.chat.seen)
-        assert all("(#1) Ronali is my wife" not in m[0].content for m in b.llm.chat.seen)
-        assert a.memories.remove(alias["id"])
+        assert all("note: Ronali is my wife" not in m[0].content for m in b.llm.chat.seen)
+        assert a.kg.delete_fact(alias.id)
         await a.llm.get("fast").ainvoke([SystemMessage("background")])
         assert "Pogo" not in a.llm.chat.seen[-1][0].content
     finally:
