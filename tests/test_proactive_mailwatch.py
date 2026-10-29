@@ -9,7 +9,7 @@ from googleapiclient.errors import HttpError
 from langchain_core.messages import AIMessage
 
 from jarvis.google.auth import ReauthRequired
-from jarvis.proactive.mailwatch import (MailWatch, event_id_for, is_duplicate, prefilter, reminders_for,
+from jarvis.proactive.mailwatch import (MailWatch, event_id_for, is_duplicate, looks_english, prefilter, reminders_for,
                                         undo_event, validate_extraction)
 from tests.fakes import FakeNotifier, FakeProactiveStore, FakeProvider, MemoryAudit
 
@@ -262,6 +262,35 @@ async def test_newsletter_never_reaches_the_llm():
     w = make(mails=[news], script=[])
     await w.job.run_once(NOW)
     assert w.store.mail["n1"][0] == "skipped" and w.gmail.read == []
+
+
+def test_looks_english():
+    assert looks_english("Your flight is on the way") and not looks_english("Vielen Dank für deine Buchung")
+
+
+GERMAN = {"id": "g1", "from": "noreply@eversports.com", "subject": "Deine Squash Buchung", "snippet": "Hallo, vielen Dank für deine Buchung",
+          "body": "Datum & Uhrzeit: 04.11.2026 19:00-20:00 Uhr\nGebucht am: 29.10.2026 15:50 Uhr"}
+SQUASH = {"found": True, "kind": "reservation", "title": "Squash", "start": "2026-11-04T19:00:00", "end": "2026-11-04T20:00:00",
+          "location": "Sport Insel Taufkirchen"}
+
+
+async def test_foreign_language_booking_is_translated_then_added():
+    w = make(mails=[GERMAN], script=["Your squash booking. Thank you for your booking", SQUASH])
+    await w.job.run_once(NOW)
+    assert w.store.mail["g1"][0] == "created" and w.cal.created[0]["start"] == datetime(2026, 11, 4, 19, 0, tzinfo=B)
+
+
+async def test_foreign_language_newsletter_is_skipped_after_translation():
+    news = {"id": "n2", "from": "a@b", "subject": "Wochenübersicht", "snippet": "Gartentipps", "body": "x"}
+    w = make(mails=[news], script=["Weekly overview: garden tips"])
+    await w.job.run_once(NOW)
+    assert w.store.mail["n2"][0] == "skipped" and w.gmail.read == []
+
+
+async def test_translation_failure_skips_without_error():
+    w = make(mails=[GERMAN], script=[])  # exhausted script: the translate call raises
+    await w.job.run_once(NOW)
+    assert w.store.mail["g1"][0] == "skipped"
 
 
 class RecordingLLM:
