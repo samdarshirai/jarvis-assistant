@@ -576,6 +576,19 @@ async def test_graph_entities_relations_ignore_self_links_unlisted_and_duplicate
     assert len(rel) == 2
 
 
+async def test_graph_entities_relations_same_name_entities(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    d1, d2 = kg.create_entity("Dana", "person"), kg.create_entity("Dana", "person")
+    assert d1.id != d2.id  # create_entity allows duplicate names
+    kg.add_fact(d1.id, "friend_of", "dana", source_kind="user_stated")
+    kg.add_fact(kg.create_entity("Sam", "person").id, "friend_of", "Dana", source_kind="user_stated")
+    rel = a("GET", "/graph/entities").json()["relations"]
+    assert all(r["from"] != r["to"] for r in rel)
+    assert {"from": d1.id, "to": d2.id, "predicate": "friend_of"} in rel  # d1 -> d2 is not a self-link
+    assert sorted(r["to"] for r in rel if r["predicate"] == "friend_of" and r["from"] not in (d1.id, d2.id)) == sorted([d1.id, d2.id])
+
+
 async def test_graph_pending_fact_listed(pool, uids):
     a, _, ra, _ = await kg_users(pool, uids)
     kg = ra.kg

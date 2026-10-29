@@ -32,7 +32,8 @@ def entity_list(store) -> dict:
     by_name: dict[str, list[int]] = {}
     for e in ents:
         by_name.setdefault(norm(e.display_name), []).append(e.id)
-    rel = {(s, t, p) for s, p, v in facts for t in by_name.get(norm(v), ()) if t != s}
+    ids = {e.id for e in ents}
+    rel = {(s, t, p) for s, p, v in facts if s in ids for t in by_name.get(norm(v), ()) if t != s}
     return {"entities": sorted(rows, key=lambda r: (r["name"].casefold(), r["id"])),
             "relations": [{"from": s, "to": t, "predicate": p} for s, t, p in sorted(rel)]}
 
