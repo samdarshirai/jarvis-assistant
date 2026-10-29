@@ -1,6 +1,9 @@
 """JSON shapes for the graph control API (user-scoped reads over a GraphStore). Unknown ids raise LookupError."""
 
 
+from jarvis.kg.facts import norm
+
+
 class SelfEntity(Exception):
     """The self entity cannot be forgotten."""
 
@@ -22,9 +25,16 @@ def entity_list(store) -> dict:
     with store.pool.connection() as conn:
         counts = dict(conn.execute("SELECT subject_id, count(*) FROM fact WHERE user_id = %s AND status = 'active'"
                                    " GROUP BY subject_id", (store.user_id,)).fetchall())
-    rows = [{"id": e.id, "name": e.display_name, "kind": e.kind, "fact_count": counts.get(e.id, 0)}
-            for e in store.list_entities()]
-    return {"entities": sorted(rows, key=lambda r: (r["name"].casefold(), r["id"]))}
+        facts = conn.execute("SELECT subject_id, predicate, object_value FROM fact WHERE user_id = %s"
+                             " AND status = 'active' AND object_value IS NOT NULL", (store.user_id,)).fetchall()
+    ents = store.list_entities()
+    rows = [{"id": e.id, "name": e.display_name, "kind": e.kind, "fact_count": counts.get(e.id, 0)} for e in ents]
+    by_name: dict[str, list[int]] = {}
+    for e in ents:
+        by_name.setdefault(norm(e.display_name), []).append(e.id)
+    rel = {(s, t, p) for s, p, v in facts for t in by_name.get(norm(v), ()) if t != s}
+    return {"entities": sorted(rows, key=lambda r: (r["name"].casefold(), r["id"])),
+            "relations": [{"from": s, "to": t, "predicate": p} for s, t, p in sorted(rel)]}
 
 
 def entity_detail(store, entity_id: int) -> dict:
