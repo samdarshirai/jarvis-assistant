@@ -26,6 +26,7 @@ Offset _at(WidgetTester t, GraphScene s, int id, {double yaw = initialYaw, bool 
 }
 
 void main() {
+  fitTests();
   testWidgets('taps a node and reports its entity id', (t) async {
     final s = _scene();
     final taps = await _pump(t, s);
@@ -88,5 +89,39 @@ void main() {
         home: Scaffold(
             body: MemoryGraph(scene: buildScene(many, rel), selectedId: 1, onSelect: (_) {}, autoRotate: false))));
     expect(t.takeException(), isNull);
+  });
+}
+
+void fitTests() {
+  test('120 persons stay on canvas at every pitch', () {
+    final s = buildScene([for (var i = 0; i < 120; i++) {'id': i + 1, 'name': 'P$i', 'kind': 'person', 'fact_count': 1}], []);
+    const size = Size(400, 700);
+    for (final pitch in [initialPitch, pitchMin, pitchMax]) {
+      for (final p in project(s, yaw: 0.7, pitch: pitch, zoom: 1, size: size)) {
+        expect(p.pos.dx.abs() < 800 && p.pos.dy.abs() < 1400, isTrue, reason: '${p.node.label} ${p.pos}');
+      }
+    }
+  });
+
+  test('small scene has fit 1', () {
+    expect(sceneFit(_scene()), 1.0);
+    final big = buildScene([for (var i = 0; i < 30; i++) {'id': i + 1, 'name': 'P$i', 'kind': 'person', 'fact_count': 1}], []);
+    expect(sceneFit(big), lessThan(1.0));
+  });
+
+  test('two predicates between one pair get distinct label offsets', () {
+    final s = buildScene([
+      {'id': 1, 'name': 'A', 'kind': 'person', 'fact_count': 1},
+      {'id': 2, 'name': 'B', 'kind': 'person', 'fact_count': 1},
+    ], [
+      {'from': 1, 'to': 2, 'predicate': 'works_with'},
+      {'from': 1, 'to': 2, 'predicate': 'friend_of'},
+    ]);
+    final byNode = {for (final p in project(s, yaw: 0, pitch: initialPitch, zoom: 1, size: const Size(400, 700))) p.node: p};
+    final l = relationLabels(s, byNode, 1);
+    expect(l.length, 2);
+    expect(l[1].at - l[0].at, const Offset(0, 12));
+    expect(l[0].text, 'works with B');
+    expect(relationLabels(s, byNode, 2)[0].text, 'A works with');
   });
 }

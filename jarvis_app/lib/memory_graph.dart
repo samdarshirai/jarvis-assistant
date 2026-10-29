@@ -104,7 +104,7 @@ class _MemoryGraphState extends State<MemoryGraph> with SingleTickerProviderStat
           },
           onScaleUpdate: (d) => setState(() {
             if (d.pointerCount > 1) _pinched = true;
-            if (d.pointerCount == 1) {
+            if (d.pointerCount == 1 && !_pinched) {
               _yaw += d.focalPointDelta.dx * 0.01;
               _pitch = (_pitch - d.focalPointDelta.dy * 0.01).clamp(pitchMin, pitchMax);
             }
@@ -114,8 +114,8 @@ class _MemoryGraphState extends State<MemoryGraph> with SingleTickerProviderStat
             _touching = false;
             if (!_pinched) {
               final v = d.velocity.pixelsPerSecond; // px/s -> rad/s at 0.01 rad/px
-              _vYaw = v.dx * 0.01;
-              _vPitch = -v.dy * 0.01;
+              _vYaw = (v.dx * 0.01).clamp(-12.0, 12.0);
+              _vPitch = (-v.dy * 0.01).clamp(-12.0, 12.0);
             }
             _pause = _idlePause;
             _syncTicker();
@@ -134,6 +134,21 @@ final _rings = [
   for (final r in const [1.0, 2.0])
     GraphScene([for (var i = 0; i < 48; i++) GraphNode(label: '', kind: 'ring', x: r * cos(i * pi / 24), z: r * sin(i * pi / 24))], const [])
 ];
+
+/// Labels for the selected node's relations; several between one pair are stacked 12px apart.
+List<({String text, Offset at})> relationLabels(GraphScene scene, Map<GraphNode, Projected> byNode, int? selectedId) {
+  final out = <({String text, Offset at})>[];
+  if (selectedId == null) return out;
+  final seen = <(GraphNode, GraphNode), int>{};
+  for (final e in scene.edges) {
+    if (!e.isRelation || (e.a.entityId != selectedId && e.b.entityId != selectedId)) continue;
+    final i = seen.update((e.a, e.b), (v) => v + 1, ifAbsent: () => 0);
+    final pred = e.predicate!.replaceAll('_', ' ');
+    final text = e.a.entityId == selectedId ? '$pred ${e.b.label}' : '${e.a.label} $pred';
+    out.add((text: text, at: (byNode[e.a]!.pos + byNode[e.b]!.pos) / 2 + Offset(0, 12.0 * i)));
+  }
+  return out;
+}
 
 class _GraphPainter extends CustomPainter {
   _GraphPainter(this.scene, this.yaw, this.pitch, this.zoom, this.selectedId);
@@ -162,7 +177,7 @@ class _GraphPainter extends CustomPainter {
     final byNode = {for (final p in items) p.node: p};
 
     for (final ring in _rings) {
-      final pts = project(ring, yaw: yaw, pitch: pitch, zoom: zoom, size: size);
+      final pts = project(ring, fit: sceneFit(scene), yaw: yaw, pitch: pitch, zoom: zoom, size: size);
       final order = {for (final p in pts) p.node: p.pos};
       final path = Path()..addPolygon([for (final n in ring.nodes) order[n]!], true);
       canvas.drawPath(
@@ -184,7 +199,10 @@ class _GraphPainter extends CustomPainter {
           Paint()
             ..strokeWidth = sel ? 2 : 1
             ..color = (sel ? amber : mutedText).withValues(alpha: base * (0.4 + 0.6 * depth)));
-      if (sel) _label(canvas, e.predicate!.replaceAll('_', ' '), (a.pos + b.pos) / 2, 1, size: 10, above: true);
+    }
+
+    for (final l in relationLabels(scene, byNode, selectedId)) {
+      _label(canvas, l.text, l.at, 1, size: 10, above: true);
     }
 
     for (final p in items) {
