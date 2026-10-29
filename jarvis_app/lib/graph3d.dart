@@ -81,7 +81,8 @@ GraphScene buildScene(
     final kind = kinds[i];
     final a = -pi / 2 + i * 2 * pi / n;
     final hub = GraphNode(
-      label: _hubLabels[kind] ?? '${kind[0].toUpperCase()}${kind.substring(1)}s',
+      label: _hubLabels[kind] ??
+          (kind.isEmpty ? 'Other' : '${kind[0].toUpperCase()}${kind.substring(1)}'),
       kind: kind,
       isHub: true,
       x: cos(a),
@@ -111,9 +112,13 @@ GraphScene buildScene(
       edges.add(GraphEdge(hub, node));
     }
   }
+  final seen = <String>{};
   for (final r in relations) {
     final a = byId[r['from']], b = byId[r['to']];
-    if (a != null && b != null) {
+    if (a != null &&
+        b != null &&
+        !identical(a, b) &&
+        seen.add('${r['from']}|${r['to']}|${r['predicate']}')) {
       edges.add(GraphEdge(a, b, r['predicate'] as String?));
     }
   }
@@ -148,7 +153,7 @@ List<Projected> project(
     final rx = n.x * cy + n.z * sy;
     final rz = -n.x * sy + n.z * cy;
     final vz = rz * cp; // toward camera
-    final f = _camDist / (_camDist - vz);
+    final f = _camDist / max(0.5, _camDist - vz);
     final pos = c + Offset(rx, rz * sp) * (unit * f * zm);
     final depth = ((vz / _extent + 1) / 2).clamp(0.0, 1.0).toDouble();
     final base = n.kind == 'self'
@@ -158,7 +163,11 @@ List<Projected> project(
             : 9 + min(n.factCount, 20) * 0.6;
     out.add(Projected(n, pos, base * (0.7 + 0.5 * depth) * zm, depth));
   }
-  out.sort((a, b) => a.depth.compareTo(b.depth));
+  final idx = {for (var i = 0; i < out.length; i++) out[i]: i};
+  out.sort((a, b) {
+    final c = a.depth.compareTo(b.depth);
+    return c != 0 ? c : idx[a]!.compareTo(idx[b]!);
+  });
   return out;
 }
 

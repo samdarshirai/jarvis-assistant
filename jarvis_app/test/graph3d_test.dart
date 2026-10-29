@@ -50,7 +50,7 @@ void main() {
       final a = proj(0, 0.7, 1), b = proj(pi / 2, 0.7, 1);
       Offset at(List<Projected> l) =>
           l.firstWhere((p) => p.node.entityId == 1).pos;
-      expect(at(a), isNot(at(b)));
+      expect((at(a) - at(b)).distance, greaterThan(10));
     });
 
     test('far smaller than near, sorted ascending', () {
@@ -81,6 +81,63 @@ void main() {
       expect(hitTest(items, const Offset(52, 50))?.node.entityId, 2);
       expect(hitTest(items, const Offset(200, 200)), isNull);
       expect(hitTest(items, const Offset(300, 300)), isNull);
+    });
+  });
+
+  group('fix round 1', () {
+    test('120 persons project finite and positive at all pitches', () {
+      final s = buildScene([for (var i = 1; i <= 120; i++) ent(i, 'person')], []);
+      for (final pitch in [pitchMin, 0.7, pitchMax]) {
+        for (final yaw in [0.0, 1.0, 2.5, 4.0]) {
+          for (final it in project(s,
+              yaw: yaw, pitch: pitch, zoom: 1, size: const Size(400, 400))) {
+            expect(it.pos.dx.isFinite && it.pos.dy.isFinite, isTrue);
+            expect(it.radius.isFinite && it.radius > 0, isTrue);
+            expect(it.depth.isFinite, isTrue);
+          }
+        }
+      }
+    });
+
+    test('self relation dropped, duplicates deduped', () {
+      final s = buildScene([ent(1, 'person'), ent(2, 'org')], [
+        {'from': 1, 'to': 1, 'predicate': 'knows'},
+        {'from': 1, 'to': 2, 'predicate': 'works_at'},
+        {'from': 1, 'to': 2, 'predicate': 'works_at'},
+      ]);
+      expect(s.edges.where((e) => e.isRelation).length, 1);
+    });
+
+    test('hub order and unknown kind label', () {
+      final s = buildScene([
+        ent(1, 'vehicle'), ent(2, 'thing'), ent(3, 'org'),
+        ent(4, 'place'), ent(5, 'person'), ent(6, ''),
+      ], []);
+      expect(s.nodes.where((n) => n.isHub).map((n) => n.label),
+          ['People', 'Places', 'Orgs', 'Things', 'Vehicle', 'Other']);
+    });
+
+    test('row split beyond 12 and null fact_count', () {
+      final s = buildScene([
+        for (var i = 1; i <= 13; i++)
+          {'id': i, 'name': 'p', 'kind': 'person', 'fact_count': null}
+      ], []);
+      final r = s.nodes
+          .where((n) => !n.isHub && n.kind != 'self')
+          .map((n) => sqrt(n.x * n.x + n.z * n.z))
+          .toList();
+      expect(r.where((v) => (v - 2.0).abs() < 1e-9).length, 12);
+      expect(r.where((v) => (v - 2.6).abs() < 1e-9).length, 1);
+      expect(s.nodes.every((n) => n.factCount == 0), isTrue);
+    });
+
+    test('low clamps', () {
+      final s = buildScene([ent(1, 'person'), ent(2, 'org')], []);
+      List<Projected> p(double pi_, double z) => project(s,
+          yaw: 0.4, pitch: pi_, zoom: z, size: const Size(300, 300));
+      expect(p(-5, 0).map((e) => e.pos), p(pitchMin, zoomMin).map((e) => e.pos));
+      expect(p(-5, 0).map((e) => e.radius),
+          p(pitchMin, zoomMin).map((e) => e.radius));
     });
   });
 }
