@@ -1,6 +1,6 @@
 # Jarvis — handoff note (latest: answer reassessment 2026-10-28)
 
-Read this first in a new session, then the spec/plan of whatever you work on next.
+Read this first in a new session, then the spec/plan of whatever you work on next. Unbuilt feature ideas live in `docs/BACKLOG.md`.
 
 ## What Jarvis is
 A multi-tenant, bring-your-own-keys personal AI assistant (owner: Samdarshi, user #1; friends sign in with Google and add their own LLM key) managing Google Calendar, Gmail, Tasks and notes, reachable by Telegram chat and a Pixel voice app ("Hey Jarvis"). Product spec: the claude.ai artifact "Jarvis — Personal AI Assistant PRD" (https://claude.ai/artifact/RV9NmxXNr4FJJGE9KZM5Vj, a Claude Docs document; read it through the Claude Docs connector, FR-1..FR-24, scenarios 1-9, NFRs). The work is split into 6 sub-projects, each with its own spec -> plan -> subagent-driven build -> review -> merge cycle.
