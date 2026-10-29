@@ -136,8 +136,19 @@ class Projected {
 const _camDist = 6.0;
 const _extent = 5.0; // view-space z range mapped onto depth 0..1
 
+/// Scale (<= 1) that pulls layout radii in so the outermost node sits at the
+/// 2.0 ring radius; scenes with <= 12 entities per kind return 1.
+double sceneFit(GraphScene s) {
+  var m = 2.0;
+  for (final n in s.nodes) {
+    m = max(m, sqrt(n.x * n.x + n.z * n.z));
+  }
+  return 2.0 / m;
+}
+
 List<Projected> project(
   GraphScene s, {
+  double? fit,
   required double yaw,
   required double pitch,
   required double zoom,
@@ -148,10 +159,11 @@ List<Projected> project(
   final cy = cos(yaw), sy = sin(yaw), cp = cos(p), sp = sin(p);
   final unit = size.shortestSide * 0.12;
   final c = Offset(size.width / 2, size.height / 2);
+  final k = fit ?? sceneFit(s);
   final out = <Projected>[];
   for (final n in s.nodes) {
-    final rx = n.x * cy + n.z * sy;
-    final rz = -n.x * sy + n.z * cy;
+    final rx = (n.x * cy + n.z * sy) * k;
+    final rz = (-n.x * sy + n.z * cy) * k;
     final vz = rz * cp; // toward camera
     final f = _camDist / max(0.5, _camDist - vz);
     final pos = c + Offset(rx, rz * sp) * (unit * f * zm);

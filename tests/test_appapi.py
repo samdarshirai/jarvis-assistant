@@ -528,7 +528,7 @@ async def test_graph_routes_404_for_other_users_ids(pool, uids):
                      ("DELETE", "/graph/suppressions", {"json": {"key_type": "email", "key_hmac": "zz"}})]:
         r = b(m, u, **kw)
         assert (r.status_code, r.json()) == (404, {"error": "not_found"}), (m, u)
-    assert b("GET", "/graph/entities").json() == {"entities": []}  # none of A's people
+    assert b("GET", "/graph/entities").json() == {"entities": [], "relations": []}  # none of A's people
     assert ra.kg.facts_for(dana.id)[0].value == "Initech Hamburg"
     assert ra.audit.rows == rb.audit.rows == []
 
@@ -550,6 +550,43 @@ async def test_graph_entity_shows_facts_history_pending_with_provenance(pool, ui
     (h,) = body["history"]
     assert (h["value"], h["source"], h["status"], h["excerpt"]) == ("Initech Hamburg", "email", "superseded", "Dana Zorn works at Initech Hamburg")
     assert body["pending"] == []
+
+
+async def test_graph_entities_relations_link_fact_values_to_entities(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    priya, acme = kg.create_entity("Priya", "person"), kg.create_entity("Acme", "org")
+    kg.add_fact(priya.id, "employer", "acme", source_kind="user_stated")
+    assert {"from": priya.id, "to": acme.id, "predicate": "employer"} in a("GET", "/graph/entities").json()["relations"]
+
+
+async def test_graph_entities_relations_ignore_self_links_unlisted_and_duplicates(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    priya, acme = kg.create_entity("Priya", "person"), kg.create_entity("Acme", "org")
+    kg.add_fact(priya.id, "note", "priya", source_kind="user_stated")  # self
+    kg.add_fact(priya.id, "home", "Nowhere", source_kind="user_stated")  # no such entity
+    kg.add_fact(priya.id, "employer", "Acme", source_kind="user_stated")
+    kg.add_fact(priya.id, "employer", "ACME", source_kind="user_stated")  # same edge again
+    kg.add_fact(priya.id, "friend_of", "Acme", source_kind="user_stated")
+    rel = a("GET", "/graph/entities").json()["relations"]
+    assert rel == sorted(rel, key=lambda r: (r["from"], r["to"], r["predicate"]))
+    assert all(r["from"] != r["to"] for r in rel)
+    assert [r["predicate"] for r in rel if r["to"] == acme.id] == ["employer", "friend_of"]
+    assert len(rel) == 2
+
+
+async def test_graph_entities_relations_same_name_entities(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    d1, d2 = kg.create_entity("Dana", "person"), kg.create_entity("Dana", "person")
+    assert d1.id != d2.id  # create_entity allows duplicate names
+    kg.add_fact(d1.id, "friend_of", "dana", source_kind="user_stated")
+    kg.add_fact(kg.create_entity("Sam", "person").id, "friend_of", "Dana", source_kind="user_stated")
+    rel = a("GET", "/graph/entities").json()["relations"]
+    assert all(r["from"] != r["to"] for r in rel)
+    assert {"from": d1.id, "to": d2.id, "predicate": "friend_of"} in rel  # d1 -> d2 is not a self-link
+    assert sorted(r["to"] for r in rel if r["predicate"] == "friend_of" and r["from"] not in (d1.id, d2.id)) == sorted([d1.id, d2.id])
 
 
 async def test_graph_pending_fact_listed(pool, uids):

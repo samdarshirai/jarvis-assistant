@@ -13,7 +13,7 @@ class FetchPageArgs(BaseModel):
 
 
 def register_research_tools(registry: Registry, search) -> None:
-    """search: a WebSearch, or None when no Tavily key is configured (web_search then says so)."""
+    """search: anything with .search(query) (Tavily with DDG fallback, or DDG alone); None makes web_search say so."""
 
     # Exfiltration guard: fetch_page is an ungated outbound GET, so it only opens URLs a search returned.
     seen: dict[str, None] = {}  # ponytail: ordered, capped at 200; evicts oldest
@@ -43,7 +43,7 @@ def register_research_tools(registry: Registry, search) -> None:
     for name, desc, schema, fn in [
         ("web_search", "Search the web; returns up to 5 results with title, url and a snippet.", WebSearchArgs,
          web_search),
-        ("fetch_page", "Open and read a link returned by web_search (other links are refused).", FetchPageArgs, fetch),
+        ("fetch_page", "Open and read a web page or PDF returned by web_search (other links are refused).", FetchPageArgs, fetch),
     ]:
         registry.add(Tool(name=name, domain="research", description=desc, args_schema=schema, fn=fn,
                           needs_confirm=False, untrusted=True, untrusted_tag="untrusted_web"))

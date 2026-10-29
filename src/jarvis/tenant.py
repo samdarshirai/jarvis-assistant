@@ -28,7 +28,7 @@ from jarvis.tools.registry import Registry
 from jarvis.tools.research_tools import register_research_tools
 from jarvis.tools.task_tools import register_task_tools
 from jarvis.users import MAX_USERS, SecretStore, User, UserStore, thread_id
-from jarvis.web import DdgSearch, WebSearch
+from jarvis.web import DdgSearch, FallbackSearch, WebSearch
 
 log = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int |
         register_note_tools(registry, NoteStore(pool, user_id))
     if graph_store is not None:
         register_graph_tools(registry, graph_store)
-    register_research_tools(registry, WebSearch(tavily_key) if tavily_key else DdgSearch())
+    register_research_tools(registry, FallbackSearch(WebSearch(tavily_key), DdgSearch()) if tavily_key else DdgSearch())
     return registry
 
 

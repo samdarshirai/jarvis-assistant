@@ -1,10 +1,11 @@
+import io
 import ipaddress
 import socket
 
 import httpx
 import pytest
 
-from jarvis.web import FetchError, SearchError, WebSearch, fetch_page, html_text
+from jarvis.web import DdgSearch, FallbackSearch, FetchError, SearchError, WebSearch, fetch_page, html_text
 
 HOSTS = {"public.test": "93.184.216.34", "evil.test": "127.0.0.1", "internal.test": "10.0.0.5"}
 
@@ -75,6 +76,53 @@ def test_search_bad_json_is_an_error_not_a_crash():
         search_client(lambda r: httpx.Response(200, content=b"<html>")).search("q")
 
 
+class Stub:
+    def __init__(self, *outcomes):
+        self.outcomes, self.calls = list(outcomes), 0
+
+    def search(self, query, limit=5):
+        self.calls += 1
+        out = self.outcomes.pop(0)
+        if isinstance(out, Exception):
+            raise out
+        return out
+
+
+def test_fallback_uses_the_backup_when_the_primary_fails():
+    backup = Stub({"results": ["ddg"]})
+    assert FallbackSearch(Stub(SearchError("Web search is rate-limited")), backup).search("q") == {"results": ["ddg"]}
+
+
+def test_fallback_skips_the_backup_when_the_primary_works():
+    backup = Stub()
+    assert FallbackSearch(Stub({"results": ["tavily"]}), backup).search("q") == {"results": ["tavily"]}
+    assert backup.calls == 0
+
+
+def test_fallback_reports_the_primary_error_when_both_fail():
+    with pytest.raises(SearchError, match="rejected"):
+        FallbackSearch(Stub(SearchError("The web search key was rejected.")),
+                       Stub(SearchError("Web search failed."))).search("q")
+
+
+def test_ddg_retries_once(monkeypatch):
+    calls = []
+
+    class FakeDDGS:
+        def __init__(self, timeout):
+            pass
+
+        def text(self, query, max_results):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("ratelimit")
+            return [{"title": "T", "href": "https://a.test", "body": "b"}]
+
+    monkeypatch.setattr("ddgs.DDGS", FakeDDGS)
+    assert DdgSearch().search("q") == {"results": [{"title": "T", "url": "https://a.test", "snippet": "b"}]}
+    assert len(calls) == 2
+
+
 # --- html_text ---
 def test_html_text_drops_scripts_and_styles_and_keeps_paragraph_breaks():
     text = html_text("<html><style>p{}</style><script>alert(1)</script><p>One</p><p>Two &amp; three</p></html>")
@@ -82,10 +130,31 @@ def test_html_text_drops_scripts_and_styles_and_keeps_paragraph_breaks():
     assert text.splitlines() == ["One", "Two & three"]
 
 
+def test_html_text_drops_navigation_footers_and_forms():
+    text = html_text("<nav>Home Menu</nav><aside>Ads</aside><form>Search</form><p>Story</p><footer>Legal</footer>")
+    assert text == "Story"
+
+
+def test_html_text_drops_site_headers_but_keeps_article_headers():
+    text = html_text("<header>Markets Tech Login</header><article><header>Rates held, 29 Oct</header>"
+                     "<p>Story</p></article>")
+    assert text == "Rates held, 29 Oct\nStory"
+
+
+def test_html_text_prefers_the_main_content_when_it_has_enough_text():
+    body = "word " * 60
+    text = html_text(f"<div>Skip to content</div><main><p>{body}</p></main><div>Cookie banner</div>")
+    assert text == body.strip()
+
+
+def test_html_text_keeps_the_whole_page_when_main_is_nearly_empty():
+    assert html_text("<main>Hi</main><p>Real story elsewhere</p>") == "Hi\nReal story elsewhere"
+
+
 # --- fetch_page ---
 def test_fetch_returns_text():
-    out = fetch_page("http://public.test/a", client=client(page("<p>Hello</p>")), resolve=resolve)
-    assert out == {"url": "http://public.test/a", "text": "Hello", "truncated": False}
+    out = fetch_page("http://public.test/a", client=client(page("text/plain body", ctype="text/plain")), resolve=resolve)
+    assert out == {"url": "http://public.test/a", "text": "text/plain body", "truncated": False}
 
 
 def test_fetch_truncates_text_to_8000_chars():
@@ -139,15 +208,75 @@ def test_fetch_stops_after_three_redirects():
                    client=client(lambda r: httpx.Response(302, headers={"location": "/again"})))
 
 
-@pytest.mark.parametrize("ctype", ["application/pdf", "image/png", "application/octet-stream", ""])
+@pytest.mark.parametrize("ctype", ["image/png", "application/octet-stream", ""])
 def test_fetch_refuses_non_text_content(ctype):
     with pytest.raises(FetchError, match="read"):
         fetch_page("http://public.test/", client=client(page("x", ctype=ctype)), resolve=resolve)
 
 
+def pdf_bytes(*pages):
+    from pypdf import PdfWriter
+    from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
+    w = PdfWriter()
+    font = w._add_object(DictionaryObject({NameObject("/Type"): NameObject("/Font"),
+                                           NameObject("/Subtype"): NameObject("/Type1"),
+                                           NameObject("/BaseFont"): NameObject("/Helvetica")}))
+    for text in pages:
+        p = w.add_blank_page(612, 792)
+        p[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): font})})
+        s = DecodedStreamObject()
+        s.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode())
+        p[NameObject("/Contents")] = w._add_object(s)
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def pdf(data):
+    return lambda request: httpx.Response(200, headers={"content-type": "application/pdf"}, content=data)
+
+
+def test_fetch_reads_pdf_text_from_every_page():
+    out = fetch_page("http://public.test/r.pdf", client=client(pdf(pdf_bytes("Rates held", "Next meeting"))),
+                     resolve=resolve)
+    assert "Rates held" in out["text"] and "Next meeting" in out["text"] and out["truncated"] is False
+
+
+def test_fetch_truncates_long_pdfs():
+    out = fetch_page("http://public.test/r.pdf", client=client(pdf(pdf_bytes(*["a" * 900] * 12))), resolve=resolve)
+    assert len(out["text"]) == 8000 and out["truncated"] is True
+
+
+def test_fetch_broken_pdf_is_a_short_error():
+    with pytest.raises(FetchError, match="PDF"):
+        fetch_page("http://public.test/r.pdf", client=client(pdf(b"%PDF-1.4 garbage")), resolve=resolve)
+
+
+def test_fetch_refuses_a_pdf_too_big_to_read_whole():
+    with pytest.raises(FetchError, match="too large"):
+        fetch_page("http://public.test/r.pdf", client=client(pdf(b"%PDF" + b"0" * 11_000_000)), resolve=resolve)
+
+
 def test_fetch_reports_http_errors():
     with pytest.raises(FetchError, match="404"):
         fetch_page("http://public.test/", client=client(page("nope", status=404)), resolve=resolve)
+
+
+@pytest.mark.parametrize("status", [401, 403, 429])
+def test_fetch_blocked_pages_point_to_the_snippet(status):
+    with pytest.raises(FetchError, match=f"blocks automated reading.*HTTP {status}.*snippet"):
+        fetch_page("http://public.test/", client=client(page("no", status=status)), resolve=resolve)
+
+
+def test_fetch_flags_a_page_with_almost_no_text():
+    out = fetch_page("http://public.test/", client=client(page("<div id=root></div><title>Reddit</title>")),
+                     resolve=resolve)
+    assert out["text"] == "Reddit" and "JavaScript" in out["note"]
+
+
+def test_fetch_does_not_flag_a_page_with_real_text():
+    out = fetch_page("http://public.test/", client=client(page("<p>" + "word " * 60 + "</p>")), resolve=resolve)
+    assert "note" not in out
 
 
 def test_fetch_stops_reading_a_huge_body():

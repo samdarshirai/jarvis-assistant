@@ -11,7 +11,7 @@ const capabilities = <(String, List<String>)>[
   ('Phone', ['Set alarms', 'Set timers', 'Start navigation', 'Compose messages', 'Call a contact (WhatsApp or phone)']),
   ('Memory', ['Remember things', 'Forget things', 'Recall what you told me']),
   ('Notes', ['Create, append, delete notes', 'Search, read, list notes']),
-  ('Research', ['Search the web', 'Read web pages']),
+  ('Research', ['Search the web', 'Read web pages and PDFs']),
   ('Proactive', [
     'Morning brief on weekdays',
     'Watches mail and adds calendar events from it, with Undo',

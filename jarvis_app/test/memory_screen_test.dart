@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:jarvis_app/api.dart';
 import 'package:jarvis_app/config.dart';
+import 'package:jarvis_app/graph3d.dart';
+import 'package:jarvis_app/memory_graph.dart';
 import 'package:jarvis_app/memory_screen.dart';
 
 class GraphApi extends ApiClient {
@@ -86,15 +88,30 @@ Map<String, Object> routes() => {
     };
 
 void main() {
-  Future<void> pump(WidgetTester t, GraphApi api) async {
+  Future<void> pump(WidgetTester t, GraphApi api, {bool list = false}) async {
     await t.binding.setSurfaceSize(const Size(400, 900));
-    await t.pumpWidget(MaterialApp(home: MemoryScreen(api: api)));
+    await t.pumpWidget(MaterialApp(home: MemoryScreen(api: api, autoRotate: false)));
     await t.pumpAndSettle();
+    if (list) {
+      await t.tap(find.byTooltip('List view'));
+      await t.pumpAndSettle();
+    }
+  }
+
+  // global position of entity [id] in the rendered graph
+  Offset nodePos(WidgetTester t, GraphApi api, int id) {
+    final j = api.routes['/graph/entities'] as Map<String, dynamic>;
+    final all = (j['entities'] as List).cast<Map<String, dynamic>>();
+    final p = [for (final e in all) if (e['kind'] == 'self') e, for (final e in all) if (e['kind'] != 'self') e];
+    final scene = buildScene(p, ((j['relations'] ?? []) as List).cast<Map<String, dynamic>>());
+    final box = find.byKey(const Key('memory-graph'));
+    final pr = project(scene, yaw: initialYaw, pitch: initialPitch, zoom: 1, size: t.getSize(box));
+    return t.getTopLeft(box) + pr.firstWhere((e) => e.node.entityId == id).pos;
   }
 
   testWidgets('list, provenance, history, pending', (t) async {
     final api = GraphApi(routes());
-    await pump(t, api);
+    await pump(t, api, list: true);
     expect(find.text('Priya'), findsOneWidget);
     expect(find.text('Forgotten'), findsOneWidget);
     expect(find.textContaining('abc'), findsNothing);
@@ -111,7 +128,7 @@ void main() {
 
   testWidgets('edit and delete a fact', (t) async {
     final api = GraphApi(routes()..['PATCH /graph/facts/10'] = fact(13, 'works_at', 'NewCo'));
-    await pump(t, api);
+    await pump(t, api, list: true);
     await t.tap(find.text('Priya'));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const ValueKey('edit-10')));
@@ -128,7 +145,7 @@ void main() {
 
   testWidgets('forget dialog shows preview and confirm deletes', (t) async {
     final api = GraphApi(routes()..['DELETE /graph/entities/1'] = {});
-    await pump(t, api);
+    await pump(t, api, list: true);
     await t.tap(find.text('Priya'));
     await t.pumpAndSettle();
     await t.tap(find.text('Forget person'));
@@ -159,7 +176,7 @@ void main() {
       }
       ..['DELETE /graph/entities/1'] = {};
     final api = GraphApi(r);
-    await pump(t, api);
+    await pump(t, api, list: true);
     await t.tap(find.text('Priya'));
     await t.pumpAndSettle();
     await t.tap(find.text('Forget person'));
@@ -180,7 +197,7 @@ void main() {
 
   testWidgets('history rows can be deleted', (t) async {
     final api = GraphApi(routes());
-    await pump(t, api);
+    await pump(t, api, list: true);
     await t.tap(find.text('Priya'));
     await t.pumpAndSettle();
     expect(find.byKey(const ValueKey('edit-11')), findsNothing);
@@ -193,7 +210,7 @@ void main() {
 
   testWidgets('a failed history delete shows a snackbar and keeps the row', (t) async {
     final api = GraphApi(routes()..['DELETE /graph/facts/11'] = Exception('x'));
-    await pump(t, api);
+    await pump(t, api, list: true);
     await t.tap(find.text('Priya'));
     await t.pumpAndSettle();
     await t.tap(find.byKey(const ValueKey('delete-11')));
@@ -211,7 +228,7 @@ void main() {
         ]
       }
       ..['/graph/entities/5'] = {'id': 5, 'name': 'Me', 'kind': 'self', 'facts': [fact(30, 'home', 'Pune')], 'history': [], 'pending': []};
-    await pump(t, GraphApi(r));
+    await pump(t, GraphApi(r), list: true);
     final tiles = t.widgetList<ListTile>(find.byType(ListTile)).map((l) => (l.title as Text).data).toList();
     expect(tiles.take(2), ['Me', 'Aaron']);
     await t.tap(find.text('Me'));
@@ -223,6 +240,8 @@ void main() {
   testWidgets('lift suppression', (t) async {
     final api = GraphApi(routes());
     await pump(t, api);
+    await t.tap(find.byKey(const Key('forgotten-button')));
+    await t.pumpAndSettle();
     await t.tap(find.byKey(const ValueKey('lift-abc')));
     await t.pumpAndSettle();
     expect(api.calls, contains('DELETE /graph/suppressions'));
@@ -237,5 +256,136 @@ void main() {
     await t.pumpWidget(const SizedBox());
     await pump(t, GraphApi({'/graph/entities': Exception('x')}));
     expect(find.text('Retry'), findsOneWidget);
+  });
+
+  testWidgets('graph is the default and tapping a node twice opens its detail', (t) async {
+    final api = GraphApi(routes());
+    await pump(t, api);
+    expect(find.byKey(const Key('memory-graph')), findsOneWidget);
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    expect(find.descendant(of: find.byKey(const Key('open-selected')), matching: find.textContaining('Priya · 2 facts')), findsOneWidget);
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    expect(find.text('works_at: Acme'), findsOneWidget);
+  });
+
+  testWidgets('tapping the pill opens the detail', (t) async {
+    final api = GraphApi(routes());
+    await pump(t, api);
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('open-selected')));
+    await t.pumpAndSettle();
+    expect(find.text('works_at: Acme'), findsOneWidget);
+  });
+
+  Map<String, Object> withSelf() => routes()
+    ..['/graph/entities'] = {
+      'entities': [
+        {'id': 1, 'name': 'Aaron', 'kind': 'person', 'fact_count': 2},
+        {'id': 5, 'name': 'Me', 'kind': 'self', 'fact_count': 1},
+      ]
+    }
+    ..['/graph/entities/5'] = {'id': 5, 'name': 'Me', 'kind': 'self', 'facts': [fact(30, 'home', 'Pune')], 'history': [], 'pending': []};
+
+  testWidgets('Me opens detail with no forget', (t) async {
+    final api = GraphApi(withSelf());
+    await pump(t, api);
+    await t.tapAt(nodePos(t, api, 5));
+    await t.pumpAndSettle();
+    expect(find.descendant(of: find.byKey(const Key('open-selected')), matching: find.textContaining('Me · 1 facts')), findsOneWidget);
+    await t.tap(find.byKey(const Key('open-selected')));
+    await t.pumpAndSettle();
+    expect(find.text('home: Pune'), findsOneWidget);
+    expect(find.text('Forget person'), findsNothing);
+  });
+
+  testWidgets('works without a self row', (t) async {
+    final api = GraphApi(routes());
+    await pump(t, api);
+    final box = find.byKey(const Key('memory-graph'));
+    await t.tapAt(t.getCenter(box));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('open-selected')), findsNothing);
+  });
+
+  testWidgets('relations from the server are tolerated when missing', (t) async {
+    await pump(t, GraphApi(routes()));
+    expect(t.takeException(), isNull);
+    final r = withSelf();
+    (r['/graph/entities'] as Map)['relations'] = [
+      {'from': 1, 'to': 5, 'predicate': 'works_with'}
+    ];
+    final api = GraphApi(r);
+    await t.pumpWidget(const SizedBox());
+    await pump(t, api);
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    expect(t.takeException(), isNull);
+    expect(find.byKey(const Key('open-selected')), findsOneWidget);
+  });
+
+  testWidgets('the pill clears the floating mic', (t) async {
+    final api = GraphApi(routes());
+    var mic = 0;
+    await t.binding.setSurfaceSize(const Size(400, 900));
+    await t.pumpWidget(MaterialApp(home: MemoryScreen(api: api, autoRotate: false, onAskJarvis: () => mic++)));
+    await t.pumpAndSettle();
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    final r = t.getRect(find.byKey(const Key('open-selected')));
+    await t.tapAt(Offset(r.right - 4, r.center.dy));
+    await t.pumpAndSettle();
+    expect(mic, 0);
+    expect(find.text('works_at: Acme'), findsOneWidget);
+  });
+
+  testWidgets('returning from the detail keeps the graph mounted', (t) async {
+    final api = GraphApi(routes());
+    await pump(t, api);
+    final before = t.state(find.byType(MemoryGraph));
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('open-selected')));
+    await t.pumpAndSettle();
+    t.state<NavigatorState>(find.byType(Navigator)).pop();
+    await t.pump();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await t.pumpAndSettle();
+    expect(t.state(find.byType(MemoryGraph)), same(before));
+    expect(find.byKey(const Key('open-selected')), findsOneWidget);
+  });
+
+  testWidgets('lifting the last suppression closes the sheet', (t) async {
+    await pump(t, GraphApi(routes()));
+    await t.tap(find.byKey(const Key('forgotten-button')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const ValueKey('lift-abc')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const ValueKey('lift-abc')), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byKey(const Key('forgotten-button')), findsNothing);
+  });
+
+  testWidgets('reduced motion: the default auto-rotate settles', (t) async {
+    await t.binding.setSurfaceSize(const Size(400, 900));
+    await t.pumpWidget(MaterialApp(
+      builder: (c, w) => MediaQuery(data: MediaQuery.of(c).copyWith(disableAnimations: true), child: w!),
+      home: MemoryScreen(api: GraphApi(routes())),
+    ));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('memory-graph')), findsOneWidget);
+  });
+
+  testWidgets('toggle switches to list and back', (t) async {
+    await pump(t, GraphApi(routes()));
+    await t.tap(find.byTooltip('List view'));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('memory-graph')), findsNothing);
+    expect(find.byType(ListTile), findsWidgets);
+    await t.tap(find.byTooltip('Graph view'));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('memory-graph')), findsOneWidget);
   });
 }
