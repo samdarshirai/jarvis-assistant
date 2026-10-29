@@ -13,18 +13,15 @@ from jarvis.google.auth import PgTokenStore, build_service
 from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
-from jarvis.llm import LLMProvider, MemoryAwareProvider, creds_for
+from jarvis.llm import LLMProvider, creds_for
 from jarvis.kg.block import GraphAwareProvider
-from jarvis.kg.memory_store import GraphMemoryStore
 from jarvis.kg.store import GraphStore
-from jarvis.memory import MemoryStore
 from jarvis.notes import NoteStore
 from jarvis.proactive.store import ProactiveStore
 from jarvis.situation import Situation, SituationAwareProvider
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
 from jarvis.tools.graph_tools import register_graph_tools
-from jarvis.tools.memory_tools import register_memory_tools
 from jarvis.tools.note_tools import register_note_tools
 from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
@@ -57,7 +54,7 @@ def cached_service(build, ttl: float = 1800.0, clock=time.monotonic, epoch=lambd
 
 
 def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int | None = None,
-                   memory_store=None, graph_store=None) -> Registry:
+                   graph_store=None) -> Registry:
     registry = Registry()
     gmail = GmailClient(svc("gmail", "v1"))
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz, gmail.sent_to)
@@ -65,7 +62,6 @@ def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int |
     register_gmail_tools(registry, gmail)
     register_phone_tools(registry)
     if pool is not None:
-        register_memory_tools(registry, memory_store or MemoryStore(pool, user_id))
         register_note_tools(registry, NoteStore(pool, user_id))
     if graph_store is not None:
         register_graph_tools(registry, graph_store)
@@ -82,19 +78,18 @@ class UserRuntime:
     user: User
     secrets: dict[str, str] = field(repr=False)
     audit: Audit
-    memories: "MemoryStore | GraphMemoryStore"
     notes: NoteStore
     proactive: ProactiveStore
     calendar: CalendarClient
     tasks: TasksClient
     gmail: GmailClient
     registry: Registry
-    llm: MemoryAwareProvider | None
+    llm: GraphAwareProvider | None
     graph: object | None  # the compiled LangGraph; None until the user sets an LLM key
     lock: asyncio.Lock
     tz: str
     google_epoch: list[int] = field(default_factory=lambda: [0], repr=False)  # bumped by invalidate()
-    kg: "GraphStore | None" = None  # the user's knowledge graph; None while graph_enabled is off
+    kg: "GraphStore | None" = None  # the user's knowledge graph
 
     @property
     def llm_ready(self) -> bool:
@@ -161,24 +156,21 @@ class Tenants:
             return cached_service(lambda: self.google_service_factory(name, version, store, s.fernet_key),
                                   epoch=lambda: epoch[0])
 
-        kg = GraphStore(pool, user_id, s.fernet_key.encode()) if s.graph_enabled else None
-        memories = GraphMemoryStore(kg) if kg is not None else MemoryStore(pool, user_id)
-        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id, memory_store=memories, graph_store=kg)
+        kg = GraphStore(pool, user_id, s.fernet_key.encode())
+        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id, graph_store=kg)
         creds = creds_for(secrets, s)
         raw = self.llm_provider_factory(creds, audit) if creds else None
-        llm = MemoryAwareProvider(raw, memories.all) if raw else None
+        llm = GraphAwareProvider(raw, kg) if raw else None
         proactive = ProactiveStore(pool, user_id)
         calendar, tasks, gmail = CalendarClient(svc("calendar", "v3"), tz), TasksClient(svc("tasks", "v1")), GmailClient(svc("gmail", "v1"))
         # Only the chat graph sees the situation (proactive jobs and mail extraction use `llm`). Memory wraps it, so the
-        # prompt reads: base, memories, graph (flag on), situation: the fast-changing part comes last and the rest stays cacheable.
+        # prompt reads: base, graph, situation: the fast-changing part comes last and the rest stays cacheable.
         chat = None
         if raw:
             chat = SituationAwareProvider(raw, Situation(calendar, tasks, gmail, proactive, tz, NoteStore(pool, user_id)))
-            if kg is not None:  # graph block sits between memories and situation
-                chat = GraphAwareProvider(chat, kg)
-            chat = MemoryAwareProvider(chat, memories.all)
+            chat = GraphAwareProvider(chat, kg)
         graph = build_graph(chat, registry, audit, self.saver, tz) if raw else None
-        return UserRuntime(user=user, secrets=secrets, audit=audit, memories=memories, notes=NoteStore(pool, user_id),
+        return UserRuntime(user=user, secrets=secrets, audit=audit, notes=NoteStore(pool, user_id),
                            proactive=proactive, calendar=calendar, tasks=tasks, gmail=gmail,
                            registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch, kg=kg)
 

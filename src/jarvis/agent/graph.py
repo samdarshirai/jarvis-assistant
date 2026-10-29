@@ -12,9 +12,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.types import Command, interrupt
 
-from jarvis.agent.domains import DOMAINS, domain_prompt
+from jarvis.agent.domains import DOMAINS
 from jarvis.google.auth import ReauthRequired
-from jarvis.llm import MemoryAwareProvider
 from jarvis.timeutil import now_local
 
 log = logging.getLogger(__name__)
@@ -188,10 +187,7 @@ def turn_replies(messages: list) -> list[str]:
     return out[::-1]
 
 
-def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None):
-    if memories is not None and not isinstance(provider, MemoryAwareProvider):
-        provider = MemoryAwareProvider(provider, memories)
-
+def build_graph(provider, registry, audit, checkpointer, tz: str):
     async def record(*args, **kw) -> None:
         # An audit failure must never break the turn or hide an executed side effect.
         try:
@@ -249,7 +245,7 @@ def build_graph(provider, registry, audit, checkpointer, tz: str, memories=None)
             spoken += f"\nResearch calls used this turn: {counts}. Exhausted tools are unavailable."
             if not tools:
                 spoken += " Give your final answer now from available evidence, stating any limitations."
-        system = SystemMessage(f"{domain_prompt(dom, registry)}{spoken}\nCurrent local time: "
+        system = SystemMessage(f"{dom.prompt}{spoken}\nCurrent local time: "
                                f"{now_local(tz).strftime('%A %Y-%m-%d %H:%M %Z (UTC%z)')} ({tz}).")
         reply = await llm.ainvoke([system, *repair_tool_gaps(window(state["messages"]))])
         return {"messages": [reply], "approved": False}

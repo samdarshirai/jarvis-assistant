@@ -23,14 +23,13 @@ class FakeLLM:
         self.closed = True
 
 
-def settings(tavily="", graph=False):
-    return SimpleNamespace(fernet_key=KEY, tavily_api_key=tavily, graph_enabled=graph, models=lambda tier: [f"{tier}-model"])
+def settings(tavily=""):
+    return SimpleNamespace(fernet_key=KEY, tavily_api_key=tavily, models=lambda tier: [f"{tier}-model"])
 
 
 def tenants(pool, **kw):
     tavily = kw.pop("tavily", "")
-    graph = kw.pop("graph", False)
-    return Tenants(pool, settings(tavily, graph), InMemorySaver(), google_service_factory=lambda name, version, store, key: object(),
+    return Tenants(pool, settings(tavily), InMemorySaver(), google_service_factory=lambda name, version, store, key: object(),
                    llm_provider_factory=FakeLLM, **kw)
 
 
@@ -44,9 +43,9 @@ async def test_get_builds_scoped_runtime(pool, uids):
     t = tenants(pool)
     ra, rb = await t.get(a), await t.get(b)
     assert (ra.user.id, rb.user.id) == (a, b)
-    assert (ra.audit.user_id, ra.memories.user_id, ra.notes.user_id, ra.proactive.user_id) == (a, a, a, a)
-    assert (rb.audit.user_id, rb.memories.user_id, rb.notes.user_id, rb.proactive.user_id) == (b, b, b, b)
-    for name in ("audit", "memories", "notes", "proactive", "calendar", "tasks", "gmail", "registry", "lock", "secrets"):
+    assert (ra.audit.user_id, ra.kg.user_id, ra.notes.user_id, ra.proactive.user_id) == (a, a, a, a)
+    assert (rb.audit.user_id, rb.kg.user_id, rb.notes.user_id, rb.proactive.user_id) == (b, b, b, b)
+    for name in ("audit", "kg", "notes", "proactive", "calendar", "tasks", "gmail", "registry", "lock", "secrets"):
         assert getattr(ra, name) is not getattr(rb, name), name
     assert ra.lock is t.lock(a) and rb.lock is t.lock(b)
     assert await t.get(a) is ra  # cached
@@ -157,38 +156,21 @@ async def test_scheduler_scans_of_every_user_retire_no_runtime(pool, uids):
     await t.close()
 
 
-async def test_graph_flag_on_backs_memories_with_the_graph(pool, uids):
-    from jarvis.kg.memory_store import GraphMemoryStore
+async def test_runtime_always_has_a_graph(pool, uids):
     from jarvis.kg.store import GraphStore
-    rt = await tenants(pool, graph=True).get(uids[0])
-    assert isinstance(rt.kg, GraphStore) and isinstance(rt.memories, GraphMemoryStore)
-    assert rt.memories.store is rt.kg
-    rt.registry.get("remember").fn(text="Priya is my manager")
-    facts = rt.kg.facts_for(rt.kg.self_entity().id)
-    assert [f.value for f in facts] == ["Priya is my manager"]
-
-
-async def test_graph_flag_off_keeps_legacy_memories(pool, uids):
-    from jarvis.memory import MemoryStore
     rt = await tenants(pool).get(uids[0])
-    assert rt.kg is None and isinstance(rt.memories, MemoryStore)
+    assert isinstance(rt.kg, GraphStore)
+    assert all(rt.registry.get(n) is None for n in ("remember", "forget", "recall"))
 
 
 SITUATION = "Right now"
 GRAPH_TOOLS = {"remember_fact", "graph_lookup", "forget_entity"}
 
 
-async def test_graph_flag_on_registers_graph_tools_in_memory_domain(pool, uids):
-    rt = await tenants(pool, graph=True).get(uids[0])
+async def test_registers_graph_tools_in_memory_domain(pool, uids):
+    rt = await tenants(pool).get(uids[0])
     for n in GRAPH_TOOLS:
         assert rt.registry.get(n).domain == "memory"
-
-
-async def test_graph_flag_off_registers_no_graph_tools(pool, uids):
-    rt = await tenants(pool).get(uids[0])
-    assert rt.kg is None
-    for n in GRAPH_TOOLS:
-        assert rt.registry.get(n) is None
 
 
 class RecordingProvider:
@@ -203,18 +185,17 @@ class RecordingProvider:
         pass
 
 
-async def _prompt(pool, uid, graph, monkeypatch):
+async def _prompt(pool, uid, monkeypatch):
     from langchain_core.messages import HumanMessage, SystemMessage
     import jarvis.tenant as tn
     captured = []
     monkeypatch.setattr(tn, "build_graph", lambda provider, *a, **k: captured.append(provider) or object())
     SecretStore(pool, KEY).put(uid, "llm_key", "sk-x")
-    t = tenants(pool, graph=graph)
+    t = tenants(pool)
     t.llm_provider_factory = RecordingProvider
     rt = await t.get(uid)
-    rt.registry.get("remember").fn(text="I like tea")
-    if graph:
-        rt.registry.get("remember_fact").fn(subject="Meera", predicate="city", value="Pune", relation="sister")
+    rt.kg.add_fact(rt.kg.self_entity().id, "note", "I like tea", source_kind="user_stated")
+    rt.registry.get("remember_fact").fn(subject="Meera", predicate="city", value="Pune", relation="sister")
     await captured[0].get("fast").ainvoke([SystemMessage("BASE"), HumanMessage("call Meera")], config={})
     return _seen(captured[0])
 
@@ -225,13 +206,8 @@ def _seen(p):
     return p.seen[-1]
 
 
-async def test_graph_flag_on_prompt_order_is_base_memories_graph_situation(pool, uids, monkeypatch):
-    text = await _prompt(pool, uids[0], True, monkeypatch)
-    marks = [text.index(m) for m in ("BASE", "I like tea", "<graph>", "Pune")]
+async def test_prompt_order_is_base_graph_situation(pool, uids, monkeypatch):
+    text = await _prompt(pool, uids[0], monkeypatch)
+    marks = [text.index(m) for m in ("BASE", "<graph>", "I like tea", "Pune")]
     assert marks == sorted(marks)
     assert text.rindex("</graph>") < text.index(SITUATION)
-
-
-async def test_graph_flag_off_prompt_has_no_graph_block(pool, uids, monkeypatch):
-    text = await _prompt(pool, uids[0], False, monkeypatch)
-    assert "<graph>" not in text and text.index("BASE") < text.index("I like tea") < text.index(SITUATION)

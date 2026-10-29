@@ -9,13 +9,13 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from jarvis.agent.graph import build_graph
-from jarvis.llm import MemoryAwareProvider
+
 from jarvis.situation import Situation, SituationAwareProvider, level_for, render
 from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from tests.fakes import FakeProvider, MemoryAudit
 from tests.test_graph import CFG, call, say
-from tests.test_memory_context import provider
+from tests.test_memory_context import MemoryAwareProvider, provider
 
 TZ = "Europe/Berlin"
 NOW = datetime(2026, 10, 28, 14, 0, tzinfo=ZoneInfo(TZ))
@@ -175,7 +175,7 @@ async def test_provider_puts_the_situation_after_the_memories_and_never_in_proac
     chat = MemoryAwareProvider(SituationAwareProvider(raw, sit), lambda: [{"id": 1, "text": "Ronali is my wife"}])
     await chat.get("fast").ainvoke([SystemMessage("task"), HumanMessage("should I leave now?")])
     system = raw._models["fast"].seen[0][0].content
-    assert system.startswith("task") and system.index("<memory>") < system.index("<situation>")
+    assert system.startswith("task") and system.index("<graph>") < system.index("<situation>")
     assert "Task of a" not in system  # core level
     await MemoryAwareProvider(raw, lambda: []).get("fast").ainvoke([SystemMessage("brief"), HumanMessage("x")])
     assert "<situation>" not in raw._models["fast"].seen[1][0].content

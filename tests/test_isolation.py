@@ -144,7 +144,7 @@ class Brain(BaseChatModel):
         if system.startswith(ROUTER_PROMPT):  # memory and situation blocks are appended to it
             # follow-up turns skip keyword routing, so the fake router has to pick the domain itself
             asked = str(last.content) if isinstance(last, HumanMessage) else ""
-            if asked.startswith(("remember:", "forget about")):
+            if asked.startswith("remember:"):
                 return AIMessage("memory")
             if asked.startswith("note:"):
                 return AIMessage("notes")
@@ -159,11 +159,9 @@ class Brain(BaseChatModel):
             return AIMessage("", tool_calls=[{"name": name, "args": args, "id": "c1", "type": "tool_call"}])
 
         if text.startswith("remember:"):
-            return call("remember", {"text": text[9:].strip()})
+            return call("remember_fact", {"subject": "me", "predicate": "note", "value": text[9:].strip()})
         if text.startswith("note:"):
             return call("create_note", {"title": text[5:].strip(), "body": text[5:].strip()})
-        if m := re.fullmatch(r"forget about #(\d+)", text):
-            return call("forget", {"memory_id": int(m[1])})
         if text == "list my tasks":
             return call("list_tasks", {})
         return AIMessage("Hi there.")
@@ -396,7 +394,7 @@ def test_memories_notes_audit_mail_state_isolated_end_to_end(env):
         assert confirm(env, who, card["interrupt_id"])["reply"] == "Got it, I'll remember that."
         card = chat(env, who, f"note: {note}")["card"]
         assert confirm(env, who, card["interrupt_id"])["reply"] == "Saved the note."
-    assert sorted(rows(env, "SELECT user_id, text FROM memories")) == [(a, "A likes window seats"), (b, "B likes aisle seats")]
+    assert sorted(rows(env, "SELECT user_id, object_value FROM fact WHERE predicate = 'note'")) == [(a, "A likes window seats"), (b, "B likes aisle seats")]
     notes = dict(rows(env, "SELECT title, id FROM notes"))
     # notes: each sees only their own list; the other's id is not found
     assert [n["title"] for n in c.get("/notes", headers=env.h("b")).json()["notes"]] == ["B trip to Pune"]
@@ -410,11 +408,6 @@ def test_memories_notes_audit_mail_state_isolated_end_to_end(env):
         assert ("B likes" if key == KEYS["a"]["llm"] else "A likes") not in text
     assert any("A likes window seats" in t for k, t in CALLS if k == KEYS["a"]["llm"])
     assert any("B likes aisle seats" in t for k, t in CALLS if k == KEYS["b"]["llm"])
-    # B confirming "forget #<A's memory>" removes nothing of A's
-    a_mem = rows(env, "SELECT id FROM memories WHERE user_id = %s", a)[0][0]
-    card = chat(env, "b", f"forget about #{a_mem}")["card"]
-    confirm(env, "b", card["interrupt_id"])
-    assert rows(env, "SELECT text FROM memories WHERE id = %s", a_mem) == [("A likes window seats",)]
     # mail watch: each user's own mailbox and state; the same Gmail id in both mailboxes is handled for both
     run_job(env, "mail")  # first run only sets each cursor
     run_job(env, "mail")
@@ -455,19 +448,19 @@ def test_interrupt_ids_do_not_cross_users(env):
     b_card = chat(env, "b", "remember: B owns a blue car")["card"]
     assert b_card["interrupt_id"] != a_card["interrupt_id"]
     assert confirm(env, "b", a_card["interrupt_id"])["reply"] != "Got it, I'll remember that."
-    assert rows(env, "SELECT count(*) FROM memories")[0][0] == 0
+    assert rows(env, "SELECT count(*) FROM fact WHERE predicate = 'note'")[0][0] == 0
     # B's voice session tapping A's id resumes nothing either
     env.stt_scripts.append([])
     with env.c.websocket_connect("/voice", headers={"authorization": f"Bearer {env.tok['b']}"}) as ws:
         read(ws)
         ws.send_text(json.dumps({"type": "confirm", "interrupt_id": a_card["interrupt_id"], "decision": "yes"}))
         until_state(ws, "listening")
-    assert rows(env, "SELECT count(*) FROM memories")[0][0] == 0
+    assert rows(env, "SELECT count(*) FROM fact WHERE predicate = 'note'")[0][0] == 0
     # both cards are still pending for their own users, and each owner can confirm theirs
     assert chat(env, "a", "hi")["card"]["interrupt_id"] == a_card["interrupt_id"]
     assert confirm(env, "a", a_card["interrupt_id"])["reply"] == "Got it, I'll remember that."
     assert confirm(env, "b", b_card["interrupt_id"])["reply"] == "Got it, I'll remember that."
-    assert sorted(rows(env, "SELECT user_id, text FROM memories")) == [(env.a, "A owns a red bike"), (env.b, "B owns a blue car")]
+    assert sorted(rows(env, "SELECT user_id, object_value FROM fact WHERE predicate = 'note'")) == [(env.a, "A owns a red bike"), (env.b, "B owns a blue car")]
 
 
 def test_voice_uses_the_operators_deepgram_key_and_the_callers_thread(env):
@@ -567,7 +560,7 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("PUT", "/device/fcm", {"token": "fcm-x"}),
           ("DELETE", "/calendar/events/e1", None), ("POST", "/calendar/events", {
               "summary": "x", "start": "2026-10-28T10:00:00+01:00", "end": "2026-10-28T11:00:00+01:00"}),
-          ("GET", "/memory", None), ("DELETE", "/memory/1", None), ("GET", "/shopping", None),
+          ("GET", "/shopping", None),
           ("POST", "/shopping", {"title": "milk"}), ("POST", "/shopping/i1/complete", None),
           ("GET", "/graph/entities", None), ("GET", "/graph/entities/1", None), ("GET", "/graph/entities/1/forget-preview", None),
           ("DELETE", "/graph/entities/1", None), ("PATCH", "/graph/facts/1", {"value": "x"}), ("DELETE", "/graph/facts/1", None),

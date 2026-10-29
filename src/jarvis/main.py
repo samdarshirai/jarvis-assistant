@@ -20,7 +20,7 @@ from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
-from jarvis.kg.memory_store import migrate_memories
+from jarvis.kg.migrate import migrate_memories
 from jarvis.keys import Keys
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
@@ -44,8 +44,7 @@ async def lifespan(app: FastAPI):
         owner_id = ensure_owner(pool, s)
         if owner_id is None:
             raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")
-        if s.graph_enabled:  # after ensure_owner: it gives a pre-multi-user DB's memories their user_id
-            migrate_memories(pool, s.fernet_key.encode())
+        migrate_memories(pool, s.fernet_key.encode())  # after ensure_owner: it gives a pre-multi-user DB's memories their user_id
         purge_audit(pool, 90)
         purge_proactive(pool, 90)
         devices = Devices(pool)
@@ -418,19 +417,7 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
             return JSONResponse({"error": "unavailable"}, status_code=502)
         return {"ok": True}
 
-    @app.get("/memory")
-    async def memory(request: Request):
-        svc, rt, err = await guarded(request)
-        return err or await svc.memory_list(rt)
-
-    @app.delete("/memory/{memory_id}")
-    async def forget_memory(request: Request, memory_id: int):
-        svc, rt, err = await guarded(request)
-        if err:
-            return err
-        return {"ok": True} if await svc.forget_memory(rt, memory_id) else JSONResponse({"error": "not_found"}, status_code=404)
-
-    # --- knowledge graph control: 404 for everything while the graph is off (rt.kg is None) ---
+    # --- knowledge graph control ---
     async def graph(request: Request, method: str, *args):
         svc, rt, err = await guarded(request)
         if err:

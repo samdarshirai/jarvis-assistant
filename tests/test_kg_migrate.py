@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from jarvis.kg.memory_store import migrate_memories
+from jarvis.kg.migrate import migrate_memories
 from jarvis.kg.store import GraphStore
 
 
@@ -60,37 +60,33 @@ def _legacy_ids(pool, uid):
 
 
 def test_forget_then_migrate_again_does_not_resurrect(pool, uids):
-    from jarvis.kg.memory_store import GraphMemoryStore
     _legacy(pool, uids[0], "keep")
     _legacy(pool, uids[0], "forget me")
     migrate_memories(pool)
-    kg = GraphStore(pool, uids[0])
-    mem = GraphMemoryStore(kg)
-    gone = next(m for m in mem.all() if m["text"] == "forget me")
-    assert mem.remove(gone["id"]) is True
+    kg, facts = _notes(pool, uids[0])
+    gone = next(f for f in facts if f.value == "forget me")
+    assert kg.delete_fact(gone.id) is True
     assert migrate_memories(pool) == 0
-    assert [m["text"] for m in mem.all()] == ["keep"]
+    assert [f.value for f in kg.facts_for(kg.self_entity().id)] == ["keep"]
     assert len(_legacy_ids(pool, uids[0])) == 1
 
 
 def test_forget_duplicate_text_removes_both_legacy_rows(pool, uids):
-    from jarvis.kg.memory_store import GraphMemoryStore
     _legacy(pool, uids[0], "same")
     _legacy(pool, uids[0], "same")
     migrate_memories(pool)
-    mem = GraphMemoryStore(GraphStore(pool, uids[0]))
-    assert len(mem.all()) == 1
-    assert mem.remove(mem.all()[0]["id"]) is True
-    assert migrate_memories(pool) == 0 and mem.all() == [] and _legacy_ids(pool, uids[0]) == []
+    kg, facts = _notes(pool, uids[0])
+    assert len(facts) == 1
+    assert kg.delete_fact(facts[0].id) is True
+    assert migrate_memories(pool) == 0 and _notes(pool, uids[0])[1] == [] and _legacy_ids(pool, uids[0]) == []
 
 
 def test_forget_leaves_other_users_legacy_rows(pool, uids):
-    from jarvis.kg.memory_store import GraphMemoryStore
     _legacy(pool, uids[0], "mine")
     _legacy(pool, uids[1], "mine")
     migrate_memories(pool)
-    mem = GraphMemoryStore(GraphStore(pool, uids[0]))
-    mem.remove(mem.all()[0]["id"])
+    kg, facts = _notes(pool, uids[0])
+    kg.delete_fact(facts[0].id)
     assert _legacy_ids(pool, uids[0]) == [] and len(_legacy_ids(pool, uids[1])) == 1
     assert migrate_memories(pool) == 0
 

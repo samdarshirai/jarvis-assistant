@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 import jarvis.kg.block as blockmod
 from jarvis.kg.block import GraphAwareProvider, block_for, candidates
 from jarvis.kg.store import GraphStore
+from jarvis.llm import MemoryContextError
 from tests.test_memory_context import provider
 
 
@@ -49,7 +50,7 @@ def test_two_annas_both_listed_so_the_model_must_ask(store):
     assert b.count("- Anna (person)") == 2 and "Pune" in b and "Oslo" in b and "ask which" in b
 
 
-def test_block_cap_1600_chars_with_many_facts(store):
+def test_block_cap_with_many_facts(store):
     me = store.self_entity()
     for i in range(12):
         told(store, me, "note", f"note number {i} " + "x" * 180)
@@ -58,7 +59,7 @@ def test_block_cap_1600_chars_with_many_facts(store):
         for i in range(6):
             told(store, e, "note", f"fact {n}-{i} " + "y" * 150)
     b = block_for(store, "Anna")
-    assert 0 < len(b) <= 1600 and b.endswith("</graph>")
+    assert 0 < len(b) <= blockmod.CAP and b.endswith("</graph>")
 
 
 def test_fact_text_cannot_close_the_block(store):
@@ -157,14 +158,15 @@ async def test_provider_appends_block_to_system_prompt_and_skips_router(store):
     assert "<graph>" not in seen[1][0].content
 
 
-async def test_provider_swallows_store_errors_and_still_calls_model(store, monkeypatch, caplog):
+async def test_provider_fails_closed_on_store_errors_and_never_calls_model(store, monkeypatch, caplog):
     def boom(*a):
         raise RuntimeError("secret Anna lives in Pune")
     monkeypatch.setattr(blockmod, "block_for", boom)
     raw, _ = provider([AIMessage("ok")])
     with caplog.at_level(logging.WARNING):
-        await ask(GraphAwareProvider(raw, store), "text Anna")
-    assert raw._models["fast"].seen[0][0].content == "task"
+        with pytest.raises(MemoryContextError):
+            await ask(GraphAwareProvider(raw, store), "text Anna")
+    assert raw._models["fast"].seen == []
     assert "RuntimeError" in caplog.text and "secret" not in caplog.text
 
 
@@ -188,13 +190,11 @@ async def test_provider_cache_refreshes_after_write(store):
     assert "Berlin" in seen[2][0].content and "Pune" not in seen[2][0].content
 
 
-def test_self_notes_stay_in_memory_block_not_graph_block(store):
-    from jarvis.kg.memory_store import GraphMemoryStore
-    mem = GraphMemoryStore(store)
-    mem.add("I prefer aisle seats")
+def test_self_notes_are_always_in_the_graph_block(store):
+    store.add_fact(store.self_entity().id, "note", "I prefer aisle seats", source_kind="user_stated")
     told(store, store.self_entity(), "home", "Pune")
     anna = store.create_entity("Anna")
     told(store, anna, "note", "plays cello")
-    assert [m["text"] for m in mem.all()] == ["I prefer aisle seats"]
-    b = block_for(store, "call Anna")
-    assert "aisle" not in b and "home: Pune" in b and "note: plays cello" in b
+    b = block_for(store, "hello")
+    assert "note: I prefer aisle seats" in b and "home: Pune" in b and "cello" not in b
+    assert "note: plays cello" in block_for(store, "call Anna")
