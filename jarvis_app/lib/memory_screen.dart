@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import 'api.dart';
 import 'calendar_screen.dart';
+import 'graph3d.dart';
+import 'memory_graph.dart';
 import 'theme.dart';
 
 const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -17,9 +19,10 @@ void _toast(BuildContext c, String m) => ScaffoldMessenger.of(c).showSnackBar(Sn
 
 /// What Jarvis knows: you first, then the people and places in your life, and what it was told to forget.
 class MemoryScreen extends StatefulWidget {
-  const MemoryScreen({super.key, required this.api, this.onAskJarvis});
+  const MemoryScreen({super.key, required this.api, this.onAskJarvis, this.autoRotate = true});
   final ApiClient api;
   final VoidCallback? onAskJarvis;
+  final bool autoRotate;
 
   @override
   State<MemoryScreen> createState() => _MemoryScreenState();
@@ -27,7 +30,9 @@ class MemoryScreen extends StatefulWidget {
 
 class _MemoryScreenState extends State<MemoryScreen> {
   List<Map<String, dynamic>> _people = [], _sups = [];
-  bool _loading = true, _error = false;
+  bool _loading = true, _error = false, _showList = false;
+  int? _selected;
+  GraphScene? _scene;
 
   @override
   void initState() {
@@ -42,12 +47,16 @@ class _MemoryScreenState extends State<MemoryScreen> {
     });
     try {
       // the user's own entity first, as "Me"; the rest keep the server's order
-      final all = _maps((await widget.api.get('/graph/entities'))['entities']);
+      final j = await widget.api.get('/graph/entities');
+      final all = _maps(j['entities']);
       final p = [for (final e in all) if (e['kind'] == 'self') e, for (final e in all) if (e['kind'] != 'self') e];
+      final rel = _maps(j['relations']); // older servers omit it
       final s = _maps((await widget.api.get('/graph/suppressions'))['suppressions']);
       if (mounted) {
         setState(() {
           _people = p;
+          _scene = buildScene(p, rel);
+          if (!p.any((e) => e['id'] == _selected)) _selected = null;
           _sups = s;
           _loading = false;
         });
@@ -71,15 +80,106 @@ class _MemoryScreenState extends State<MemoryScreen> {
     }
   }
 
+  Future<void> _open(Map<String, dynamic> p) async {
+    final me = p['kind'] == 'self';
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => _PersonDetail(api: widget.api, id: p['id'] as int, name: me ? 'Me' : '${p['name']}', self: me),
+      ),
+    );
+    if (mounted) _load();
+  }
+
+  void _onSelect(int? id) {
+    if (id != null && id == _selected) {
+      _open(_people.firstWhere((e) => e['id'] == id));
+    } else {
+      setState(() => _selected = id);
+    }
+  }
+
+  void _forgotten() => showModalBottomSheet<void>(
+    context: context,
+    backgroundColor: Colors.transparent,
+    builder: (_) => StatefulBuilder(
+      builder: (ctx, set) => ListView(
+        padding: const EdgeInsets.all(16),
+        shrinkWrap: true,
+        children: [
+          for (final s in _sups)
+            _tile(
+              ListTile(
+                title: Text('${s['kind']}', style: const TextStyle(color: ink, fontSize: 15)),
+                subtitle: Text(_date(s['created_at']), style: TextStyle(color: ink.withValues(alpha: 0.6))),
+                trailing: TextButton(
+                  key: ValueKey('lift-${s['key_hmac']}'),
+                  onPressed: () async {
+                    await _lift(s);
+                    set(() {});
+                  },
+                  child: const Text('Lift'),
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _graph() {
+    final sel = _selected == null ? null : _people.cast<Map<String, dynamic>?>().firstWhere((e) => e!['id'] == _selected, orElse: () => null);
+    return Stack(children: [
+      Positioned.fill(
+        child: MemoryGraph(
+          scene: _scene!,
+          selectedId: _selected,
+          onSelect: _onSelect,
+          autoRotate: widget.autoRotate && !MediaQuery.disableAnimationsOf(context),
+        ),
+      ),
+      if (_sups.isNotEmpty)
+        Positioned(
+          left: 16,
+          top: 8,
+          child: TextButton(key: const Key('forgotten-button'), onPressed: _forgotten, child: const Text('Forgotten')),
+        ),
+      if (sel != null)
+        Positioned(
+          left: 16,
+          right: 16,
+          bottom: 24,
+          child: GestureDetector(
+            key: const Key('open-selected'),
+            onTap: () => _open(sel),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(color: blush, borderRadius: BorderRadius.circular(24)),
+              child: Text(
+                '${sel['kind'] == 'self' ? 'Me' : sel['name']} · ${sel['fact_count']} facts',
+                style: const TextStyle(color: ink, fontSize: 16),
+              ),
+            ),
+          ),
+        ),
+    ]);
+  }
+
   @override
   Widget build(BuildContext context) => ScreenShell(
     title: 'Memory',
     onMic: widget.onAskJarvis,
+    trailing: RoundButton(
+      icon: _showList ? Icons.bubble_chart_outlined : Icons.view_list_outlined,
+      tooltip: _showList ? 'Graph view' : 'List view',
+      onTap: () => setState(() => _showList = !_showList),
+    ),
     child: _loading
         ? const Center(child: CircularProgressIndicator())
         : _error
         ? ErrorRetry(onRetry: _load)
-        : _body(),
+        : _showList || _people.isEmpty
+        ? _body()
+        : _graph(),
   );
 
   Widget _body() => ListView(
