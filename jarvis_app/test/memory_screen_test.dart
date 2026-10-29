@@ -264,7 +264,7 @@ void main() {
     expect(find.byKey(const Key('memory-graph')), findsOneWidget);
     await t.tapAt(nodePos(t, api, 1));
     await t.pumpAndSettle();
-    expect(find.descendant(of: find.byKey(const Key('open-selected')), matching: find.text('Priya · 2 facts')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('open-selected')), matching: find.textContaining('Priya · 2 facts')), findsOneWidget);
     await t.tapAt(nodePos(t, api, 1));
     await t.pumpAndSettle();
     expect(find.text('works_at: Acme'), findsOneWidget);
@@ -294,7 +294,7 @@ void main() {
     await pump(t, api);
     await t.tapAt(nodePos(t, api, 5));
     await t.pumpAndSettle();
-    expect(find.descendant(of: find.byKey(const Key('open-selected')), matching: find.text('Me · 1 facts')), findsOneWidget);
+    expect(find.descendant(of: find.byKey(const Key('open-selected')), matching: find.textContaining('Me · 1 facts')), findsOneWidget);
     await t.tap(find.byKey(const Key('open-selected')));
     await t.pumpAndSettle();
     expect(find.text('home: Pune'), findsOneWidget);
@@ -324,6 +324,58 @@ void main() {
     await t.pumpAndSettle();
     expect(t.takeException(), isNull);
     expect(find.byKey(const Key('open-selected')), findsOneWidget);
+  });
+
+  testWidgets('the pill clears the floating mic', (t) async {
+    final api = GraphApi(routes());
+    var mic = 0;
+    await t.binding.setSurfaceSize(const Size(400, 900));
+    await t.pumpWidget(MaterialApp(home: MemoryScreen(api: api, autoRotate: false, onAskJarvis: () => mic++)));
+    await t.pumpAndSettle();
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    final r = t.getRect(find.byKey(const Key('open-selected')));
+    await t.tapAt(Offset(r.right - 4, r.center.dy));
+    await t.pumpAndSettle();
+    expect(mic, 0);
+    expect(find.text('works_at: Acme'), findsOneWidget);
+  });
+
+  testWidgets('returning from the detail keeps the graph mounted', (t) async {
+    final api = GraphApi(routes());
+    await pump(t, api);
+    final before = t.state(find.byType(MemoryGraph));
+    await t.tapAt(nodePos(t, api, 1));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('open-selected')));
+    await t.pumpAndSettle();
+    t.state<NavigatorState>(find.byType(Navigator)).pop();
+    await t.pump();
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    await t.pumpAndSettle();
+    expect(t.state(find.byType(MemoryGraph)), same(before));
+    expect(find.byKey(const Key('open-selected')), findsOneWidget);
+  });
+
+  testWidgets('lifting the last suppression closes the sheet', (t) async {
+    await pump(t, GraphApi(routes()));
+    await t.tap(find.byKey(const Key('forgotten-button')));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const ValueKey('lift-abc')));
+    await t.pumpAndSettle();
+    expect(find.byKey(const ValueKey('lift-abc')), findsNothing);
+    expect(find.byType(BottomSheet), findsNothing);
+    expect(find.byKey(const Key('forgotten-button')), findsNothing);
+  });
+
+  testWidgets('reduced motion: the default auto-rotate settles', (t) async {
+    await t.binding.setSurfaceSize(const Size(400, 900));
+    await t.pumpWidget(MaterialApp(
+      builder: (c, w) => MediaQuery(data: MediaQuery.of(c).copyWith(disableAnimations: true), child: w!),
+      home: MemoryScreen(api: GraphApi(routes())),
+    ));
+    await t.pumpAndSettle();
+    expect(find.byKey(const Key('memory-graph')), findsOneWidget);
   });
 
   testWidgets('toggle switches to list and back', (t) async {

@@ -42,7 +42,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
 
   Future<void> _load() async {
     setState(() {
-      _loading = true;
+      _loading = _people.isEmpty; // keep the graph (and its camera) on refresh
       _error = false;
     });
     try {
@@ -101,7 +101,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
   void _forgotten() => showModalBottomSheet<void>(
     context: context,
     backgroundColor: Colors.transparent,
-    builder: (_) => StatefulBuilder(
+    builder: (sheet) => StatefulBuilder(
       builder: (ctx, set) => ListView(
         padding: const EdgeInsets.all(16),
         shrinkWrap: true,
@@ -115,7 +115,12 @@ class _MemoryScreenState extends State<MemoryScreen> {
                   key: ValueKey('lift-${s['key_hmac']}'),
                   onPressed: () async {
                     await _lift(s);
-                    set(() {});
+                    if (!ctx.mounted) return;
+                    if (_sups.isEmpty) {
+                      Navigator.pop(sheet);
+                    } else {
+                      set(() {});
+                    }
                   },
                   child: const Text('Lift'),
                 ),
@@ -146,7 +151,7 @@ class _MemoryScreenState extends State<MemoryScreen> {
       if (sel != null)
         Positioned(
           left: 16,
-          right: 16,
+          right: 100, // clear of the floating mic
           bottom: 24,
           child: GestureDetector(
             key: const Key('open-selected'),
@@ -154,8 +159,11 @@ class _MemoryScreenState extends State<MemoryScreen> {
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
               decoration: BoxDecoration(color: blush, borderRadius: BorderRadius.circular(24)),
-              child: Text(
-                '${sel['kind'] == 'self' ? 'Me' : sel['name']} · ${sel['fact_count']} facts',
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: '${sel['kind'] == 'self' ? 'Me' : sel['name']} · ${sel['fact_count']} facts'),
+                  TextSpan(text: ' · tap to open', style: TextStyle(color: ink.withValues(alpha: 0.6), fontSize: 13)),
+                ]),
                 style: const TextStyle(color: ink, fontSize: 16),
               ),
             ),
