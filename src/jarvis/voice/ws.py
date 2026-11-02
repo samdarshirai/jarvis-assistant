@@ -115,7 +115,7 @@ class VoiceSession:
             await self._failed()
 
     async def _failed(self, text: str = FAIL_TEXT) -> None:
-        log.error("voice turn failed")
+        log.exception("voice turn failed")
         await self.send("error", message=text)
         await self._say([text])
         with contextlib.suppress(Exception):  # buttons may be gone: re-offer a still-pending confirmation
@@ -169,7 +169,7 @@ class VoiceSession:
     def _step_done(self, t: asyncio.Task) -> None:
         self.steps.discard(t)
         if not t.cancelled() and t.exception() is not None:  # also marks it retrieved when nobody waits any more
-            log.error("graph step failed")
+            log.error("graph step failed", exc_info=t.exception())
 
     async def _utterance(self, text: str) -> None:
         await self.set_state("thinking")
