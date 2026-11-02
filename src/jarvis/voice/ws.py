@@ -3,6 +3,8 @@ import contextlib
 import json
 import logging
 import re
+import sys
+import traceback
 
 from langchain_core.messages import HumanMessage
 from langgraph.types import Command
@@ -43,6 +45,14 @@ def card_lines(payload: dict) -> list[str]:
 
 def is_tap_only(payload: dict) -> bool:
     return any(a["tool"] in TAP_ONLY for a in payload["actions"])
+
+
+def _where(e: BaseException | None) -> str:
+    """Exception type and raise site only: never its text, which may carry keys or transcripts."""
+    if e is None:
+        return "no exception"
+    tb = traceback.extract_tb(e.__traceback__)
+    return type(e).__name__ + (f" at {tb[-1].filename.rsplit('/', 1)[-1]}:{tb[-1].lineno}" if tb else "")
 
 
 class VoiceSession:
@@ -115,7 +125,7 @@ class VoiceSession:
             await self._failed()
 
     async def _failed(self, text: str = FAIL_TEXT) -> None:
-        log.exception("voice turn failed")
+        log.error("voice turn failed: %s", _where(sys.exc_info()[1]))
         await self.send("error", message=text)
         await self._say([text])
         with contextlib.suppress(Exception):  # buttons may be gone: re-offer a still-pending confirmation
@@ -169,7 +179,7 @@ class VoiceSession:
     def _step_done(self, t: asyncio.Task) -> None:
         self.steps.discard(t)
         if not t.cancelled() and t.exception() is not None:  # also marks it retrieved when nobody waits any more
-            log.error("graph step failed", exc_info=t.exception())
+            log.error("graph step failed: %s", _where(t.exception()))
 
     async def _utterance(self, text: str) -> None:
         await self.set_state("thinking")
@@ -237,6 +247,8 @@ class VoiceSession:
         if interrupts:
             await self._offer(interrupts[0])
             return
+        log.warning("DEBUG present: client_actions=%s, last=%r", [x.get("type") for x in result.get("client_actions") or []],
+                    str(getattr(result["messages"][-1], "content", ""))[:120])
         if result.get("client_actions"):  # before the speech, so an alarm is set while Jarvis is still talking
             await self.send("client_actions", actions=result["client_actions"])
             if any(a.get("type") == "call_contact" for a in result["client_actions"]):

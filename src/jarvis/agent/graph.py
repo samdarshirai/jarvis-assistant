@@ -206,7 +206,9 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
             return {**reset, "domains": quick}
         resp = await provider.get("fast").ainvoke([SystemMessage(ROUTER_PROMPT), *repair_tool_gaps(window(state["messages"]))],
                                                   config={"tags": ["router"]})
-        return {**reset, **parse_route(str(resp.content))}
+        route = parse_route(str(resp.content))
+        log.warning("DEBUG router: followup=%s route=%s raw=%r", followup, route, str(resp.content)[:80])  # TEMP
+        return {**reset, **route}
 
     async def agent(state: State, config: RunnableConfig) -> dict:
         dom = DOMAINS[state["domains"][state["idx"]]]
@@ -372,6 +374,8 @@ def build_graph(provider, registry, audit, checkpointer, tz: str):
                 "tool", c["name"], args=c["args"], result=audit_result,
                 confirmation=label,
                 latency_ms=int((time.monotonic() - t0) * 1000))
+            if tool is not None and tool.domain == "phone":  # TEMP debug: alarm not reaching the phone
+                log.warning("DEBUG phone tool %s label=%s result=%s", c["name"], label, json.dumps(result, default=str)[:200])
             if isinstance(result, dict) and "client_action" in result:
                 actions.append(result["client_action"])
             out.append(ToolMessage(content, tool_call_id=c["id"]))
