@@ -114,7 +114,10 @@ async def compose(llm, facts: dict, tz: str) -> tuple[str, bool]:
         return speak_facts(facts, tz), False
     text = render_facts(facts, tz)
     try:
-        msg = await llm.get("fast").ainvoke([SystemMessage(SYSTEM), HumanMessage(wrap_untrusted(text))])
+        msg = await llm.get("fast").ainvoke(
+            [SystemMessage(SYSTEM), HumanMessage(wrap_untrusted(text))],
+            config= {"tags": ["proactive"], "run_name": "daily_brief"}
+        )
         out = msg.content.strip() if isinstance(msg.content, str) else ""
         if out:
             return out, True

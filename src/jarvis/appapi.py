@@ -233,7 +233,7 @@ class AppService:
         return await asyncio.shield(t)
 
     async def _present(self, rt, graph_input) -> dict:
-        cfg = thread_config(rt.user.id)
+        cfg = {**thread_config(rt.user.id), "tags": ["app"], "metadata": {"channel": "app"}, "run_name": "jarvis-turn"}
         try:
             result = await rt.graph.ainvoke(graph_input, cfg)
         except Exception as error:
