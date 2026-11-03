@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 
 from jarvis.agent.graph import build_graph
 from jarvis.audit import Audit
+from jarvis.conversations import ConversationStore
 from jarvis.google.auth import PgTokenStore, build_service
 from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
@@ -33,9 +34,10 @@ from jarvis.web import DdgSearch, FallbackSearch, WebSearch
 log = logging.getLogger(__name__)
 
 
-def thread_config(user_id: int, *, voice: bool = False) -> dict:
-    """The user's one conversation thread, shared by every channel. "voice" only selects the fast tier in the graph."""
-    return {"configurable": {"thread_id": thread_id(user_id), **({"voice": True} if voice else {})}, "recursion_limit": 40}
+def thread_config(thread: str | int, *, voice: bool = False) -> dict:
+    """A str is the conversation's thread id; an int is the legacy per-user thread (transitional, removed with the old callers). "voice" only selects the fast tier in the graph."""
+    tid = thread if isinstance(thread, str) else thread_id(thread)
+    return {"configurable": {"thread_id": tid, **({"voice": True} if voice else {})}, "recursion_limit": 40}
 
 
 def cached_service(build, ttl: float = 1800.0, clock=time.monotonic, epoch=lambda: 0):
@@ -90,6 +92,7 @@ class UserRuntime:
     tz: str
     google_epoch: list[int] = field(default_factory=lambda: [0], repr=False)  # bumped by invalidate()
     kg: "GraphStore | None" = None  # the user's knowledge graph
+    conversations: "ConversationStore | None" = None
 
     @property
     def llm_ready(self) -> bool:
@@ -172,7 +175,8 @@ class Tenants:
         graph = build_graph(chat, registry, audit, self.saver, tz) if raw else None
         return UserRuntime(user=user, secrets=secrets, audit=audit, notes=NoteStore(pool, user_id),
                            proactive=proactive, calendar=calendar, tasks=tasks, gmail=gmail,
-                           registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch, kg=kg)
+                           registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch, kg=kg,
+                           conversations=ConversationStore(pool, user_id))
 
 
 async def _close(rt: UserRuntime) -> None:

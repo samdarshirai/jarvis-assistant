@@ -164,6 +164,22 @@ def test_delete_cascades_to_every_data_table(scratch):
         assert c.execute("SELECT thread_id FROM checkpoints").fetchall() == [(f"user:{ids[1]}",)]
 
 
+def test_delete_removes_conversation_threads(scratch):
+    init_schema(scratch)
+    with scratch.connection() as c:
+        c.execute("CREATE TABLE checkpoints (thread_id TEXT NOT NULL, checkpoint_id TEXT NOT NULL)")
+    users = UserStore(scratch)
+    uid, other = (users.add(f"{n}@example.com", TZ).id for n in ("gone", "kept"))
+    with scratch.connection() as c:
+        for t in (f"user:{uid}", f"user:{uid}:c:aaa", f"user:{other}:c:bbb"):
+            c.execute("INSERT INTO checkpoints VALUES (%s, 'c1')", (t,))
+    from jarvis.users import run
+    assert "checkpoints: 2" in run(["delete", "gone@example.com"], scratch, settings())  # dry run counts both threads
+    users.delete(uid)
+    with scratch.connection() as c:
+        assert c.execute("SELECT thread_id FROM checkpoints").fetchall() == [(f"user:{other}:c:bbb",)]
+
+
 def test_fresh_schema_requires_user_id(pool):
     with pool.connection() as c:
         with pytest.raises(psycopg.errors.NotNullViolation):

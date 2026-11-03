@@ -9,6 +9,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from jarvis.conversations import IDLE, ConversationStore, messages_json
 
+from .fakes import MemoryConversations
+
 
 class Clock:
     now = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
@@ -17,35 +19,34 @@ class Clock:
         return self.now
 
 
-@pytest.fixture(params=["pg"])
+@pytest.fixture
 def clock():
     return Clock()
 
 
-@pytest.fixture
-def store(request, pool, uids, clock):
-    return ConversationStore(pool, uids[0], clock)
+@pytest.fixture(params=["pg", "memory"])
+def store(request, clock):
+    if request.param == "memory":
+        return MemoryConversations(1, clock)
+    return ConversationStore(request.getfixturevalue("pool"), request.getfixturevalue("uids")[0], clock)
 
 
-def closed_at(pool, cid):
-    with pool.connection() as c:
-        return c.execute("SELECT closed_at FROM conversation WHERE id = %s", (cid,)).fetchone()[0]
 
 
-def test_current_creates_then_reuses(store, uids):
+def test_current_creates_then_reuses(store):
     a = store.current("chat")
     assert store.current("chat").id == a.id
-    assert a.thread_id.startswith(f"user:{uids[0]}:c:")
+    assert a.thread_id.startswith(f"user:{store.user_id}:c:")
 
 
-def test_idle_boundary(store, clock, pool):
+def test_idle_boundary(store, clock):
     a = store.current("chat")
     clock.now += IDLE
     assert store.current("chat").id == a.id
     clock.now += timedelta(seconds=1)
     b = store.current("chat")
     assert b.id != a.id
-    assert closed_at(pool, a.id) is not None
+    assert store.get(a.id).closed_at is not None
 
 
 def test_surfaces_are_independent(store):
@@ -55,7 +56,8 @@ def test_surfaces_are_independent(store):
     assert v2.id != v.id and store.get(v.id).closed_at is not None
 
 
-def test_race_single_open(store, pool, uids):
+def test_race_single_open(pool, uids, clock):
+    store = ConversationStore(pool, uids[0], clock)
     barrier, out = threading.Barrier(2), []
 
     def go():
@@ -85,13 +87,13 @@ def test_touch_sets_title_once(store):
     assert store.get(b.id).title == "x" * 60
 
 
-def test_close_idempotent_and_resume(store, clock, pool):
+def test_close_idempotent_and_resume(store, clock):
     old = store.current("chat")
     store.close(old.id)
-    first = closed_at(pool, old.id)
+    first = store.get(old.id).closed_at
     clock.now += timedelta(minutes=1)
     store.close(old.id)
-    assert closed_at(pool, old.id) == first
+    assert store.get(old.id).closed_at == first
     cur = store.current("chat")
     assert cur.id != old.id
     r = store.resume(old.id, "chat")
@@ -103,7 +105,7 @@ def test_close_idempotent_and_resume(store, clock, pool):
 
 
 def test_other_user_cannot_get_or_resume(pool, uids, clock):
-    a, b = ConversationStore(pool, uids[0], clock), ConversationStore(pool, uids[1], clock)
+    a, b = ConversationStore(pool, uids[0], clock), ConversationStore(pool, uids[1], clock)  # pg only: the twin is single-user
     conv = a.current("chat")
     assert b.get(conv.id) is None
     assert b.resume(conv.id, "chat") is None
