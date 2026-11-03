@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 from types import SimpleNamespace as NS
 
 from cryptography.fernet import Fernet
@@ -21,6 +21,8 @@ from jarvis.tenant import Tenants, thread_config
 from jarvis.tools.registry import Registry
 from jarvis.users import UserStore
 from jarvis.voice.devices import Devices
+from jarvis.conversations import IDLE
+from tests.fakes import MemoryConversations
 
 TZ = "Europe/Berlin"
 CARD = NS(id="i1", value={"actions": [{"tool": "create_event", "args": {}, "summary": "Create X"}]})
@@ -101,7 +103,7 @@ def rt(src=None, graph=None, audit=None, uid=1):
     """A stand-in UserRuntime: the service reads every client, the graph, the lock and the audit from it."""
     src = src or Src()
     return NS(user=NS(id=uid), calendar=src, tasks=src, gmail=src, notes=src, graph=graph or Graph(),
-              lock=asyncio.Lock(), audit=audit or Audit(), tz=TZ, llm_ready=graph is not False)
+              lock=asyncio.Lock(), audit=audit or Audit(), tz=TZ, conversations=MemoryConversations(uid), llm_ready=graph is not False)
 
 
 def svc(**kw):
@@ -177,10 +179,11 @@ async def test_notes():
 
 async def test_chat_replies_on_plain_thread():
     g = Graph(result={"messages": [HumanMessage("hi"), AIMessage("Hello")], "client_actions": [{"a": 1}]})
-    out = await svc().chat(rt(graph=g), "hi")
+    r = rt(graph=g)
+    out = await svc().chat(r, "hi")
+    conv = out.pop("conversation")
     assert out == {"reply": "Hello", "card": None, "client_actions": [{"a": 1}]}
-    cfg = g.inputs[0][1]
-    assert cfg["configurable"] == {"thread_id": "user:1"}
+    assert g.inputs[0][1]["configurable"] == {"thread_id": r.conversations.get(conv["id"]).thread_id}
 
 
 async def test_chat_empty_fallback_and_new_interrupt_card():
@@ -235,8 +238,9 @@ async def test_provider_error_body_never_reaches_logs_audit_reply_or_checkpoint(
     graph = build_graph(provider, Registry(), audit, saver, TZ)
     try:
         with caplog.at_level(logging.DEBUG):
-            out = await svc().chat(rt(graph=graph, audit=audit, uid=2), "hello")
-        checkpoints = [item async for item in saver.alist(thread_config(2))]
+            r2 = rt(graph=graph, audit=audit, uid=2)
+            out = await svc().chat(r2, "hello")
+        checkpoints = [item async for item in saver.alist(thread_config(r2.conversations.open_for("chat").thread_id))]
     finally:
         await provider.aclose()
     errors = [value for item in checkpoints for _, channel, value in item.pending_writes if channel == "__error__"]
@@ -283,7 +287,9 @@ async def test_confirm_stale_or_mismatched_does_not_resume():
 async def test_confirm_resumes_with_bool():
     for dec, want in (("yes", True), ("no", False)):
         g = Graph(interrupts=[CARD], result={"messages": [AIMessage("Done")]})
-        out = await svc().confirm(rt(graph=g), "i1", dec)
+        r = rt(graph=g)
+        r.conversations.start("chat")
+        out = await svc().confirm(r, "i1", dec)
         assert out["reply"] == "Done" and isinstance(g.inputs[0][0], Command) and g.inputs[0][0].resume is want
 
 
@@ -306,6 +312,148 @@ async def test_step_survives_cancelled_request_and_is_drainable():
     assert not s.steps and not r.lock.locked()
 
 
+# --- conversations ---
+class ThreadGraph(Graph):
+    """Pending interrupts per thread; resuming clears them and records the tool call."""
+    def __init__(self, messages=None):
+        super().__init__(result={"messages": [AIMessage("ok")]})
+        self.pending, self.written, self.messages = {}, [], messages or {}
+
+    async def aget_state(self, cfg):
+        t = cfg["configurable"]["thread_id"]
+        return NS(interrupts=self.pending.get(t, []), values={"messages": self.messages.get(t, [])})
+
+    async def ainvoke(self, inp, cfg):
+        t = cfg["configurable"]["thread_id"]
+        self.inputs.append((inp, cfg))
+        if isinstance(inp, Command):
+            self.pending.pop(t, None)
+            self.written.append(t)
+        return self.result
+
+
+async def test_chat_response_names_conversation_and_reuses_it():
+    g, r = ThreadGraph(), None
+    r = rt(graph=g)
+    a, b = await svc().chat(r, "one"), await svc().chat(r, "two")
+    assert a["conversation"]["id"] == b["conversation"]["id"]
+    assert {i[1]["configurable"]["thread_id"] for i in g.inputs} == {r.conversations.get(a["conversation"]["id"]).thread_id}
+    assert g.inputs[0][1]["configurable"]["thread_id"] != "user:1"
+
+
+class Recorder:
+    """A provider whose models record every call: (tags, message texts)."""
+    def __init__(self):
+        self.calls = []
+
+    def get(self, tier, tools=None, tool_choice=None):
+        rec = self
+
+        class M:
+            async def ainvoke(self, messages, config=None):
+                rec.calls.append(((config or {}).get("tags", []), [str(m.content) for m in messages]))
+                return AIMessage("phone" if config else "done")
+        return M()
+
+
+def real_rt(saver=None):
+    p = Recorder()
+    r = rt(graph=build_graph(p, Registry(), Audit(), saver or InMemorySaver(), TZ))
+    return p, r
+
+
+async def test_chat_after_idle_starts_new_conversation_with_no_history():
+    p, r = real_rt()
+    now = [r.conversations.clock()]
+    r.conversations.clock = lambda: now[0]
+    a = await svc().chat(r, "first secret")
+    now[0] += IDLE + timedelta(minutes=1)
+    b = await svc().chat(r, "second")
+    assert a["conversation"]["id"] != b["conversation"]["id"]
+    assert not any("first secret" in m for _, msgs in p.calls[-2:] for m in msgs)
+
+
+async def test_keyword_alarm_in_new_conversation_skips_router():
+    p, r = real_rt()
+    s = svc()
+    await s.chat(r, "what is on today")
+    await s.new_conversation(r)
+    p.calls.clear()
+    out = await s.chat(r, "set an alarm for 6am")
+    assert out["reply"] == "done"
+    assert p.calls and not any("router" in tags for tags, _ in p.calls)
+
+
+async def test_confirm_uses_given_conversation_and_new_chat_keeps_pending_card():
+    g = ThreadGraph()
+    r = rt(graph=g)
+    s = svc()
+    a = r.conversations.start("chat")
+    g.pending[a.thread_id] = [CARD]
+    b = (await s.new_conversation(r))["conversation"]
+    wrong = await s.confirm(r, "i1", "yes", b["id"])
+    assert wrong["reply"] == "Already handled." and g.written == []
+    out = await s.confirm(r, "i1", "yes", a.id)
+    assert out["reply"] == "ok" and g.written == [a.thread_id] and out["conversation"]["id"] == a.id
+    g.pending[a.thread_id] = [CARD]  # without an id the open chat (B) is used
+    assert (await s.confirm(r, "i1", "yes"))["reply"] == "Already handled." and len(g.written) == 1
+
+
+async def test_confirm_with_foreign_or_unknown_conversation_id():
+    g = ThreadGraph()
+    r, other = rt(graph=g), rt(uid=2)
+    foreign = other.conversations.start("chat")
+    g.pending[foreign.thread_id] = [CARD]
+    for cid in (foreign.id + 40, 99999):
+        assert (await svc().confirm(r, "i1", "yes", cid))["reply"] == "Already handled."
+    assert g.written == []
+
+
+async def test_resume_returns_messages_and_card_and_voice_is_refused():
+    g = ThreadGraph()
+    r = rt(graph=g)
+    old = r.conversations.start("chat")
+    g.messages[old.thread_id] = [HumanMessage("q"), AIMessage("a")]
+    g.pending[old.thread_id] = [CARD]
+    r.conversations.start("chat")
+    voice = r.conversations.start("voice")
+    s = svc()
+    status, body = await s.resume_conversation(r, old.id)
+    assert status == 200 and body["conversation"]["open"] is True
+    assert body["messages"] == [{"role": "user", "text": "q"}, {"role": "assistant", "text": "a"}]
+    assert body["card"]["interrupt_id"] == "i1"
+    assert await s.resume_conversation(r, voice.id) == (409, {"error": "in_progress"})
+    assert (await s.conversation_detail(r, voice.id))[0] == 200
+    assert (await s.resume_conversation(r, 999))[0] == 404 and (await s.conversation_detail(r, 999))[0] == 404
+
+
+async def test_list_newest_first_and_scoped_to_user():
+    r, other = rt(), rt(uid=2)
+    now = [r.conversations.clock()]
+    r.conversations.clock = lambda: now[0]
+    first = r.conversations.start("chat")
+    now[0] += timedelta(minutes=1)
+    second = r.conversations.start("chat")
+    other.conversations.start("chat")
+    out = await svc().conversations(r)
+    assert [c["id"] for c in out["conversations"]] == [second.id, first.id]
+    assert len((await svc().conversations(other))["conversations"]) == 1
+
+
+def test_http_conversation_routes():
+    g = ThreadGraph()
+    r = rt(graph=g)
+    c = client(r)
+    cid = c.post("/conversations", headers=H).json()["conversation"]["id"]
+    assert [x["id"] for x in c.get("/conversations", headers=H).json()["conversations"]] == [cid]
+    assert c.get(f"/conversations/{cid}", headers=H).json()["messages"] == []
+    assert c.post(f"/conversations/{cid}/resume", headers=H).status_code == 200
+    assert c.get("/conversations/99", headers=H).status_code == 404
+    v = r.conversations.start("voice")
+    assert c.post(f"/conversations/{v.id}/resume", headers=H).status_code == 409
+    assert c.post("/chat/confirm", headers=H, json={"interrupt_id": "i", "decision": "yes", "conversation_id": 99}).json()["reply"] == "Already handled."
+
+
 # --- HTTP layer ---
 H = {"Authorization": "Bearer good"}
 
@@ -326,7 +474,8 @@ def client(r=None, built=True):
 
 def test_every_route_503_before_service_and_401_with_bad_token():
     routes = [("get", "/calendar"), ("get", "/tasks"), ("post", "/tasks"), ("post", "/tasks/x/complete"), ("get", "/mail"),
-              ("get", "/mail/x"), ("get", "/notes"), ("get", "/notes/1"), ("post", "/chat"), ("post", "/chat/confirm")]
+              ("get", "/mail/x"), ("get", "/notes"), ("get", "/notes/1"), ("post", "/chat"), ("post", "/chat/confirm"),
+              ("get", "/conversations"), ("post", "/conversations"), ("get", "/conversations/1"), ("post", "/conversations/1/resume")]
     bodies = {"/tasks": {"title": "a"}, "/chat": {"text": "a"}, "/chat/confirm": {"interrupt_id": "i", "decision": "yes"}}
     for c, code, hdr in ((client(built=False), 503, H), (client(rt()), 401, {}), (client(rt()), 401, {"Authorization": "Bearer no"})):
         for m, p in routes:
@@ -432,8 +581,9 @@ async def test_chat_uses_user_thread_and_lock(pool, uids):
     ra.graph, rb.graph = ga, gb
     await s.chat(ra, "hi")
     await s.chat(rb, "hi")
-    assert ga.inputs[0][1]["configurable"]["thread_id"] == f"user:{uids[0]}"
-    assert gb.inputs[0][1]["configurable"]["thread_id"] == f"user:{uids[1]}"
+    assert ga.inputs[0][1]["configurable"]["thread_id"] == ra.conversations.open_for("chat").thread_id
+    assert gb.inputs[0][1]["configurable"]["thread_id"] == rb.conversations.open_for("chat").thread_id
+    assert ga.inputs[0][1]["configurable"]["thread_id"] != gb.inputs[0][1]["configurable"]["thread_id"]
     assert ra.lock is s.tenants.lock(uids[0]) and ra.lock is not rb.lock
 
 
