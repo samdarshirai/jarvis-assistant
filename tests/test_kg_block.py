@@ -198,3 +198,10 @@ def test_self_notes_are_always_in_the_graph_block(store):
     b = block_for(store, "hello")
     assert "note: I prefer aisle seats" in b and "home: Pune" in b and "cello" not in b
     assert "note: plays cello" in block_for(store, "call Anna")
+
+
+async def test_provider_skips_the_block_for_the_extractor_tag(store):
+    told(store, store.create_entity("Anna"), "city", "Pune")
+    raw, _ = provider([AIMessage("ok")])
+    await ask(GraphAwareProvider(raw, store), "text Anna", config={"tags": ["proactive", "no_graph"]})
+    assert "<graph>" not in raw._models["fast"].seen[0][0].content

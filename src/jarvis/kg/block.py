@@ -82,7 +82,7 @@ def block_for(store: GraphStore, text: str) -> str:
 
 class GraphAwareProvider:
     """Adds the user's graph block to the system prompt. A failure to load it raises MemoryContextError: no request
-    proceeds without the user's own facts. The router (tag "router") never gets it."""
+    proceeds without the user's own facts. The router (tag "router") and the fact extractor (tag "no_graph") never get it."""
 
     def __init__(self, provider, store: GraphStore, clock=time.monotonic):
         self.provider, self.store, self.clock = provider, store, clock
@@ -115,7 +115,7 @@ class GraphAwareProvider:
 
         async def context(messages, config):
             messages = list(messages)
-            if "router" in (config.get("tags") or []):
+            if {"router", "no_graph"} & set(config.get("tags") or []):
                 return messages
             last = next((m.content for m in reversed(messages) if isinstance(m, HumanMessage)), "")
             block = await self._block(last if isinstance(last, str) else "")

@@ -286,3 +286,237 @@ def test_suppressed_name_in_subject_or_value_is_dropped(kg, cs):
 def test_duplicates_inside_one_batch_collapse(kg, cs):
     kept, dropped = keep(kg, cs, cand_row(), cand_row(value="pune"), cand_row(value="Goa"))
     assert [k["value"] for k in kept] == ["Pune", "Goa"] and dropped == 1
+
+
+# ---- the job ----
+
+import json  # noqa: E402
+import logging  # noqa: E402
+
+from jarvis.kg.candidates import MAX_ATTEMPTS  # noqa: E402
+from jarvis.proactive.extract import MAX_PER_TICK, run_once  # noqa: E402
+from tests.fakes import MemoryAudit  # noqa: E402
+
+PUNE = json.dumps([{"subject": "Anna", "subject_kind": "person", "relation": "sister", "predicate": "city",
+                    "value": "Pune", "quote": "my sister Anna lives in Pune"}])
+
+
+class Llm:
+    """The WatchedLLM shape: get(tier) and .issue. Replies are strings, or exceptions to raise."""
+
+    def __init__(self, *replies):
+        self.replies, self.seen, self.issue = list(replies), [], None
+
+    def get(self, tier):
+        assert tier == "fast"
+        return self
+
+    async def ainvoke(self, messages, config=None):
+        self.seen.append((messages, config))
+        r = self.replies.pop(0)
+        if isinstance(r, Exception):
+            raise r
+        return AIMessage(r)
+
+
+class ThreadGraph:
+    def __init__(self, threads, on_read=None):
+        self.threads, self.on_read = threads, on_read
+
+    async def aget_state(self, cfg):
+        t = cfg["configurable"]["thread_id"]
+        if self.on_read:
+            self.on_read(t)
+        return SimpleNamespace(values={"messages": self.threads.get(t, [])})
+
+
+def make_conv(pool, uid, thread, *, ago=timedelta(hours=1), closed=True, last_at=None, surface="chat"):
+    last_at = last_at or NOW - ago
+    with pool.connection() as c:
+        return c.execute(
+            "INSERT INTO conversation (user_id, channel, surface, thread_id, created_at, last_at, closed_at)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            (uid, surface, surface, thread, last_at, last_at, last_at if closed else None)).fetchone()[0]
+
+
+def rt_for(pool, uid, threads, **over):
+    kg = GraphStore(pool, uid, secret=SECRET)
+    return SimpleNamespace(user=SimpleNamespace(id=uid), kg=kg, graph=ThreadGraph(threads), audit=MemoryAudit(),
+                           tz="Europe/Berlin", **over)
+
+
+def rows(pool, sql="SELECT conversation_id, subject_name, predicate, value, quote, status FROM fact_candidate ORDER BY id", *a):
+    with pool.connection() as c:
+        return c.execute(sql, a).fetchall()
+
+
+def conv_state(pool, cid):
+    return rows(pool, "SELECT extracted_at, extract_attempts FROM conversation WHERE id = %s", cid)[0]
+
+
+def test_a_stated_fact_becomes_a_candidate_with_the_users_own_words(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
+    msgs = [HumanMessage("my sister Anna lives in Pune"), AIMessage("Noted. By the way Dev works at Acme."),
+            ToolMessage("Priya's birthday is 3 May", tool_call_id="1")]
+    rt, llm = rt_for(pool, uids[0], {"t1": msgs}), Llm(PUNE)
+    asyncio.run(run_once(rt, llm, NOW))
+    assert rows(pool) == [(cid, "Anna", "city", "Pune", "my sister Anna lives in Pune", "new")]
+    assert conv_state(pool, cid)[0] is not None
+    sent = " ".join(m.content for m in llm.seen[0][0])
+    assert "my sister Anna lives in Pune" in sent and "Dev" not in sent and "Priya" not in sent  # only the user's words
+    assert llm.seen[0][1]["tags"] == ["proactive", "no_graph"]
+    assert rt.audit.records == [{"kind": "proactive", "name": "extract", "result": {"candidates": 1, "dropped": 0}}]
+
+
+def test_a_request_yields_no_candidate_but_the_conversation_is_done(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
+    llm = Llm("[]")
+    asyncio.run(run_once(rt_for(pool, uids[0], {"t1": [HumanMessage("set an alarm for 6")]}), llm, NOW))
+    assert rows(pool) == [] and conv_state(pool, cid)[0] is not None and len(llm.seen) == 1
+
+
+def test_a_conversation_without_user_text_is_marked_without_calling_the_model(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
+    llm = Llm()
+    asyncio.run(run_once(rt_for(pool, uids[0], {"t1": [AIMessage("hello"), HumanMessage("x" * 1500)]}), llm, NOW))
+    assert llm.seen == [] and conv_state(pool, cid)[0] is not None
+
+
+def test_each_conversation_is_read_once(pool, uids):
+    make_conv(pool, uids[0], "t1")
+    rt, llm = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]}), Llm(PUNE, PUNE)
+    asyncio.run(run_once(rt, llm, NOW))
+    asyncio.run(run_once(rt, llm, NOW + timedelta(minutes=5)))
+    assert len(llm.seen) == 1 and len(rows(pool)) == 1
+
+
+def test_a_conversation_still_going_is_not_read_but_an_idle_open_one_is(pool, uids):
+    live = make_conv(pool, uids[0], "live", closed=False, ago=timedelta(minutes=5))
+    idle = make_conv(pool, uids[0], "idle", closed=False, ago=timedelta(minutes=45), surface="telegram")
+    llm = Llm("[]")
+    asyncio.run(run_once(rt_for(pool, uids[0], {"live": [HumanMessage("a")], "idle": [HumanMessage("b")]}), llm, NOW))
+    assert conv_state(pool, live)[0] is None and conv_state(pool, idle)[0] is not None and len(llm.seen) == 1
+
+
+def test_no_key_no_graph_no_kg_do_nothing(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
+    rt = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]})
+    asyncio.run(run_once(rt, None, NOW))
+    asyncio.run(run_once(SimpleNamespace(**{**vars(rt), "graph": None}), Llm(PUNE), NOW))
+    asyncio.run(run_once(SimpleNamespace(**{**vars(rt), "kg": None}), Llm(PUNE), NOW))
+    assert conv_state(pool, cid) == (None, 0) and rows(pool) == []
+
+
+def test_a_failing_model_is_retried_and_given_up_on_after_three_attempts(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
+    rt = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]})
+    for n in range(1, MAX_ATTEMPTS):
+        asyncio.run(run_once(rt, Llm(TimeoutError()), NOW))
+        assert conv_state(pool, cid) == (None, n)
+    asyncio.run(run_once(rt, Llm(TimeoutError()), NOW))
+    assert conv_state(pool, cid)[0] is not None and rows(pool) == []
+    llm = Llm(PUNE)
+    asyncio.run(run_once(rt, llm, NOW))
+    assert llm.seen == []  # given up: never read again
+
+
+def test_unparseable_output_counts_as_a_failed_attempt(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
+    rt = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]})
+    asyncio.run(run_once(rt, Llm("Sorry, I cannot do that."), NOW))
+    assert conv_state(pool, cid) == (None, 1) and rows(pool) == []
+    asyncio.run(run_once(rt, Llm(PUNE), NOW))  # the next run reads it again
+    assert len(rows(pool)) == 1
+
+
+def test_a_rejected_key_does_not_burn_attempts_and_stops_the_run(pool, uids):
+    a, b = make_conv(pool, uids[0], "a", ago=timedelta(hours=2)), make_conv(pool, uids[0], "b")
+    rt = rt_for(pool, uids[0], {"a": [HumanMessage("my sister Anna lives in Pune")], "b": [HumanMessage("hi there")]})
+
+    class Rejected(Llm):
+        async def ainvoke(self, messages, config=None):
+            self.issue = "rejected_key"
+            raise RuntimeError("401")
+
+    llm = Rejected()
+    asyncio.run(run_once(rt, llm, NOW))
+    assert conv_state(pool, a) == (None, 0) and conv_state(pool, b) == (None, 0) and len(llm.seen) == 0
+
+
+def test_one_failing_conversation_does_not_stop_the_next(pool, uids):
+    a, b = make_conv(pool, uids[0], "a", ago=timedelta(hours=2)), make_conv(pool, uids[0], "b")
+    rt = rt_for(pool, uids[0], {"a": [HumanMessage("first")], "b": [HumanMessage("my sister Anna lives in Pune")]})
+    asyncio.run(run_once(rt, Llm(RuntimeError("boom"), PUNE), NOW))
+    assert conv_state(pool, a) == (None, 1) and conv_state(pool, b)[0] is not None and len(rows(pool)) == 1
+
+
+def test_a_conversation_extended_while_the_model_ran_is_left_for_later(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
+
+    def resumed(_thread):  # the user resumes the conversation and says more after it was read
+        with pool.connection() as c:
+            c.execute("UPDATE conversation SET last_at = %s WHERE id = %s", (NOW, cid))
+
+    rt = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]})
+    rt.graph.on_read = resumed
+    asyncio.run(run_once(rt, Llm(PUNE), NOW))
+    assert rows(pool) == [] and conv_state(pool, cid) == (None, 0)
+
+
+def test_at_most_five_conversations_per_run(pool, uids):
+    ids = [make_conv(pool, uids[0], f"t{i}", ago=timedelta(hours=10 - i)) for i in range(MAX_PER_TICK + 2)]
+    llm = Llm(*["[]"] * 10)
+    asyncio.run(run_once(rt_for(pool, uids[0], {f"t{i}": [HumanMessage("hello there")] for i in range(7)}), llm, NOW))
+    assert len(llm.seen) == MAX_PER_TICK
+    assert [conv_state(pool, i)[0] is not None for i in ids] == [True] * MAX_PER_TICK + [False] * 2
+
+
+def test_the_hook_hears_about_stored_candidates_only(pool, uids):
+    a, b = make_conv(pool, uids[0], "a", ago=timedelta(hours=2)), make_conv(pool, uids[0], "b")
+    rt = rt_for(pool, uids[0], {"a": [HumanMessage("my sister Anna lives in Pune")], "b": [HumanMessage("set an alarm")]})
+    heard = []
+
+    async def hook(conv_id, count):
+        heard.append((conv_id, count))
+
+    asyncio.run(run_once(rt, Llm(PUNE, "[]"), NOW, on_candidates=hook))
+    assert heard == [(a, 1)]
+
+
+def test_a_failing_hook_or_audit_never_raises(pool, uids, caplog):
+    make_conv(pool, uids[0], "t1")
+    rt = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]})
+
+    def bad(conv_id, count):
+        raise RuntimeError("push failed for Anna in Pune")
+
+    asyncio.run(run_once(rt, Llm(PUNE), NOW, on_candidates=bad))
+    assert len(rows(pool)) == 1 and "Pune" not in caplog.text
+
+
+def test_logs_never_contain_what_the_user_said(pool, uids, caplog):
+    make_conv(pool, uids[0], "t1")
+    rt = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]})
+    with caplog.at_level(logging.DEBUG):
+        asyncio.run(run_once(rt, Llm(RuntimeError("echo: my sister Anna lives in Pune")), NOW))
+        asyncio.run(run_once(rt, Llm("garbage with Anna in Pune"), NOW))
+    assert "Anna" not in caplog.text and "Pune" not in caplog.text and "RuntimeError" in caplog.text
+
+
+def test_existing_facts_and_dismissed_candidates_are_not_proposed_again(pool, uids):
+    make_conv(pool, uids[0], "t1")
+    rt = rt_for(pool, uids[0], {"t1": [HumanMessage("my sister Anna lives in Pune")]})
+    rt.kg.add_fact(rt.kg.create_entity("Anna").id, "city", "Pune", source_kind="user_stated")
+    asyncio.run(run_once(rt, Llm(PUNE), NOW))
+    assert rows(pool) == []
+
+
+def test_users_are_isolated(pool, uids):
+    make_conv(pool, uids[0], "a-thread")
+    make_conv(pool, uids[1], "b-thread")
+    shared = {"a-thread": [HumanMessage("my sister Anna lives in Pune")], "b-thread": [HumanMessage("set an alarm")]}
+    asyncio.run(run_once(rt_for(pool, uids[0], shared), Llm(PUNE), NOW))
+    assert rows(pool, "SELECT user_id FROM fact_candidate") == [(uids[0],)]
+    assert rows(pool, "SELECT extracted_at IS NOT NULL FROM conversation WHERE user_id = %s", uids[1]) == [(False,)]
+    asyncio.run(run_once(rt_for(pool, uids[1], shared), Llm("[]"), NOW))
+    assert rows(pool, "SELECT user_id FROM fact_candidate") == [(uids[0],)]

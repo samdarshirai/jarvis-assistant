@@ -424,3 +424,37 @@ async def test_a_hung_user_is_cut_off_and_the_next_user_still_runs(monkeypatch, 
     assert seen == [2]
     assert "TimeoutError" in caplog.text and "user 1" in caplog.text
     assert hung.audit.records == []
+
+
+def test_extract_job_is_registered_only_when_enabled():
+    jobs = {**JOBS, "extract": AsyncMock()}
+    assert "extract" not in {j.id for j in build_scheduler(settings(), jobs).get_jobs()}
+    on = {j.id: j for j in build_scheduler(settings(extract_enabled=True, extract_poll_minutes=7), jobs).get_jobs()}
+    assert set(on) == {"brief", "mail", "sweep", "extract"} and on["extract"].trigger.interval == timedelta(minutes=7)
+
+
+async def test_extract_runs_for_users_without_google_other_jobs_do_not():
+    from jarvis.proactive.scheduler import google_gate
+    rt = runtime(user(1))
+    ran = []
+
+    async def job(rt, notifier, llm, tz, now):
+        ran.append(rt.user.id)
+
+    never = lambda uid: False  # noqa: E731
+    for name, expected in (("extract", [1]), ("mail", [])):
+        ran.clear()
+        await run_for_users(name, job, FakeUsers([rt.user]), FakeTenants({1: rt}), google_gate(name, never), lambda u: FakeNotifier(), now=WED)
+        assert ran == expected
+
+
+async def test_the_extract_job_calls_the_extractor_with_the_users_llm(monkeypatch):
+    seen = []
+
+    async def fake(rt, llm, now, on_candidates=None):
+        seen.append((rt.user.id, llm, now))
+
+    monkeypatch.setattr("jarvis.proactive.scheduler.run_extract", fake)
+    rt = runtime(user(1), llm=None)
+    await per_user_jobs(settings())["extract"](rt, FakeNotifier(), None, "Europe/Berlin", WED)
+    assert seen == [(1, None, WED)]

@@ -13,6 +13,7 @@ from jarvis.google.auth import PROVIDER, PgTokenStore, ReauthRequired
 from jarvis.llm_check import _code as llm_error_code
 from jarvis.proactive.alerts import sweep
 from jarvis.proactive.brief import run_brief
+from jarvis.proactive.extract import run_once as run_extract
 from jarvis.proactive.mailwatch import MailWatch
 from jarvis.proactive.notify import make_notifier
 
@@ -20,6 +21,7 @@ log = logging.getLogger(__name__)
 # ponytail: mail watch auto-creates calendar events, and the app has no Undo for them yet (Undo is a Telegram button,
 # the owner's only), so it runs for the owner only; set True once the app can undo an auto-added event.
 FRIEND_MAIL_WATCH = False
+NO_GOOGLE = frozenset({"extract"})  # jobs that read nothing from Google, so they also run for users who never connected it
 USER_DEADLINE = 120.0  # seconds one user's run of one job may take
 REAUTH_TEXT = "Jarvis needs Google access again. Open the app and sign in."
 ISSUE_TEXT = {
@@ -122,7 +124,10 @@ def per_user_jobs(s) -> dict:
                         weather_city=await state("weather_city") or (s.weather_city if rt.user.is_owner else ""),
                         location=lambda: weather.load_coords(rt.proactive))
 
-    return {"brief": brief, "mail": mail, "sweep": alerts}
+    async def extract(rt, notifier, llm, tz, now):
+        await run_extract(rt, llm, now)
+
+    return {"brief": brief, "mail": mail, "sweep": alerts, "extract": extract}
 
 
 def build_scheduler(s, jobs: dict) -> AsyncIOScheduler:
@@ -133,7 +138,13 @@ def build_scheduler(s, jobs: dict) -> AsyncIOScheduler:
         sched.add_job(jobs["brief"], IntervalTrigger(minutes=5), id="brief", **common)
     sched.add_job(jobs["mail"], IntervalTrigger(minutes=s.mail_poll_minutes), id="mail", **common)
     sched.add_job(jobs["sweep"], IntervalTrigger(minutes=5), id="sweep", **common)
+    if s.extract_enabled:
+        sched.add_job(jobs["extract"], IntervalTrigger(minutes=s.extract_poll_minutes), id="extract", **common)
     return sched
+
+
+def google_gate(name: str, has_google):
+    return (lambda user_id: True) if name in NO_GOOGLE else has_google
 
 
 def start_proactive(s, tenants, users, bot, devices) -> AsyncIOScheduler:
@@ -145,7 +156,7 @@ def start_proactive(s, tenants, users, bot, devices) -> AsyncIOScheduler:
 
     def each(name, job):
         async def run():
-            await run_for_users(name, job, users, tenants, has_google, notifier_for)
+            await run_for_users(name, job, users, tenants, google_gate(name, has_google), notifier_for)
         return run
 
     sched = build_scheduler(s, {name: each(name, job) for name, job in per_user_jobs(s).items()})

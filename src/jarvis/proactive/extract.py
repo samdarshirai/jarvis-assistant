@@ -4,21 +4,27 @@ worth remembering, and stores them as candidates for the user to review. Nothing
 Trust boundary: only human messages from the checkpoint are read (never assistant, tool, email or web text). The model's
 answer is untrusted: the predicate, kind, lengths and the quote are all checked here, and a candidate never becomes a
 fact without the user's tap (project 4)."""
+import asyncio
+import inspect
 import json
+import logging
 import re
-from datetime import date
+from datetime import date, datetime
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from jarvis.kg.candidates import CandidateStore
 from jarvis.kg.facts import norm
 from jarvis.kg.predicates import KINDS, PREDICATES, SINGLE
 
 MAX_TEXT = 1000  # a longer message is most likely pasted text
 MAX_MESSAGES, MAX_CHARS = 100, 20_000  # cost cap: the newest messages that fit
 MAX_CANDIDATES = 10
+MAX_PER_TICK = 5  # conversations per user per run: the run shares the scheduler's per-user deadline
 MIN_QUOTE, MAX_QUOTE = 8, 300
 MAX_SUBJECT, MAX_VALUE, MAX_RELATION = 100, 200, 50  # the limits of the remember_fact tools
 SELF_WORDS = frozenset({"me", "i", "self", "myself"})
+log = logging.getLogger(__name__)
 _CLOSING_TAG = re.compile(r"</\s*user_messages", re.IGNORECASE)
 
 SYSTEM = (
@@ -142,3 +148,52 @@ def _known_entity(kg, subject: str):
         return kg.self_entity()
     found = kg.find_by_name(subject)
     return found[0] if len(found) == 1 else None
+
+
+class BadOutput(Exception):
+    """The model's answer held no JSON array: counts as a failed run."""
+
+
+async def _read(rt, llm, cands: CandidateStore, due, now: datetime) -> tuple[int, int] | None:
+    """One conversation: (candidates stored, dropped), or None when the conversation moved on and was left for later."""
+    texts = await human_texts(rt.graph, due.thread_id)
+    rows, dropped = [], 0
+    if texts:
+        msg = await llm.get("fast").ainvoke(
+            build_prompt(texts, now.date(), rt.tz), config={"tags": ["proactive", "no_graph"], "run_name": "fact_extract"})
+        items = parse(msg.content)
+        if items is None:
+            raise BadOutput
+        rows, dropped = validate(items, texts)
+        rows, filtered = await asyncio.to_thread(filter_candidates, rt.kg, cands, rows)
+        dropped += filtered
+        rows = [{**r, "conversation_id": due.id} for r in rows]
+    if not await asyncio.to_thread(cands.save, due.id, due.last_at, rows, now):
+        return None
+    return len(rows), dropped
+
+
+async def run_once(rt, llm, now: datetime, on_candidates=None) -> None:
+    """Read every ended, unread conversation of this user (at most MAX_PER_TICK) and store its candidates. Skips
+    silently without the user's own LLM key. `on_candidates(conversation_id, count)` is called after candidates were
+    stored: the hook for project 4's notification."""
+    if llm is None or getattr(rt, "graph", None) is None or getattr(rt, "kg", None) is None:
+        return
+    cands = CandidateStore(rt.kg.pool, rt.user.id)
+    for due in await asyncio.to_thread(cands.due, now, MAX_PER_TICK):
+        try:
+            done = await _read(rt, llm, cands, due, now)
+        except Exception as e:  # the type only: the message may hold what the user said
+            log.error("fact extraction failed: %s", type(e).__name__)
+            if getattr(llm, "issue", None):  # a rejected key or empty account is not this conversation's fault
+                return
+            await asyncio.to_thread(cands.fail, due.id, now)
+            continue
+        if done is None or not done[0]:
+            continue
+        try:
+            await asyncio.to_thread(rt.audit.record, "proactive", "extract", result={"candidates": done[0], "dropped": done[1]})
+            if on_candidates is not None and inspect.isawaitable(hooked := on_candidates(due.id, done[0])):
+                await hooked
+        except Exception as e:
+            log.error("fact extraction follow-up failed: %s", type(e).__name__)
