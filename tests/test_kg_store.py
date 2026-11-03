@@ -116,3 +116,71 @@ def test_concurrent_add_key_flags_both(pool, uids):
                 f.result()
         with pool.connection() as c:
             assert [r[0] for r in c.execute("SELECT shared FROM entity_key WHERE value_norm = %s", (val,))] == [True, True]
+
+
+def _stmt(name, relation=None, facts=(), entity_id=None, kind="person"):
+    return {"entity_id": entity_id, "name": name, "kind": kind, "relation": relation, "facts": list(facts)}
+
+
+def _vals(store, ent, pred):
+    return [f.value for f in store.facts_for(ent.id) if f.predicate == pred]
+
+
+def test_add_statements_creates_entity_relation_and_facts(store):
+    (r,) = store.add_statements([_stmt("Anna", "wife", [("occupation", "teacher"), ("city", "Pune")])])
+    assert r["created"] is True and r["entity"].display_name == "Anna"
+    (e,) = store.find_by_name("Anna")
+    assert [x.id for x in store.find_by_name("wife")] == [e.id]
+    assert _vals(store, e, "relation_to_user") == ["wife"]
+    assert _vals(store, e, "occupation") == ["teacher"] and _vals(store, e, "city") == ["Pune"]
+    assert {f.source_kind for f in store.facts_for(e.id)} == {"user_stated"}
+    assert len(r["facts"]) == 2
+
+
+def test_add_statements_rolls_back_new_entity_on_failure(store):
+    with pytest.raises(ValueError):
+        store.add_statements([_stmt("Anna", "wife", [("city", "Pune")]), _stmt("Bob", None, [("bogus", "x")])])
+    assert store.find_by_name("Anna") == [] and store.find_by_name("Bob") == []
+    assert [e.kind for e in store.list_entities()] in ([], ["self"])
+
+
+def test_add_statements_blank_value_rolls_back_and_spares_existing(store):
+    old = store.create_entity("Raj")
+    with pytest.raises(ValueError):
+        store.add_statements([_stmt("Anna", None, [("city", "Pune")]),
+                              _stmt("Raj", None, [("city", "Delhi"), ("employer", "   ")], entity_id=old.id)])
+    assert store.find_by_name("Anna") == [] and store.facts_for(old.id) == []
+
+
+def test_store_failure_midway_rolls_back(store, monkeypatch):
+    real, calls = GraphStore._add, []
+
+    def flaky(self, *a, **k):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("db down")
+        return real(self, *a, **k)
+    monkeypatch.setattr(GraphStore, "_add", flaky)
+    with pytest.raises(RuntimeError):
+        store.add_statements([_stmt("Anna", "wife", [("city", "Pune")])])
+    assert store.find_by_name("Anna") == []
+
+
+def test_same_new_name_twice_creates_one_entity(store):
+    store.add_statements([_stmt("Anna", "wife", [("city", "Pune")]), _stmt("anna", None, [("occupation", "teacher")])])
+    (e,) = store.find_by_name("Anna")
+    assert _vals(store, e, "city") == ["Pune"] and _vals(store, e, "occupation") == ["teacher"]
+    assert _vals(store, e, "relation_to_user") == ["wife"]
+
+
+def test_existing_entity_gets_relation_only_once(store):
+    e = store.create_entity("Anna")
+    store.add_statements([_stmt("Anna", "wife", [], entity_id=e.id)])
+    store.add_statements([_stmt("Anna", "wife", [("city", "Pune")], entity_id=e.id)])
+    assert _vals(store, e, "relation_to_user") == ["wife"]
+
+
+def test_version_bumps_on_success(store):
+    v = store.version
+    store.add_statements([_stmt("Anna", None, [("city", "Pune")])])
+    assert store.version > v

@@ -1,9 +1,11 @@
 import re
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from jarvis.kg import forget
-from jarvis.kg.facts import Fact, FactsMixin, norm  # noqa: F401  (Fact re-exported for callers)
-from jarvis.kg.predicates import KINDS
+from jarvis.kg.facts import Fact, FactsMixin, _clean, norm  # noqa: F401  (Fact re-exported for callers)
+from jarvis.kg.predicates import KINDS, PREDICATES
 
 KEY_TYPES = ("email", "phone", "google_contact_id", "alias", "name")
 ORIGINS = ("user", "extracted")
@@ -46,6 +48,11 @@ class GraphStore(FactsMixin):
 
     def create_entity(self, name: str, kind: str = "person", aliases: tuple[str, ...] = (), *,
                       origin: str = "user") -> Entity:
+        with self.pool.connection() as conn:
+            return self._create_entity(conn, name, kind, aliases, origin)
+
+    def _create_entity(self, conn, name: str, kind: str, aliases: tuple[str, ...], origin: str) -> Entity:
+        """create_entity in the caller's transaction."""
         full = norm(name)
         if not full:
             raise ValueError("Entity name is blank.")
@@ -56,19 +63,57 @@ class GraphStore(FactsMixin):
         keys = {("name", full), *(("name", t) for t in full.split())}
         keys |= {("alias", a) for a in map(norm, aliases) if a}
         named = [full, *(v for t, v in keys if t == "alias")]
-        with self.pool.connection() as conn:
-            if origin == "extracted":
-                if self._suppressed(conn, "name", named):
-                    raise Suppressed("name")
-            elif self.secret:  # the user's own statement brings the name back
-                conn.execute("DELETE FROM suppression WHERE user_id = %s AND kind = 'name' AND key_hmac = ANY(%s)",
-                             (self.user_id, forget.hmacs(self, conn, named)))
-            r = conn.execute("INSERT INTO entity (user_id, kind, display_name) VALUES (%s, %s, %s)"
-                             " RETURNING id, kind, display_name", (self.user_id, kind, " ".join(name.split()))).fetchone()
-            for t, v in keys:
-                conn.execute("INSERT INTO entity_key (user_id, entity_id, type, value_norm) VALUES (%s, %s, %s, %s)"
-                             " ON CONFLICT DO NOTHING", (self.user_id, r[0], t, v))
+        if origin == "extracted":
+            if self._suppressed(conn, "name", named):
+                raise Suppressed("name")
+        elif self.secret:  # the user's own statement brings the name back
+            conn.execute("DELETE FROM suppression WHERE user_id = %s AND kind = 'name' AND key_hmac = ANY(%s)",
+                         (self.user_id, forget.hmacs(self, conn, named)))
+        r = conn.execute("INSERT INTO entity (user_id, kind, display_name) VALUES (%s, %s, %s)"
+                         " RETURNING id, kind, display_name", (self.user_id, kind, " ".join(name.split()))).fetchone()
+        for t, v in keys:
+            conn.execute("INSERT INTO entity_key (user_id, entity_id, type, value_norm) VALUES (%s, %s, %s, %s)"
+                         " ON CONFLICT DO NOTHING", (self.user_id, r[0], t, v))
         return _ent(r)
+
+    def add_statements(self, statements: list[dict]) -> list[dict]:
+        """Save several user statements in ONE transaction: new entities, their relation to the user, and facts.
+        Each statement is {entity_id (None = create from name/kind), name, kind, relation, facts: [(predicate, value)]}.
+        Any failure rolls everything back, new entities included. Returns one {entity, created, facts} per statement."""
+        def go(conn):
+            made: dict[str, Entity] = {}  # new entities of this call, so a repeated name reuses them
+            out = []
+            for st in statements:
+                created, relation = False, st.get("relation")
+                if st["entity_id"] is not None:
+                    ent = Entity(st["entity_id"], st.get("kind", "person"), st["name"])
+                elif norm(st["name"]) in made:
+                    ent = made[norm(st["name"])]
+                else:
+                    ent = self._create_entity(conn, st["name"], st.get("kind", "person"),
+                                              (relation,) if relation else (), "user")
+                    made[norm(st["name"])] = ent
+                    created = True
+                saved = []
+                pairs = list(st["facts"])
+                if relation and not conn.execute(
+                        "SELECT 1 FROM fact WHERE user_id = %s AND subject_id = %s AND predicate = 'relation_to_user'"
+                        " AND status = 'active'", (self.user_id, ent.id)).fetchone():
+                    pairs.insert(0, ("relation_to_user", relation))
+                    rel_only = True
+                else:
+                    rel_only = False
+                for i, (predicate, value) in enumerate(pairs):
+                    if predicate not in PREDICATES:
+                        raise ValueError(f"Unknown predicate: {predicate!r}.")
+                    value = _clean(value)
+                    f = self._add(conn, ent.id, predicate, value, "user_stated", f"user:{uuid.uuid4()}",
+                                  self._redact(conn, value[:200]), datetime.now(timezone.utc))
+                    if not (rel_only and i == 0):  # the relation is bookkeeping, not a stated fact
+                        saved.append(f)
+                out.append({"entity": ent, "created": created, "facts": saved})
+            return out
+        return self._write(go)
 
     def find_by_name(self, name: str, kind: str | None = None) -> list[Entity]:
         q = norm(name)
