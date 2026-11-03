@@ -59,7 +59,8 @@ def test_conversation_closed_on_every_exit():
             settle(c)
         wait_until(c, lambda: len(voice_rows(h)) == 3 and all(h.rt.conversations.get(r.id).closed_at for r in voice_rows(h)))
         rows = voice_rows(h)
-        assert len(rows) == 3 and all(h.rt.conversations.get(r.id).closed_at for r in rows)
+        states = [(r.id, bool(h.rt.conversations.get(r.id).closed_at)) for r in rows]
+        assert len(rows) == 3 and all(ok for _, ok in states), states
 
 
 def test_replaced_session_does_not_close_newer_conversation():

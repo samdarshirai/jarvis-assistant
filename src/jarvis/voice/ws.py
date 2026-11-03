@@ -441,7 +441,8 @@ class VoiceService:
             if self.sessions.get(device.device_id) is session:
                 del self.sessions[device.device_id]
             with contextlib.suppress(Exception):  # idempotent, and only this connection's own id
-                await asyncio.to_thread(rt.conversations.close, conv.id)
+                # shielded: cancelling this handler must not cancel a thread job that has not started yet (the close would be lost)
+                await asyncio.shield(asyncio.to_thread(rt.conversations.close, conv.id))
             with contextlib.suppress(Exception):
                 await ws.close()
 
