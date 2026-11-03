@@ -132,3 +132,99 @@ def test_check_constraints_reject_bad_values(pool, uids):
     with pool.connection() as c:
         with pytest.raises(psycopg.errors.CheckViolation):
             c.execute("INSERT INTO entity (user_id, kind, display_name) VALUES (%s, 'alien', 'x')", (uids[0],))
+
+
+def conv(c, uid, thread="t1"):
+    return c.execute("INSERT INTO conversation (user_id, channel, surface, thread_id, closed_at)"
+                     " VALUES (%s, 'chat', 'chat', %s, now())"
+                     " RETURNING id", (uid, thread)).fetchone()[0]
+
+
+def cand(c, uid, conv_id, **kw):
+    row = {"subject_name": "Anna", "subject_kind": "person", "predicate": "city", "value": "Pune",
+           "quote": "Anna lives in Pune", "subject_norm": "anna", "value_norm": "pune", **kw}
+    cols = ", ".join(row)
+    return c.execute(f"INSERT INTO fact_candidate (user_id, conversation_id, {cols})"
+                     f" VALUES (%s, %s, {', '.join(['%s'] * len(row))}) RETURNING id", (uid, conv_id, *row.values())).fetchone()[0]
+
+
+def test_candidate_defaults_and_cascade_from_conversation(pool, uids):
+    with pool.connection() as c:
+        cv = conv(c, uids[0])
+        cid = cand(c, uids[0], cv)
+        assert c.execute("SELECT status, decided_at FROM fact_candidate WHERE id = %s", (cid,)).fetchone() == ("new", None)
+        c.execute("DELETE FROM conversation WHERE id = %s", (cv,))
+        assert c.execute("SELECT count(*) FROM fact_candidate").fetchone()[0] == 0
+
+
+def test_candidate_cascades_from_user(pool, uids):
+    with pool.connection() as c:
+        cand(c, uids[1], conv(c, uids[1]))
+        c.execute("DELETE FROM users WHERE id = %s", (uids[1],))
+        assert c.execute("SELECT count(*) FROM fact_candidate").fetchone()[0] == 0
+
+
+def test_candidate_cannot_point_at_another_users_conversation(pool, uids):
+    with pool.connection() as c:
+        cv = conv(c, uids[0])
+        with pytest.raises(ForeignKeyViolation):
+            cand(c, uids[1], cv)
+
+
+def test_candidate_rejects_bad_status_and_kind(pool, uids):
+    with pool.connection() as c:
+        cv = conv(c, uids[0])
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cand(c, uids[0], cv, status="maybe")
+    with pool.connection() as c:
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cand(c, uids[0], conv(c, uids[0], "t2"), subject_kind="alien")
+
+
+def test_deleting_the_replaced_fact_keeps_the_candidate(pool, uids):
+    with pool.connection() as c:
+        e = ent(c, uids[0])
+        f = fact(c, uids[0], e)
+        cid = cand(c, uids[0], conv(c, uids[0]), replaces_fact_id=f)
+        c.execute("DELETE FROM fact WHERE id = %s", (f,))
+        assert c.execute("SELECT replaces_fact_id FROM fact_candidate WHERE id = %s", (cid,)).fetchone() == (None,)
+
+
+def test_candidate_cannot_replace_another_users_fact(pool, uids):
+    with pool.connection() as c:
+        f = fact(c, uids[0], ent(c, uids[0]))
+        with pytest.raises(ForeignKeyViolation):
+            cand(c, uids[1], conv(c, uids[1]), replaces_fact_id=f)
+
+
+@pytest.fixture
+def scratch(pool):
+    import os
+    from psycopg_pool import ConnectionPool
+
+    with pool.connection() as c:
+        c.execute("DROP SCHEMA IF EXISTS scratch CASCADE")
+        c.execute("CREATE SCHEMA scratch")
+    p = ConnectionPool(os.environ["TEST_DATABASE_URL"], kwargs={"options": "-c search_path=scratch"}, open=True)
+    yield p
+    p.close()
+    with pool.connection() as c:
+        c.execute("DROP SCHEMA scratch CASCADE")
+
+
+def test_migration_marks_existing_conversations_extracted_once(scratch):
+    """A database from before the extractor: its conversations must not be bulk-extracted (spec non-goal)."""
+    init_schema(scratch)
+    with scratch.connection() as c:
+        uid = c.execute("INSERT INTO users (email, tz) VALUES ('o@example.com', 'UTC') RETURNING id").fetchone()[0]
+        c.execute("ALTER TABLE conversation DROP COLUMN extracted_at, DROP COLUMN extract_attempts")
+        old = conv(c, uid, "old")
+    init_schema(scratch)
+    with scratch.connection() as c:
+        got = c.execute("SELECT extracted_at, extract_attempts FROM conversation WHERE id = %s", (old,)).fetchone()
+        assert got[0] is not None and got[1] == 0
+        fresh = conv(c, uid, "fresh")
+        assert c.execute("SELECT extracted_at FROM conversation WHERE id = %s", (fresh,)).fetchone() == (None,)
+    init_schema(scratch)  # a re-run must not touch rows
+    with scratch.connection() as c:
+        assert c.execute("SELECT extracted_at FROM conversation WHERE id = %s", (fresh,)).fetchone() == (None,)

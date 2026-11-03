@@ -178,3 +178,25 @@ def test_messages_json_keeps_last_200():
 
     out = asyncio.run(messages_json(G(), "t"))
     assert len(out) == 200 and out[0]["text"] == "m50" and out[-1]["text"] == "m249"
+
+
+def test_legacy_import_is_marked_extracted(scratch, uids, clock):
+    uid = uids[0]
+    with scratch.connection() as c:
+        c.execute("CREATE TABLE checkpoints (thread_id TEXT NOT NULL, checkpoint_id TEXT NOT NULL)")
+        c.execute("INSERT INTO checkpoints VALUES (%s, 'c1')", (f"user:{uid}",))
+    ConversationStore(scratch, uid, clock).list()
+    with scratch.connection() as c:  # the untrimmed pre-conversations thread is never bulk-extracted
+        assert c.execute("SELECT extracted_at FROM conversation WHERE user_id = %s", (uid,)).fetchone()[0] is not None
+
+
+def test_resume_clears_extraction_state(pool, uids, clock):
+    s = ConversationStore(pool, uids[0], clock)
+    old = s.current("chat")
+    s.close(old.id)
+    with pool.connection() as c:
+        c.execute("UPDATE conversation SET extracted_at = now(), extract_attempts = 2 WHERE id = %s", (old.id,))
+    s.start("chat")
+    assert s.resume(old.id, "chat").id == old.id
+    with pool.connection() as c:
+        assert c.execute("SELECT extracted_at, extract_attempts FROM conversation WHERE id = %s", (old.id,)).fetchone() == (None, 0)

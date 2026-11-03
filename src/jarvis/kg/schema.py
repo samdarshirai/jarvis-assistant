@@ -82,4 +82,28 @@ CREATE TABLE IF NOT EXISTS suppression (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, key_type, key_hmac)
 );
+-- Facts the extractor noticed in a conversation, waiting for the user's decision (never in the graph itself).
+-- subject_norm / value_norm are kg.facts.norm of subject_name / value: the keys for "already proposed or dismissed".
+CREATE TABLE IF NOT EXISTS fact_candidate (
+  id SERIAL PRIMARY KEY,
+  {USER_REF},
+  conversation_id INTEGER NOT NULL,
+  subject_name TEXT NOT NULL,
+  subject_kind TEXT NOT NULL CHECK (subject_kind IN ({_KINDS_IN})),
+  relation TEXT,
+  predicate TEXT NOT NULL,
+  value TEXT NOT NULL,
+  quote TEXT NOT NULL,
+  subject_norm TEXT NOT NULL,
+  value_norm TEXT NOT NULL,
+  replaces_fact_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'approved', 'dismissed', 'expired')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ,
+  UNIQUE (user_id, id),
+  FOREIGN KEY (user_id, conversation_id) REFERENCES conversation (user_id, id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id, replaces_fact_id) REFERENCES fact (user_id, id) ON DELETE SET NULL (replaces_fact_id)
+);
+CREATE INDEX IF NOT EXISTS fact_candidate_status_idx ON fact_candidate (user_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS fact_candidate_seen_idx ON fact_candidate (user_id, subject_norm, predicate, value_norm);
 """

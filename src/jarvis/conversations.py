@@ -91,8 +91,8 @@ class ConversationStore:
         with self.pool.connection() as conn:
             conn.execute("UPDATE conversation SET closed_at = %s WHERE user_id = %s AND surface = %s"
                          " AND closed_at IS NULL AND id <> %s", (now, self.user_id, surface, conv_id))
-            return _conv(conn.execute(f"UPDATE conversation SET surface = %s, closed_at = NULL, last_at = %s"
-                                      f" WHERE id = %s AND user_id = %s RETURNING {COLS}",
+            return _conv(conn.execute(f"UPDATE conversation SET surface = %s, closed_at = NULL, last_at = %s,"
+                                      f" extracted_at = NULL, extract_attempts = 0 WHERE id = %s AND user_id = %s RETURNING {COLS}",
                                       (surface, now, conv_id, self.user_id)).fetchone())
 
     def _import_legacy(self) -> None:
@@ -103,8 +103,8 @@ class ConversationStore:
                 return
             if conn.execute("SELECT 1 FROM checkpoints WHERE thread_id = %s LIMIT 1", (legacy,)).fetchone() is None:
                 return
-            conn.execute("INSERT INTO conversation (user_id, channel, surface, title, thread_id, closed_at)"
-                         " VALUES (%s, 'chat', 'chat', %s, %s, now()) ON CONFLICT (thread_id) DO NOTHING",
+            conn.execute("INSERT INTO conversation (user_id, channel, surface, title, thread_id, closed_at, extracted_at)"
+                         " VALUES (%s, 'chat', 'chat', %s, %s, now(), now()) ON CONFLICT (thread_id) DO NOTHING",
                          (self.user_id, LEGACY_TITLE, legacy))
 
 
