@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'calendar_screen.dart';
 import 'graph3d.dart';
+import 'learned.dart';
+import 'learned_section.dart';
 import 'memory_graph.dart';
 import 'theme.dart';
 
@@ -19,10 +21,11 @@ void _toast(BuildContext c, String m) => ScaffoldMessenger.of(c).showSnackBar(Sn
 
 /// What Jarvis knows: you first, then the people and places in your life, and what it was told to forget.
 class MemoryScreen extends StatefulWidget {
-  const MemoryScreen({super.key, required this.api, this.onAskJarvis, this.autoRotate = true});
+  const MemoryScreen({super.key, required this.api, this.onAskJarvis, this.autoRotate = true, this.learned});
   final ApiClient api;
   final VoidCallback? onAskJarvis;
   final bool autoRotate;
+  final LearnedController? learned; // the home badge: kept in step as candidates are decided
 
   @override
   State<MemoryScreen> createState() => _MemoryScreenState();
@@ -185,9 +188,11 @@ class _MemoryScreenState extends State<MemoryScreen> {
         ? const Center(child: CircularProgressIndicator())
         : _error
         ? ErrorRetry(onRetry: _load)
-        : _showList || _people.isEmpty
-        ? _body()
-        : _graph(),
+        : Column(children: [
+            // the Learned inbox sits above the graph/list and disappears when there is nothing to review
+            LearnedSection(key: const Key('learned'), api: widget.api, learned: widget.learned, onGraphChanged: _load),
+            Expanded(child: _showList || _people.isEmpty ? _body() : _graph()),
+          ]),
   );
 
   Widget _body() => ListView(

@@ -28,7 +28,7 @@ def settings(**over):
     return SimpleNamespace(**{**base, **over})
 
 
-JOBS = {"brief": AsyncMock(), "mail": AsyncMock(), "sweep": AsyncMock()}
+JOBS = {"brief": AsyncMock(), "mail": AsyncMock(), "sweep": AsyncMock(), "expire": AsyncMock()}
 WED = datetime(2026, 10, 21, tzinfo=timezone.utc)  # a Wednesday; Berlin is UTC+2, New York UTC-4
 
 
@@ -57,7 +57,8 @@ def harness(*rts, google=lambda uid: True):
 
 def test_jobs_and_triggers_are_registered():
     jobs = {j.id: j for j in build_scheduler(settings(), JOBS).get_jobs()}
-    assert set(jobs) == {"brief", "mail", "sweep"}
+    assert set(jobs) == {"brief", "mail", "sweep", "expire"}
+    assert jobs["expire"].trigger.interval == timedelta(hours=6)  # registered even with the extractor off
     assert jobs["brief"].trigger.interval == timedelta(minutes=5)  # a per-user check, not a fixed cron
     assert jobs["mail"].trigger.interval == timedelta(minutes=5)
     assert jobs["sweep"].trigger.interval == timedelta(minutes=5)
@@ -66,7 +67,7 @@ def test_jobs_and_triggers_are_registered():
 
 def test_brief_can_be_disabled_and_intervals_follow_settings():
     jobs = {j.id: j for j in build_scheduler(settings(brief_enabled=False, mail_poll_minutes=10), JOBS).get_jobs()}
-    assert set(jobs) == {"mail", "sweep"} and jobs["mail"].trigger.interval == timedelta(minutes=10)
+    assert set(jobs) == {"mail", "sweep", "expire"} and jobs["mail"].trigger.interval == timedelta(minutes=10)
 
 
 def test_brief_due_window_is_weekdays_from_brief_time_for_an_hour():
@@ -313,7 +314,7 @@ async def test_start_proactive_builds_and_starts_the_jobs():
     sched = start_proactive(settings(), FakeTenants({}), FakeUsers([]), SimpleNamespace(send_message=AsyncMock()),
                             SimpleNamespace(fcm_tokens=lambda uid: []))
     try:
-        assert sched.running and {j.id for j in sched.get_jobs()} == {"brief", "mail", "sweep"}
+        assert sched.running and {j.id for j in sched.get_jobs()} == {"brief", "mail", "sweep", "expire"}
     finally:
         sched.shutdown(wait=False)
 
@@ -430,7 +431,7 @@ def test_extract_job_is_registered_only_when_enabled():
     jobs = {**JOBS, "extract": AsyncMock()}
     assert "extract" not in {j.id for j in build_scheduler(settings(), jobs).get_jobs()}
     on = {j.id: j for j in build_scheduler(settings(extract_enabled=True, extract_poll_minutes=7), jobs).get_jobs()}
-    assert set(on) == {"brief", "mail", "sweep", "extract"} and on["extract"].trigger.interval == timedelta(minutes=7)
+    assert set(on) == {"brief", "mail", "sweep", "extract", "expire"} and on["extract"].trigger.interval == timedelta(minutes=7)
 
 
 async def test_extract_runs_for_users_without_google_other_jobs_do_not():
@@ -442,7 +443,7 @@ async def test_extract_runs_for_users_without_google_other_jobs_do_not():
         ran.append(rt.user.id)
 
     never = lambda uid: False  # noqa: E731
-    for name, expected in (("extract", [1]), ("mail", [])):
+    for name, expected in (("extract", [1]), ("expire", [1]), ("mail", [])):
         ran.clear()
         await run_for_users(name, job, FakeUsers([rt.user]), FakeTenants({1: rt}), google_gate(name, never), lambda u: FakeNotifier(), now=WED)
         assert ran == expected

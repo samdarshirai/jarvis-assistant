@@ -7,6 +7,7 @@ from jarvis.conversations import IDLE
 
 MAX_ATTEMPTS = 3  # failed extraction runs before a conversation is given up on (marked extracted, no candidates)
 MAX_AGE = timedelta(days=7)  # older conversations are never extracted: switching the flag on does not backfill history
+EXPIRE_AFTER = timedelta(days=30)  # an undecided candidate this old is dropped from the Learned inbox
 COLUMNS = ("subject_name", "subject_kind", "relation", "predicate", "value", "quote", "subject_norm", "value_norm",
            "replaces_fact_id")
 
@@ -55,6 +56,48 @@ class CandidateStore:
                 " WHERE id = %s AND user_id = %s AND extracted_at IS NULL RETURNING extracted_at IS NOT NULL",
                 (MAX_ATTEMPTS, now, conv_id, self.user_id)).fetchone()
         return bool(r and r[0])
+
+    def list_new(self) -> list[dict]:
+        """Undecided candidates grouped by conversation, newest conversation first, oldest candidate first within it.
+        `replaces` is the current value of the fact a candidate would change (None when it adds something new)."""
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT c.id, c.conversation_id, v.title, v.last_at, c.subject_name, c.subject_kind, c.relation,"
+                " c.predicate, c.value, c.quote, f.object_value FROM fact_candidate c"
+                " JOIN conversation v ON v.user_id = c.user_id AND v.id = c.conversation_id"
+                " LEFT JOIN fact f ON f.user_id = c.user_id AND f.id = c.replaces_fact_id AND f.status = 'active'"
+                " WHERE c.user_id = %s AND c.status = 'new' ORDER BY v.last_at DESC, c.conversation_id DESC, c.id",
+                (self.user_id,)).fetchall()
+        groups: dict[int, dict] = {}
+        for cid, conv_id, title, last_at, subject, kind, relation, predicate, value, quote, replaces in rows:
+            g = groups.setdefault(conv_id, {"conversation": {"id": conv_id, "title": title,
+                                                             "last_at": last_at.isoformat()}, "items": []})
+            g["items"].append({"id": cid, "subject": subject, "subject_kind": kind, "relation": relation,
+                               "predicate": predicate, "value": value, "quote": quote, "replaces": replaces})
+        return list(groups.values())
+
+    def count_new(self) -> int:
+        with self.pool.connection() as conn:
+            return conn.execute("SELECT count(*) FROM fact_candidate WHERE user_id = %s AND status = 'new'",
+                                (self.user_id,)).fetchone()[0]
+
+    def decide(self, ids: list[int], status: str, now: datetime) -> list[int]:
+        """Mark undecided candidates dismissed (approval goes through kg.review, which also writes the graph). Returns
+        the ids actually changed: unknown, foreign and already-decided ones are skipped."""
+        if status != "dismissed":
+            raise ValueError(f"Cannot decide a candidate as {status!r} here.")
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "UPDATE fact_candidate SET status = %s, decided_at = %s WHERE user_id = %s AND id = ANY(%s)"
+                " AND status = 'new' RETURNING id", (status, now, self.user_id, ids)).fetchall()
+        return sorted(r[0] for r in rows)
+
+    def expire(self, now: datetime) -> int:
+        """Undecided candidates older than EXPIRE_AFTER become 'expired': never decided, so not remembered as dismissed."""
+        with self.pool.connection() as conn:
+            return conn.execute(
+                "UPDATE fact_candidate SET status = 'expired' WHERE user_id = %s AND status = 'new' AND created_at < %s",
+                (self.user_id, now - EXPIRE_AFTER)).rowcount
 
     def known(self, keys: list[tuple[str, str, str]]) -> set[tuple[str, str, str]]:
         """Of (subject_norm, predicate, value_norm) keys, those already proposed and not expired: waiting, approved or

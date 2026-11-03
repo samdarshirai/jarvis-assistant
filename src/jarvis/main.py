@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
                         invalidate=lambda uid: loop.call_soon_threadsafe(tenants.invalidate, uid))
                 # The app and dashboard look the caller's runtime up per request (auth_runtime), not the owner's.
                 app.state.dashboard = DashboardService(devices, tenants, weather_city=s.weather_city)
-                app.state.app_api = app_api = AppService(devices, tenants)
+                app.state.app_api = app_api = AppService(devices, tenants, extract_enabled=s.extract_enabled)
                 app.state.keys = Keys(devices, tenants)
                 tg = TelegramChannel(tenants, owner_id, s.telegram_owner_chat_id,
                                      deliver_actions=partial(voice.deliver, owner_id), undo=undo).build(s.telegram_bot_token)
@@ -149,6 +149,20 @@ class TaskIn(BaseModel):
 
 class FactIn(BaseModel):
     value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
+
+
+class CandidateApproveIn(BaseModel):
+    """Optional edits to a candidate before it is written; `entity_id` picks among same-named entities, `new` forces one."""
+    subject: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)] | None = None
+    value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)] | None = None
+    relation: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] | None = None
+    entity_id: Annotated[int, Field(ge=1, le=2**31 - 1)] | None = None
+    new: bool = False
+
+
+class CandidatesBulkIn(BaseModel):
+    ids: Annotated[list[Annotated[int, Field(ge=1, le=2**31 - 1)]], Field(min_length=1, max_length=100)]
+    decision: Literal["approve", "dismiss"]
 
 
 class SuppressionIn(BaseModel):
@@ -452,6 +466,26 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     @app.delete("/graph/facts/{fact_id}")
     async def graph_fact_delete(request: Request, fact_id: int):
         return await graph(request, "graph_fact_delete", fact_id)
+
+    @app.get("/graph/candidates")
+    async def graph_candidates(request: Request):
+        return await graph(request, "graph_candidates")
+
+    @app.get("/graph/candidates/count")
+    async def graph_candidates_count(request: Request):
+        return await graph(request, "graph_candidates_count")
+
+    @app.post("/graph/candidates/bulk")
+    async def graph_candidates_bulk(request: Request, body: CandidatesBulkIn):
+        return await graph(request, "graph_candidates_bulk", body.ids, body.decision)
+
+    @app.post("/graph/candidates/{cand_id}/approve")
+    async def graph_candidate_approve(request: Request, cand_id: ConvId, body: CandidateApproveIn | None = None):
+        return await graph(request, "graph_candidate_approve", cand_id, (body or CandidateApproveIn()).model_dump(exclude_none=True))
+
+    @app.post("/graph/candidates/{cand_id}/dismiss")
+    async def graph_candidate_dismiss(request: Request, cand_id: ConvId):
+        return await graph(request, "graph_candidate_dismiss", cand_id)
 
     @app.get("/graph/suppressions")
     async def graph_suppressions(request: Request):

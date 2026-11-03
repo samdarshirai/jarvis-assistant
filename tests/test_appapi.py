@@ -568,8 +568,10 @@ def test_every_route_503_before_service_and_401_with_bad_token():
     routes = [("get", "/calendar"), ("get", "/tasks"), ("post", "/tasks"), ("post", "/tasks/x/complete"), ("get", "/mail"),
               ("get", "/mail/x"), ("get", "/notes"), ("get", "/notes/1"), ("post", "/chat"), ("post", "/chat/confirm"),
               ("get", "/conversations"), ("post", "/conversations"), ("get", "/conversations/1"), ("post", "/conversations/1/resume"),
-              ("get", "/chat/current")]
-    bodies = {"/tasks": {"title": "a"}, "/chat": {"text": "a"}, "/chat/confirm": {"interrupt_id": "i", "decision": "yes"}}
+              ("get", "/chat/current"), ("get", "/graph/candidates"), ("get", "/graph/candidates/count"),
+              ("post", "/graph/candidates/bulk"), ("post", "/graph/candidates/1/approve"), ("post", "/graph/candidates/1/dismiss")]
+    bodies = {"/tasks": {"title": "a"}, "/chat": {"text": "a"}, "/chat/confirm": {"interrupt_id": "i", "decision": "yes"},
+              "/graph/candidates/bulk": {"ids": [1], "decision": "dismiss"}}
     for c, code, hdr in ((client(built=False), 503, H), (client(rt()), 401, {}), (client(rt()), 401, {"Authorization": "Bearer no"})):
         for m, p in routes:
             assert getattr(c, m)(p, headers=hdr, **({"json": bodies[p]} if m == "post" and p in bodies else {})).status_code == code, p
@@ -743,6 +745,7 @@ class Rec:
 async def kg_users(pool, uids):
     """(http client A, client B, runtime A, runtime B) on real runtimes; audit is captured."""
     s, ha, hb, ra, rb = await users(pool, uids)
+    s.extract_enabled = True  # the Learned inbox routes answer only while the extractor is on
     for r in (ra, rb):
         r.audit = Rec()
     app = create_app(with_lifespan=False)
@@ -915,6 +918,84 @@ async def test_graph_delete_superseded_and_retracted_facts(pool, uids):
     for fid in (old.id, gone.id):
         assert a("DELETE", f"/graph/facts/{fid}").json() == {"ok": True}
     assert [f.value for f in ra.kg.facts_for(dana.id, history=True)] == ["Globex"]
+
+
+def seed_candidates(pool, uid, *rows, **conv_kw):
+    """Closed conversation holding candidates for uid; returns their ids."""
+    from tests.test_kg_candidates import NOW, conv, q, row
+    from jarvis.kg.candidates import CandidateStore
+    cid = conv(pool, uid, closed=True, **conv_kw)
+    assert CandidateStore(pool, uid).save(cid, conv_kw.get("last_at", NOW), [row(**r) for r in rows] or [row()], NOW)
+    return [r[0] for r in q(pool, "SELECT id FROM fact_candidate WHERE conversation_id = %s ORDER BY id", cid)]
+
+
+async def test_candidates_list_count_and_user_isolation(pool, uids):
+    a, b, ra, rb = await kg_users(pool, uids)
+    ids = seed_candidates(pool, uids[0], {}, {"value": "Delhi", "value_norm": "delhi"})
+    assert a("GET", "/graph/candidates/count").json() == {"count": 2, "enabled": True}
+    (g,) = a("GET", "/graph/candidates").json()["groups"]
+    assert [i["id"] for i in g["items"]] == ids and g["items"][0]["quote"] == "my sister Anna lives in Pune"
+    assert b("GET", "/graph/candidates/count").json() == {"count": 0, "enabled": True}
+    assert b("GET", "/graph/candidates").json() == {"groups": []}
+    for u, kw in [(f"/graph/candidates/{ids[0]}/approve", {}), (f"/graph/candidates/{ids[0]}/dismiss", {})]:
+        r = b("POST", u, **kw)
+        assert (r.status_code, r.json()) == (404, {"error": "not_found"}), u
+    assert b("POST", "/graph/candidates/bulk", json={"ids": ids, "decision": "dismiss"}).json() == {"dismissed": [], "skipped": ids}
+    assert a("GET", "/graph/candidates/count").json()["count"] == 2  # B's attempts changed nothing of A's
+    assert ra.audit.rows == []
+
+
+async def test_candidates_hidden_while_the_extractor_is_off(pool, uids):
+    s, ha, _, ra, _ = await users(pool, uids)
+    seed_candidates(pool, uids[0], {})
+    app = create_app(with_lifespan=False)
+    app.state.app_api = s
+    c, h = TestClient(app), {"Authorization": ha}
+    assert c.get("/graph/candidates/count", headers=h).json() == {"count": 0, "enabled": False}
+    assert c.get("/graph/candidates", headers=h).json() == {"groups": []}
+
+
+async def test_candidate_approve_writes_the_graph_and_audits_ids_only(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    (cid,) = seed_candidates(pool, uids[0], {})
+    r = a("POST", f"/graph/candidates/{cid}/approve", json={"value": " Mumbai "})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["created"] and body["entity"]["name"] == "Anna" and body["fact"]["value"] == "Mumbai"
+    assert {f.value for f in ra.kg.facts_for(body["entity"]["id"])} == {"Mumbai", "sister"}
+    assert a("GET", "/graph/candidates/count").json()["count"] == 0
+    (rec,) = ra.audit.rows
+    assert "Mumbai" not in str(rec) and "Anna" not in str(rec) and "sister" not in str(rec) and "Pune" not in str(rec)
+    assert a("POST", f"/graph/candidates/{cid}/approve").status_code == 404  # already decided
+    undo = a("DELETE", f"/graph/facts/{body['fact_ids'][-1]}")  # the app's Undo
+    assert undo.json() == {"ok": True} and [f.value for f in ra.kg.facts_for(body["entity"]["id"])] == ["sister"]
+
+
+async def test_candidate_approve_with_ambiguous_subject_returns_a_choice_and_writes_nothing(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    e1, e2 = ra.kg.create_entity("Anna"), ra.kg.create_entity("Anna")
+    (cid,) = seed_candidates(pool, uids[0], {})
+    r = a("POST", f"/graph/candidates/{cid}/approve")
+    assert r.status_code == 409 and r.json()["error"] == "ambiguous_subject"
+    assert {o["id"] for o in r.json()["choice"]} == {e1.id, e2.id}
+    assert ra.kg.facts_for(e1.id) == ra.kg.facts_for(e2.id) == [] and ra.audit.rows == []
+    r = a("POST", f"/graph/candidates/{cid}/approve", json={"entity_id": e2.id})
+    assert r.status_code == 200 and r.json()["entity"]["id"] == e2.id and ra.kg.facts_for(e1.id) == []
+
+
+async def test_candidate_dismiss_and_bulk(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    one, two, three = seed_candidates(pool, uids[0], {}, {"value": "Delhi", "value_norm": "delhi"},
+                                      {"value": "Goa", "value_norm": "goa"})
+    assert a("POST", f"/graph/candidates/{one}/dismiss").json() == {"ok": True}
+    assert a("POST", f"/graph/candidates/{one}/dismiss").status_code == 404
+    r = a("POST", "/graph/candidates/bulk", json={"ids": [two, three], "decision": "approve"}).json()
+    assert [x["id"] for x in r["approved"]] == [two, three] and r["needs_choice"] == [] and r["skipped"] == []
+    assert a("GET", "/graph/candidates/count").json()["count"] == 0
+    for bad in ({"ids": [], "decision": "approve"}, {"ids": [1], "decision": "maybe"}, {"ids": [0], "decision": "dismiss"}):
+        assert a("POST", "/graph/candidates/bulk", json=bad).status_code == 422
+    assert a("POST", "/graph/candidates/0/approve").status_code == 422
+    assert a("POST", f"/graph/candidates/{two}/approve", json={"value": ""}).status_code == 422
 
 
 async def test_graph_cannot_forget_self(pool, uids):

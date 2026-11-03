@@ -10,7 +10,7 @@ from jarvis.agent.graph import turn_replies
 from jarvis.conversations import IDLE, conversation_json, messages_json
 from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.google.auth import ReauthRequired
-from jarvis.kg import views
+from jarvis.kg import review, views
 from jarvis.llm import MemoryContextError
 from jarvis.tenant import auth_runtime, thread_config
 from jarvis.timeutil import now_local
@@ -25,8 +25,9 @@ class AppService:
     """Device-token REST endpoints behind the app screens. Every method runs on the caller's runtime (`rt`) from
     authenticate(): its clients, graph, thread, lock and audit. Reads fail per source (None); chat mirrors the Telegram gate."""
 
-    def __init__(self, devices, tenants, source_timeout: float = 12.0):
+    def __init__(self, devices, tenants, source_timeout: float = 12.0, extract_enabled: bool = False):
         self.devices, self.tenants, self.source_timeout = devices, tenants, source_timeout
+        self.extract_enabled = extract_enabled  # the Learned inbox is hidden (empty, count 0) while the extractor is off
         self.steps: set[asyncio.Task] = set()  # every user's chat graph steps; drained in lifespan teardown
 
     async def authenticate(self, authorization: str):
@@ -141,6 +142,8 @@ class AppService:
             return 404, {"error": "not_found"}
         except views.SelfEntity:
             return 409, {"error": "cannot_forget_self"}
+        except ValueError:  # a rejected value or kind (candidate edits): the caller's input, not an outage
+            return 400, {"error": "bad_request"}
         except Exception:
             log.exception("graph call failed")
             return 502, {"error": "unavailable"}
@@ -180,6 +183,40 @@ class AppService:
         code, body = await self._kg(rt, views.lift, key_type, key_hmac)
         if code == 200:
             await self._audit(rt, "graph_suppression_lift", {}, {"lifted": True})  # the hmac is a name fingerprint
+        return code, body
+
+    # --- candidate review: facts the extractor proposed, decided by the user's tap (the tap is the confirmation) ---
+    async def graph_candidates(self, rt):
+        if not self.extract_enabled:
+            return 200, {"groups": []}
+        return await self._kg(rt, review.candidates)
+
+    async def graph_candidates_count(self, rt):
+        if not self.extract_enabled:
+            return 200, {"count": 0, "enabled": False}
+        code, body = await self._kg(rt, review.count)
+        return code, ({**body, "enabled": True} if code == 200 else body)
+
+    async def graph_candidate_approve(self, rt, cand_id: int, edits: dict):
+        code, body = await self._kg(rt, lambda kg: review.approve(kg, cand_id, **edits))
+        if code == 200 and "choice" in body:
+            return 409, {"error": "ambiguous_subject", **body}  # nothing was written: the user picks, then retries
+        if code == 200:
+            await self._audit(rt, "graph_candidate_approve", {"candidate_id": cand_id},
+                              {"entity_id": body["entity"]["id"], "created": body["created"], "fact_ids": body["fact_ids"]})
+        return code, body
+
+    async def graph_candidate_dismiss(self, rt, cand_id: int):
+        code, body = await self._kg(rt, review.dismiss, cand_id)
+        if code == 200:
+            await self._audit(rt, "graph_candidate_dismiss", {"candidate_id": cand_id}, {"dismissed": True})
+        return code, body
+
+    async def graph_candidates_bulk(self, rt, ids: list[int], decision: str):
+        code, body = await self._kg(rt, review.bulk, ids, decision)
+        if code == 200:
+            await self._audit(rt, "graph_candidates_bulk", {"ids": ids, "decision": decision},
+                              {k: len(v) for k, v in body.items()})
         return code, body
 
     # --- mail (display only: never passed to the LLM) ---

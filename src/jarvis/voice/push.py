@@ -28,19 +28,34 @@ def fcm_access_token(credentials: str) -> tuple[str, str]:
     return creds.project_id, creds.token
 
 
-def send_push(project_id: str, access_token: str, tokens: list[str], text: str, client: httpx.Client) -> int:
-    """Notification + the full text in data; tapping it opens the app, which asks the server to speak `text`."""
+def _deliver(project_id: str, access_token: str, tokens: list[str], message: dict, client: httpx.Client) -> int:
     sent = 0
     for t in tokens:
         r = client.post(f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send",
-                        headers={"Authorization": f"Bearer {access_token}"},
-                        json={"message": {"token": t, "notification": {"title": "Jarvis", "body": text[:200]},
-                                          "data": {"speak": text}, "android": {"priority": "high"}}})
+                        headers={"Authorization": f"Bearer {access_token}"}, json={"message": {"token": t, **message}})
         if r.is_success:
             sent += 1
         else:
             log.warning("fcm push failed: %s", r.status_code)
     return sent
+
+
+def send_push(project_id: str, access_token: str, tokens: list[str], text: str, client: httpx.Client) -> int:
+    """Notification + the full text in data; tapping it opens the app, which asks the server to speak `text`."""
+    return _deliver(project_id, access_token, tokens,
+                    {"notification": {"title": "Jarvis", "body": text[:200]}, "data": {"speak": text},
+                     "android": {"priority": "high"}}, client)
+
+
+def send_data_push(project_id: str, access_token: str, tokens: list[str], title: str, body: str, data: dict,
+                   client: httpx.Client) -> int:
+    """A notification with a typed payload and NO `speak`: tapping it opens a screen and never plays anything aloud.
+    FCM data values are strings, so `data` is stringified here."""
+    if "speak" in data:
+        raise ValueError("a data push never carries speak")
+    return _deliver(project_id, access_token, tokens,
+                    {"notification": {"title": title[:100], "body": body[:200]},
+                     "data": {k: str(v) for k, v in data.items()}, "android": {"priority": "high"}}, client)
 
 
 def main() -> None:

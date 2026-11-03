@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'dashboard.dart';
+import 'learned.dart';
 import 'theme.dart';
 
 const _weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
@@ -29,8 +30,9 @@ enum HomeTarget { calendar, mail, notes, tasks, alarms, shopping, memory }
 
 class DashboardSections extends StatelessWidget {
   const DashboardSections(
-      {super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now, this.onOpen, this.onOpenEmail, this.onSettings, this.displayName});
+      {super.key, required this.controller, required this.onPlayBrief, this.now = DateTime.now, this.onOpen, this.onOpenEmail, this.onSettings, this.displayName, this.learned});
   final DashboardController controller;
+  final LearnedController? learned; // things waiting for review: the count badge on the Memory pill
   final String? displayName;
   String? get _name => displayName?.trim().isEmpty == false ? displayName : null;
   final void Function(String text) onPlayBrief;
@@ -41,7 +43,7 @@ class DashboardSections extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListenableBuilder(
-        listenable: controller,
+        listenable: Listenable.merge([controller, ?learned]),
         builder: (context, _) {
           final d = controller.data, n = now();
           if (d == null) {
@@ -88,7 +90,7 @@ class DashboardSections extends StatelessWidget {
             Row(children: [
               Expanded(child: _pill(Icons.shopping_cart_outlined, 'Shopping', HomeTarget.shopping)),
               const SizedBox(width: 10),
-              Expanded(child: _pill(Icons.psychology_outlined, 'Memory', HomeTarget.memory)),
+              Expanded(child: _pill(Icons.psychology_outlined, 'Memory', HomeTarget.memory, badge: learned?.count ?? 0)),
             ]),
           ]);
         },
@@ -273,7 +275,7 @@ class DashboardSections extends StatelessWidget {
         ),
       );
 
-  Widget _pill(IconData icon, String label, HomeTarget target) => GestureDetector(
+  Widget _pill(IconData icon, String label, HomeTarget target, {int badge = 0}) => GestureDetector(
         onTap: () => onOpen?.call(target),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
@@ -286,6 +288,21 @@ class DashboardSections extends StatelessWidget {
             Icon(icon, color: amber),
             const SizedBox(width: 12),
             Flexible(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: cream, fontWeight: FontWeight.w600, fontSize: 15))),
+            if (badge > 0) ...[
+              const SizedBox(width: 8),
+              Semantics(
+                label: '$badge to review',
+                excludeSemantics: true,
+                child: Container(
+                  key: const Key('learned-badge'),
+                  constraints: const BoxConstraints(minWidth: 22),
+                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                  decoration: BoxDecoration(color: amber, borderRadius: BorderRadius.circular(999)),
+                  child: Text(badge > 99 ? '99+' : '$badge',
+                      textAlign: TextAlign.center, style: const TextStyle(color: amberInk, fontWeight: FontWeight.w700, fontSize: 12)),
+                ),
+              ),
+            ],
           ]),
         ),
       );

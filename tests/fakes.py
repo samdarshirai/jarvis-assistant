@@ -243,6 +243,10 @@ class FakeNotifier:
         self.calls.append(("push", text, None))
         return 1
 
+    async def push_data(self, title, body, data):
+        self.calls.append(("push_data", title, body, data))
+        return 1
+
     async def both(self, text, undo_event_id=None):
         await self.telegram(text, undo_event_id)
         await self.push(text)

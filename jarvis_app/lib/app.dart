@@ -10,6 +10,8 @@ import 'audio.dart';
 import 'auth.dart';
 import 'config.dart';
 import 'dashboard.dart';
+import 'learned.dart';
+import 'memory_screen.dart';
 import 'onboarding_screen.dart';
 import 'phone.dart';
 import 'prefs.dart';
@@ -27,6 +29,31 @@ class AppHost {
   static DateTime Function() now = DateTime.now; // injectable for tests
   static const pendingTtl = Duration(seconds: 30);
   static ({String? speakText, DateTime at})? _pending;
+  static LearnedController? learned; // the signed-in user's review count; push refreshes it while the app is open
+  static VoidCallback? _openLearned;
+  static DateTime? _learnedPending;
+
+  /// A "Jarvis learned…" notification was tapped: open Memory. Unlike [startSession] this never speaks or listens.
+  /// A cold-start tap can fire before the app is ready: remember it and open on attach.
+  static void openLearned() {
+    final open = _openLearned;
+    if (open != null) {
+      open();
+    } else {
+      _learnedPending = now();
+    }
+  }
+
+  /// Sets the opener (null clears it and any pending tap) and runs a fresh pending tap exactly once.
+  static void attachLearned(VoidCallback? open) {
+    _openLearned = open;
+    final at = _learnedPending;
+    _learnedPending = null;
+    if (open == null || at == null || now().difference(at) > pendingTtl) return;
+    scheduleMicrotask(() {
+      if (_openLearned == open) open();
+    });
+  }
 
   /// Cold-start entry points can fire before the controller exists: remember the last request and run it on attach.
   static Future<void> startSession({String? speakText}) async {
@@ -104,6 +131,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   String? _signInError;
   SessionController? _controller;
   DashboardController? _dashboard;
+  LearnedController? _learned;
   StreamSubscription<Uri>? _links;
   StreamSubscription<String>? _fcmRefresh;
   final _messenger = GlobalKey<ScaffoldMessengerState>();
@@ -151,6 +179,9 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
     _fcmRefresh?.cancel();
     _controller?.dispose(); // before the dashboard: its onEnded refreshes it
     _dashboard?.dispose();
+    AppHost.attachLearned(null);
+    if (AppHost.learned == _learned) AppHost.learned = null;
+    _learned?.dispose();
     if (AppHost.controller == _controller) AppHost.attach(null);
     AppHost.ready = false;
     super.dispose();
@@ -160,6 +191,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
     _dashboard?.refresh();
+    _learned?.refresh();
     final c = _config;
     if (c?.token != null && _ready) {
       unawaited(reportLocation(widget.apiFor(c!)));
@@ -277,6 +309,11 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
         ? null
         : (DashboardController(fetch: () => (widget.dashboardFetch ?? fetchDashboard)(c), alarm: widget.alarm ?? nextAlarm)
           ..refresh());
+    final oldLearned = _learned;
+    _learned = !ready ? null : (LearnedController(widget.apiFor(c))..refresh());
+    AppHost.learned = _learned;
+    AppHost.attachLearned(ready ? _showLearned : null);
+    oldLearned?.dispose();
     _controller = !ready
         ? null
         : SessionController(
@@ -289,6 +326,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
             onEnded: () {
               widget.onSessionEnded?.call();
               _dashboard?.refresh(); // a spoken "add task" should show up
+              _learned?.refresh();
             },
             onStarted: () {
               widget.onSessionStarted?.call();
@@ -303,6 +341,26 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
       AppHost.attach(_controller);
       widget.startWake?.call().catchError((Object e) => debugPrint('wake word unavailable: $e'));
     }
+  }
+
+  /// The "Jarvis learned…" notification was tapped: show Memory, whose Learned inbox is its first section.
+  void _showLearned({bool retry = true}) {
+    final nav = _navigator.currentState, c = _config;
+    if (nav == null || c == null || c.token == null || !_ready) {
+      // cold start: the navigator may not be built yet. Try once more after the next frame.
+      if (retry) WidgetsBinding.instance.addPostFrameCallback((_) => _showLearned(retry: false));
+      return;
+    }
+    _learned?.refresh();
+    nav.popUntil((r) => r.isFirst);
+    nav.push(MaterialPageRoute<void>(
+        builder: (_) => MemoryScreen(
+            api: widget.apiFor(c),
+            learned: _learned,
+            onAskJarvis: () {
+              _navigator.currentState?.pop();
+              AppHost.startSession();
+            })));
   }
 
   Widget _home() {
@@ -337,6 +395,7 @@ class _JarvisAppState extends State<JarvisApp> with WidgetsBindingObserver {
         displayName: _me['display_name'] as String?,
         controller: _controller!,
         dashboard: _dashboard,
+        learned: _learned,
         api: widget.apiFor(c),
         startSignIn: _startSignIn,
         voiceReady: _voiceReady,

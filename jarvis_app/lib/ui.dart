@@ -18,13 +18,15 @@ import 'tasks_screen.dart';
 import 'confirm_card.dart';
 import 'dashboard.dart';
 import 'dashboard_cards.dart';
+import 'learned.dart';
 import 'session.dart';
 import 'theme.dart';
 
 class SessionScreen extends StatelessWidget {
   const SessionScreen({super.key, required this.controller, this.dashboard, this.displayName, this.api, this.alarm, this.runPhoneActions,
     this.startSignIn, this.voiceReady = true, this.onSettingsReturn, this.onNeedsSetup, this.open = openInBrowser,
-    this.prefs, this.onWakeChanged});
+    this.prefs, this.onWakeChanged, this.learned});
+  final LearnedController? learned; // the Memory pill's badge; refreshed when chat or Memory closes
   final Prefs? prefs;
   final Future<void> Function()? onWakeChanged;
   final SessionController controller;
@@ -48,7 +50,7 @@ class SessionScreen extends StatelessWidget {
     }
   }
 
-  void _push(BuildContext context, Widget screen) =>
+  Future<void> _push(BuildContext context, Widget screen) =>
       Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => screen));
 
   void _open(BuildContext context, HomeTarget t) {
@@ -68,7 +70,7 @@ class SessionScreen extends StatelessWidget {
           HomeTarget.notes => NotesScreen(api: a, onAskJarvis: ask),
           HomeTarget.tasks => TasksScreen(api: a, onAskJarvis: ask),
           HomeTarget.shopping => ShoppingScreen(api: a, onAskJarvis: ask),
-          HomeTarget.memory => MemoryScreen(api: a, onAskJarvis: ask),
+          HomeTarget.memory => MemoryScreen(api: a, onAskJarvis: ask, learned: learned),
           HomeTarget.alarms => AlarmsScreen(alarm: alarm ?? (() async => dashboard?.nextAlarm), onAskJarvis: ask),
         });
   }
@@ -86,7 +88,8 @@ class SessionScreen extends StatelessWidget {
               Navigator.of(context).pop();
               _talk(context);
             },
-            runPhoneActions: runPhoneActions ?? (_) async {}));
+            runPhoneActions: runPhoneActions ?? (_) async {}))
+        .then((_) => learned?.refresh()); // a chat may have ended: the extractor will have candidates soon
   }
 
   void _settings(BuildContext context) {
@@ -161,6 +164,7 @@ class SessionScreen extends StatelessWidget {
                 if (dashboard != null)
                   DashboardSections(
                       controller: dashboard!,
+                      learned: learned,
                       displayName: displayName,
                       onPlayBrief: (text) => api == null ? _talk(context, text: text) : _brief(context, text),
                       onOpen: (t) => _open(context, t),

@@ -227,3 +227,21 @@ Not run on a real device yet.
 | 122 | Chat: send a message, wait more than 30 minutes, send another | The second message starts a new conversation on its own |
 | 123 | Chat: raise a confirm card, tap New chat, resume that conversation | The card is still pending and answerable after resuming |
 | 124 | Telegram: send a message, send /new, send another | /new starts a fresh thread: Jarvis does not recall the earlier messages |
+
+# Manual acceptance (learned candidates)
+
+Not run on a real device yet. Needs `JARVIS_EXTRACT_ENABLED=true`, an LLM key and push set up (`JARVIS_FCM_CREDENTIALS_PATH`).
+
+| # | Do | Expect |
+|---|----|--------|
+| 125 | Voice: say "my sister Anna works as a teacher" (do not say "remember"), end the session, wait for the next extractor run | One notification "Jarvis learned 1 thing" arrives. The phone says nothing aloud, and tapping it does not start a voice session |
+| 126 | Tap the notification | The Memory screen opens with the Learned section on top: "Anna, your sister: works as a teacher" and your own words as "You said: ..." |
+| 127 | On the home screen, look at the Memory pill | It shows a count badge (the number is also readable by TalkBack as "N to review") |
+| 128 | Tap Approve | The card disappears, the badge drops, a snackbar offers Undo, and Anna appears in the graph |
+| 129 | Tap Undo within 5 seconds (repeat 125 first if needed) | The facts are removed from Anna. After 5 seconds the Undo bar goes away on its own |
+| 130 | Produce two candidates in one conversation, tap Approve all | A confirmation states the count ("Approve all 2?"). Nothing is saved before you confirm it |
+| 131 | Tap Dismiss on a candidate, then repeat the same statement in a later conversation | It is not proposed again |
+| 132 | Have two people named Anna in Memory, then approve a candidate about "Anna" | Jarvis asks which Anna (or a new person) and writes nothing until you pick |
+| 133 | End two conversations with new facts within 30 minutes of each other | Only the first sends a notification; the badge still counts both |
+| 134 | With the app open in the foreground, let a notification arrive | The badge updates; no screen opens and nothing is spoken |
+| 135 | Turn `JARVIS_EXTRACT_ENABLED` off and restart | The Learned section and the badge are gone |

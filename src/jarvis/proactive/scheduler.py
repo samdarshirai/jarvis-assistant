@@ -11,9 +11,11 @@ from langchain_core.callbacks import BaseCallbackHandler
 from jarvis import weather
 from jarvis.google.auth import PROVIDER, PgTokenStore, ReauthRequired
 from jarvis.llm_check import _code as llm_error_code
+from jarvis.kg.candidates import CandidateStore
 from jarvis.proactive.alerts import sweep
 from jarvis.proactive.brief import run_brief
 from jarvis.proactive.extract import run_once as run_extract
+from jarvis.proactive.learned import announce
 from jarvis.proactive.mailwatch import MailWatch
 from jarvis.proactive.notify import make_notifier
 
@@ -21,7 +23,7 @@ log = logging.getLogger(__name__)
 # ponytail: mail watch auto-creates calendar events, and the app has no Undo for them yet (Undo is a Telegram button,
 # the owner's only), so it runs for the owner only; set True once the app can undo an auto-added event.
 FRIEND_MAIL_WATCH = False
-NO_GOOGLE = frozenset({"extract"})  # jobs that read nothing from Google, so they also run for users who never connected it
+NO_GOOGLE = frozenset({"extract", "expire"})  # jobs that read nothing from Google, so they also run for users who never connected it
 USER_DEADLINE = 120.0  # seconds one user's run of one job may take
 REAUTH_TEXT = "Jarvis needs Google access again. Open the app and sign in."
 ISSUE_TEXT = {
@@ -125,9 +127,13 @@ def per_user_jobs(s) -> dict:
                         location=lambda: weather.load_coords(rt.proactive))
 
     async def extract(rt, notifier, llm, tz, now):
-        await run_extract(rt, llm, now)
+        await run_extract(rt, llm, now, on_candidates=lambda conv_id, count: announce(rt, notifier, conv_id, count, now))
 
-    return {"brief": brief, "mail": mail, "sweep": alerts, "extract": extract}
+    async def expire(rt, notifier, llm, tz, now):
+        if getattr(rt, "kg", None) is not None:  # undecided for 30 days: expired, not remembered as dismissed
+            await asyncio.to_thread(CandidateStore(rt.kg.pool, rt.kg.user_id).expire, now)
+
+    return {"brief": brief, "mail": mail, "sweep": alerts, "extract": extract, "expire": expire}
 
 
 def build_scheduler(s, jobs: dict) -> AsyncIOScheduler:
@@ -140,6 +146,8 @@ def build_scheduler(s, jobs: dict) -> AsyncIOScheduler:
     sched.add_job(jobs["sweep"], IntervalTrigger(minutes=5), id="sweep", **common)
     if s.extract_enabled:
         sched.add_job(jobs["extract"], IntervalTrigger(minutes=s.extract_poll_minutes), id="extract", **common)
+    # not behind the flag: switching the extractor off must not leave old candidates undecided forever
+    sched.add_job(jobs["expire"], IntervalTrigger(hours=6), id="expire", **common)
     return sched
 
 
