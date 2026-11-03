@@ -50,7 +50,19 @@ class _ChatScreenState extends State<ChatScreen> {
     if (t != null && t.trim().isNotEmpty) {
       _text.text = t;
       WidgetsBinding.instance.addPostFrameCallback((_) => mounted ? _send() : null);
+    } else {
+      _loadCurrent();
     }
+  }
+
+  /// The open chat conversation (within the idle window) as it was left; nothing or an error leaves the chat empty.
+  Future<void> _loadCurrent() async {
+    try {
+      final r = await widget.api.get('/chat/current');
+      // the user may have sent or switched meanwhile: never overwrite that
+      if (!mounted || r['conversation'] == null || _busy || _msgs.isNotEmpty || _conversationId != null) return;
+      _load(r);
+    } catch (_) {}
   }
 
   @override
@@ -147,6 +159,11 @@ class _ChatScreenState extends State<ChatScreen> {
     final r = await Navigator.of(context).push<Map<String, dynamic>>(
         MaterialPageRoute(builder: (_) => ConversationsScreen(api: widget.api)));
     if (r == null || !mounted) return;
+    _load(r);
+  }
+
+  /// Show a conversation payload ({conversation, messages, card}) from resume or /chat/current.
+  void _load(Map<String, dynamic> r) {
     final id = (r['conversation'] as Map?)?['id'], card = r['card'];
     setState(() {
       _conversationId = id is int ? id : null;

@@ -13,8 +13,10 @@ class FakeApi extends ApiClient {
   Future<Map<String, dynamic>> Function(String)? getHandler;
   @override
   Future<Map<String, dynamic>> get(String path, [Map<String, String>? query]) {
+    final h = getHandler;
+    if (h == null) return Future.value({'conversation': null, 'messages': [], 'card': null}); // no open chat; not recorded
     calls.add((path, null));
-    return getHandler!(path);
+    return h(path);
   }
   @override
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) {
@@ -155,6 +157,48 @@ void main() {
     expect(api.calls.last.$1, '/conversations');
     expect(find.text('hi'), findsNothing);
     expect(find.text('Type a request, or tap the mic.'), findsOneWidget);
+  });
+
+  testWidgets('opening the chat shows the open conversation from /chat/current; confirm names it', (t) async {
+    final api = FakeApi((p, b) async => {'reply': 'ok', 'card': null, 'client_actions': []});
+    api.getHandler = (p) async => {
+          'conversation': conv(4),
+          'messages': [
+            {'role': 'user', 'text': 'earlier q'},
+            {'role': 'assistant', 'text': 'earlier a'}
+          ],
+          'card': {'interrupt_id': 'i4', 'summary': 'Still pending', 'after_untrusted': false}
+        };
+    await t.pumpWidget(app(api));
+    await t.pump();
+    expect(api.calls.first.$1, '/chat/current');
+    expect(find.text('earlier q'), findsOneWidget);
+    expect(find.text('earlier a'), findsOneWidget);
+    expect(find.text('Type a request, or tap the mic.'), findsNothing);
+    await t.tap(find.text('Confirm'));
+    await t.pump();
+    await t.pump();
+    expect(api.calls.last.$2, {'interrupt_id': 'i4', 'decision': 'yes', 'conversation_id': 4});
+  });
+
+  testWidgets('no open conversation or a /chat/current error leaves the chat empty', (t) async {
+    final api = FakeApi((p, b) async => {'reply': 'ok', 'card': null, 'client_actions': []});
+    api.getHandler = (p) async => throw ApiError(500, null, p);
+    await t.pumpWidget(app(api));
+    await t.pump();
+    expect(api.calls.single.$1, '/chat/current');
+    expect(find.text('Type a request, or tap the mic.'), findsOneWidget);
+    expect(find.text("Couldn't reach Jarvis."), findsNothing);
+  });
+
+  testWidgets('initialText skips /chat/current', (t) async {
+    final api = FakeApi((p, b) async => {'reply': 'ok', 'card': null, 'client_actions': []});
+    api.getHandler = (p) async => fail('must not load the current chat');
+    await t.pumpWidget(MaterialApp(
+        home: ChatScreen(api: api, onVoice: () {}, runPhoneActions: (_) async {}, initialText: 'set an alarm')));
+    await t.pump();
+    await t.pump();
+    expect(api.calls.map((c) => c.$1), ['/chat']);
   });
 
   testWidgets('resume from history shows messages and pending card', (t) async {
