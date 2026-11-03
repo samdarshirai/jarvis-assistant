@@ -168,6 +168,7 @@ class LocationIn(BaseModel):
 class ConfirmIn(BaseModel):
     interrupt_id: str
     decision: Literal["yes", "no"]
+    conversation_id: int | None = None
 
 
 Secret = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]  # pasted keys carry newlines
@@ -485,7 +486,33 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     @app.post("/chat/confirm")
     async def chat_confirm(request: Request, body: ConfirmIn):
         svc, rt, err = await guarded(request)
-        return err or llm_or_409(rt) or await svc.confirm(rt, body.interrupt_id, body.decision)
+        return err or llm_or_409(rt) or await svc.confirm(rt, body.interrupt_id, body.decision, body.conversation_id)
+
+    @app.get("/conversations")
+    async def conversations(request: Request):
+        svc, rt, err = await guarded(request)
+        return err or await svc.conversations(rt)
+
+    @app.post("/conversations")
+    async def conversation_new(request: Request):
+        svc, rt, err = await guarded(request)
+        return err or await svc.new_conversation(rt)
+
+    @app.post("/conversations/{conv_id}/resume")
+    async def conversation_resume(request: Request, conv_id: int):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        status, body = await svc.resume_conversation(rt, conv_id)
+        return JSONResponse(body, status_code=status)
+
+    @app.get("/conversations/{conv_id}")
+    async def conversation_get(request: Request, conv_id: int):
+        svc, rt, err = await guarded(request)
+        if err:
+            return err
+        status, body = await svc.conversation_detail(rt, conv_id)
+        return JSONResponse(body, status_code=status)
 
     @app.get("/me")
     async def me(request: Request):
