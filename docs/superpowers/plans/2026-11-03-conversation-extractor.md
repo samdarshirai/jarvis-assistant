@@ -195,6 +195,7 @@
 
 ## Not in this plan
 
+- Wiring the push: the scheduler's `extract` job calls `run_extract(rt, llm, now)` WITHOUT `on_candidates`, so no notification is sent today. Project 4 must pass a hook there (the job already receives `notifier`) that claims `candidates:{conversation_id}` and applies its own 30-minute push limit.
 - The review screen, badge, push and approve/dismiss endpoints (project 4: it adds `decide`/`list` methods to `CandidateStore` and the 30-day expiry job).
 - Short follow-ups ("yes", "the other one"): ignored, as the spec's default says.
 - Extraction from email, calendar, notes or web text; any bulk backfill.
