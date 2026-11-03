@@ -57,3 +57,16 @@ def test_database_url_must_be_a_postgres_url():
         with pytest.raises(ValueError, match="postgresql://"):
             make(database_url=bad)
     assert make(database_url="postgres://x").database_url == "postgres://x"
+
+
+def test_extractor_defaults_off(monkeypatch):
+    monkeypatch.delenv("JARVIS_EXTRACT_ENABLED", raising=False)
+    s = make()
+    assert (s.extract_enabled, s.extract_poll_minutes) == (False, 5)
+
+
+def test_extractor_flag_from_env_and_interval_positive(monkeypatch):
+    monkeypatch.setenv("JARVIS_EXTRACT_ENABLED", "true")
+    assert make().extract_enabled is True
+    with pytest.raises(ValidationError):
+        make(extract_poll_minutes=0)

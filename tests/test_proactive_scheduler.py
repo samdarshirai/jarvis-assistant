@@ -23,7 +23,8 @@ from tests.fakes import FakeNotifier, FakeProactiveStore, FakeProvider, FakeTena
 def settings(**over):
     base = dict(timezone="Europe/Berlin", brief_enabled=True, brief_time="07:30", mail_poll_minutes=5,
                 leave_lead_minutes=30, auto_event_cap=5, telegram_owner_chat_id=42, fcm_credentials_path="",
-                weather_city="", openrouter_api_key="sk-operator-env-key")
+                weather_city="", openrouter_api_key="sk-operator-env-key",
+                extract_enabled=False, extract_poll_minutes=5)
     return SimpleNamespace(**{**base, **over})
 
 

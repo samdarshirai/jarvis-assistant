@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     leave_lead_minutes: int = Field(default=30, ge=1)  # "leave now" fires this long before an event with a location
     mail_poll_minutes: int = Field(default=5, ge=1)
     auto_event_cap: int = Field(default=5, ge=0)  # events auto-created from email per rolling 24 h
+    extract_enabled: bool = False  # propose candidate facts from ended conversations (needs the user's LLM key)
+    extract_poll_minutes: int = Field(default=5, ge=1)
 
     @field_validator("brief_time")
     @classmethod
