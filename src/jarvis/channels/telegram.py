@@ -6,7 +6,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import TelegramError
-from telegram.ext import Application, CallbackQueryHandler, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
 from jarvis.agent.graph import turn_replies
 from jarvis.llm import MemoryContextError
@@ -15,6 +15,7 @@ from jarvis.users import UserStore
 
 log = logging.getLogger(__name__)
 
+NEW_TEXT = "Started a new conversation."
 FAIL_TEXT = "Something went wrong. Please try again."
 EMPTY_TEXT = "Finished, but I have no summary to show. Ask me to check if you are unsure."
 PENDING_TEXT = "Let's sort out the pending action first, confirm or cancel it."
@@ -65,13 +66,23 @@ class TelegramChannel:
         self.undo = undo  # async (event_id) -> bool; removes an event Jarvis auto-created from email
         self.tenants, self.owner_id = tenants, owner_user_id  # Telegram is the owner's channel
         self.users = users if users is not None else UserStore(tenants.pool)
-        self.cfg = thread_config(owner_user_id)
         self.owner = owner_chat_id
         self.owner_filter = filters.Chat(chat_id=owner_chat_id)
 
     @property
     def lock(self) -> asyncio.Lock:
         return self.tenants.lock(self.owner_id)  # shared with voice and the app: one graph step at a time on the thread
+
+    async def _cfg(self, rt, *, new_text: bool, text: str | None = None) -> dict:
+        """The Telegram conversation's graph config. A new message follows the idle rule and counts as activity;
+        a button tap or re-offer uses the open conversation so a card raised before the idle gap stays answerable."""
+        convs = rt.conversations
+        if new_text:
+            conv = await asyncio.to_thread(convs.current, "telegram")
+            await asyncio.to_thread(convs.touch, conv.id, text)
+        else:
+            conv = await asyncio.to_thread(convs.open_for, "telegram") or await asyncio.to_thread(convs.current, "telegram")
+        return thread_config(conv.thread_id)
 
     async def _enabled(self, chat):
         # Runtime user records are cached; authorization must read the database at execution time.
@@ -82,21 +93,23 @@ class TelegramChannel:
         return True
 
     async def _graph(self, chat):
-        """The owner's graph, resolved per update (it changes with their LLM key); None after telling them to set one."""
+        """The owner's runtime, resolved per update (its graph changes with their LLM key); None after telling them to set a key."""
         try:
-            graph = (await self.tenants.get(self.owner_id)).graph
+            rt = await self.tenants.get(self.owner_id)
         except UnknownUser:
             await chat.send_message(DISABLED_TEXT)
             return None
         if not await self._enabled(chat):
             return None
-        if graph is None:
+        if rt.graph is None:
             await chat.send_message(NEEDS_LLM_TEXT)
-        return graph
+            return None
+        return rt
 
     def build(self, token: str) -> Application:
         app = Application.builder().token(token).build()
         app.add_handler(MessageHandler(self.owner_filter & filters.UpdateType.MESSAGE & filters.TEXT & ~filters.COMMAND, self.on_text))
+        app.add_handler(CommandHandler("new", self.on_new, filters=self.owner_filter))
         app.add_handler(CallbackQueryHandler(self.on_button))
         app.add_handler(MessageHandler(~self.owner_filter, self.on_stranger), group=1)
         return app
@@ -105,10 +118,23 @@ class TelegramChannel:
         chat = update.effective_chat
         log.warning("dropped message from non-owner chat %s", chat.id if chat else None)
 
-    async def _invoke(self, graph, graph_input):
+    async def on_new(self, update, context):
+        chat = update.effective_chat
+        async with self.lock:
+            if not await self._enabled(chat):
+                return
+            try:
+                rt = await self.tenants.get(self.owner_id)
+            except UnknownUser:
+                await chat.send_message(DISABLED_TEXT)
+                return
+            await asyncio.to_thread(rt.conversations.start, "telegram")
+        await chat.send_message(NEW_TEXT)
+
+    async def _invoke(self, graph, graph_input, cfg):
         """Run the graph (the caller holds the lock). None means the run failed."""
         try:
-            return await graph.ainvoke(graph_input, {**self.cfg, "configurable": {**self.cfg["configurable"], "channel": "telegram"}})
+            return await graph.ainvoke(graph_input, {**cfg, "configurable": {**cfg["configurable"], "channel": "telegram"}})
         except MemoryContextError as error:
             return {"memory_error": str(error)}
         except Exception:
@@ -118,11 +144,11 @@ class TelegramChannel:
     async def _offer(self, chat, it) -> None:
         await chat.send_message(format_confirmation(it.value), reply_markup=keyboard(it.id))
 
-    async def _reply(self, chat, graph, result) -> None:
+    async def _reply(self, chat, graph, result, cfg) -> None:
         if result is None or result.get("memory_error"):
             await chat.send_message(result["memory_error"] if result else FAIL_TEXT)
             try:  # buttons may be gone; re-offer a still-pending confirmation so the owner is not locked out
-                state = await graph.aget_state(self.cfg)
+                state = await graph.aget_state(cfg)
                 if state.interrupts:
                     await self._offer(chat, state.interrupts[0])
             except Exception:
@@ -142,16 +168,18 @@ class TelegramChannel:
     async def on_text(self, update, context):
         chat = update.effective_chat
         async with self.lock:  # authorization -> read pending -> decide -> run; replies follow release
-            graph = await self._graph(chat)
-            if graph is None:
+            rt = await self._graph(chat)
+            if rt is None:
                 return
-            pending = (await graph.aget_state(self.cfg)).interrupts
-            result = None if pending else await self._invoke(graph, {"messages": [HumanMessage(update.message.text)]})
+            graph = rt.graph
+            cfg = await self._cfg(rt, new_text=True, text=update.message.text)
+            pending = (await graph.aget_state(cfg)).interrupts
+            result = None if pending else await self._invoke(graph, {"messages": [HumanMessage(update.message.text)]}, cfg)
         if pending:
             await chat.send_message(PENDING_TEXT)
             await self._offer(chat, pending[0])  # its buttons may only exist elsewhere (voice): show them here
             return
-        await self._reply(chat, graph, result)
+        await self._reply(chat, graph, result, cfg)
 
     async def _undo(self, chat, event_id: str) -> None:
         try:
@@ -179,13 +207,15 @@ class TelegramChannel:
                 if await self._enabled(chat):
                     await self._undo(chat, iid)
                 return
-            graph = await self._graph(chat)
-            if graph is None:
+            rt = await self._graph(chat)
+            if rt is None:
                 return
-            interrupts = (await graph.aget_state(self.cfg)).interrupts
+            graph = rt.graph
+            cfg = await self._cfg(rt, new_text=False)
+            interrupts = (await graph.aget_state(cfg)).interrupts
             stale = action not in ("yes", "no") or not interrupts or interrupts[0].id != iid
-            result = None if stale else await self._invoke(graph, Command(resume=action == "yes"))
+            result = None if stale else await self._invoke(graph, Command(resume=action == "yes"), cfg)
         if stale:
             await chat.send_message(HANDLED_TEXT)
             return
-        await self._reply(chat, graph, result)
+        await self._reply(chat, graph, result, cfg)

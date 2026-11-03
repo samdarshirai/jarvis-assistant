@@ -137,8 +137,9 @@ async def test_telegram_uses_owner_thread_and_lock():
     lock.release()
     await t
     assert sent(c) == [("Hello!", {})]
-    assert [m.content for m in (await g.aget_state(thread_config(7))).values["messages"]] == ["hi", "Hello!"]
-    assert (await g.aget_state(thread_config(1))).values == {}
+    conv = rt(ch).conversations.open_for("telegram")
+    assert [m.content for m in (await g.aget_state(thread_config(conv.thread_id))).values["messages"]] == ["hi", "Hello!"]
+    assert (await g.aget_state(thread_config(7))).values == {}
 
 
 async def test_telegram_without_llm_key_asks_for_one():
@@ -229,7 +230,7 @@ async def test_edit_markup_error_does_not_block_action():
 
 def test_build_registers_handlers_without_network():
     app = TelegramChannel(FakeTenants(), 1, OWNER, users=FakeTenants().users).build("123:abc")
-    assert len(app.handlers[0]) == 2 and len(app.handlers[1]) == 1
+    assert len(app.handlers[0]) == 3 and len(app.handlers[1]) == 1
 
 
 def test_format_confirmation_with_summary_keeps_raw_call():
@@ -290,7 +291,7 @@ async def test_legacy_bare_callback_data_is_already_handled():
         await ch.on_button(button_update(c, data), None)
         assert sent(c) == [("Already handled.", {})]
     assert calls == []
-    assert (await rt(ch).graph.aget_state(thread_config(1))).interrupts  # still waiting for a real answer
+    assert (await rt(ch).graph.aget_state(thread_config(rt(ch).conversations.open_for("telegram").thread_id))).interrupts  # still waiting for a real answer
 
 
 async def test_empty_reply_sends_fallback():
@@ -386,7 +387,7 @@ async def test_phone_action_without_a_voice_client_tells_the_user_it_was_not_run
 async def test_pending_card_from_another_channel_is_reoffered_with_working_buttons():
     calls = []
     ch = pending_channel(calls)
-    out = await rt(ch).graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(1))  # e.g. proposed by voice
+    out = await rt(ch).graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(rt(ch).conversations.current("telegram").thread_id))  # proposed elsewhere, same conversation
     iid = out["__interrupt__"][0].id
     c = chat()
     await ch.on_text(text_update(c, "hello?"), None)
