@@ -216,3 +216,22 @@ async def test_prompt_order_is_base_graph_situation(pool, uids, monkeypatch):
     marks = [text.index(m) for m in ("BASE", "<graph>", "I like tea", "Pune")]
     assert marks == sorted(marks)
     assert text.rindex("</graph>") < text.index(SITUATION)
+
+
+async def test_embeddings_use_the_users_endpoint_and_key_with_the_default_or_their_own_model(pool, uids):
+    a, b = uids
+    store = SecretStore(pool, KEY)
+    for uid in uids:
+        store.put(uid, "llm_key", f"sk-{uid}")
+    store.put(a, "llm_base_url", "https://openrouter.ai/api/v1")
+    store.put(b, "embed_model", "openai/text-embedding-3-small")
+    s = settings()
+    s.embed_model = "qwen/qwen3-embedding-8b"
+    t = Tenants(pool, s, InMemorySaver(), google_service_factory=lambda name, version, store, key: object(),
+                llm_provider_factory=FakeLLM)
+    ra, rb = await t.get(a), await t.get(b)
+    assert (ra.embedder.base_url, ra.embedder.model) == ("https://openrouter.ai/api/v1", "qwen/qwen3-embedding-8b")
+    assert ra.embedder._key == f"sk-{a}" and rb.embedder.model == "openai/text-embedding-3-small"
+    s.embed_model = ""
+    t.invalidate(a)
+    assert (await t.get(a)).embedder is None  # no model anywhere: keyword recall only

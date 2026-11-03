@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
                         invalidate=lambda uid: loop.call_soon_threadsafe(tenants.invalidate, uid))
                 # The app and dashboard look the caller's runtime up per request (auth_runtime), not the owner's.
                 app.state.dashboard = DashboardService(devices, tenants, weather_city=s.weather_city)
-                app.state.app_api = app_api = AppService(devices, tenants, extract_enabled=s.extract_enabled)
+                app.state.app_api = app_api = AppService(devices, tenants)
                 app.state.keys = Keys(devices, tenants)
                 tg = TelegramChannel(tenants, owner_id, s.telegram_owner_chat_id,
                                      deliver_actions=partial(voice.deliver, owner_id), undo=undo).build(s.telegram_bot_token)

@@ -745,7 +745,6 @@ class Rec:
 async def kg_users(pool, uids):
     """(http client A, client B, runtime A, runtime B) on real runtimes; audit is captured."""
     s, ha, hb, ra, rb = await users(pool, uids)
-    s.extract_enabled = True  # the Learned inbox routes answer only while the extractor is on
     for r in (ra, rb):
         r.audit = Rec()
     app = create_app(with_lifespan=False)
@@ -945,14 +944,14 @@ async def test_candidates_list_count_and_user_isolation(pool, uids):
     assert ra.audit.rows == []
 
 
-async def test_candidates_hidden_while_the_extractor_is_off(pool, uids):
+async def test_candidates_are_always_shown_and_enabled_stays_for_older_apps(pool, uids):
     s, ha, _, ra, _ = await users(pool, uids)
     seed_candidates(pool, uids[0], {})
     app = create_app(with_lifespan=False)
     app.state.app_api = s
     c, h = TestClient(app), {"Authorization": ha}
-    assert c.get("/graph/candidates/count", headers=h).json() == {"count": 0, "enabled": False}
-    assert c.get("/graph/candidates", headers=h).json() == {"groups": []}
+    assert c.get("/graph/candidates/count", headers=h).json() == {"count": 1, "enabled": True}
+    assert len(c.get("/graph/candidates", headers=h).json()["groups"]) == 1
 
 
 async def test_candidate_approve_writes_the_graph_and_audits_ids_only(pool, uids):

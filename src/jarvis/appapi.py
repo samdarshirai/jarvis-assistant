@@ -26,9 +26,8 @@ class AppService:
     """Device-token REST endpoints behind the app screens. Every method runs on the caller's runtime (`rt`) from
     authenticate(): its clients, graph, thread, lock and audit. Reads fail per source (None); chat mirrors the Telegram gate."""
 
-    def __init__(self, devices, tenants, source_timeout: float = 12.0, extract_enabled: bool = False):
+    def __init__(self, devices, tenants, source_timeout: float = 12.0):
         self.devices, self.tenants, self.source_timeout = devices, tenants, source_timeout
-        self.extract_enabled = extract_enabled  # the Learned inbox is hidden (empty, count 0) while the extractor is off
         self.steps: set[asyncio.Task] = set()  # every user's chat graph steps; drained in lifespan teardown
 
     async def authenticate(self, authorization: str):
@@ -188,14 +187,11 @@ class AppService:
 
     # --- candidate review: facts the extractor proposed, decided by the user's tap (the tap is the confirmation) ---
     async def graph_candidates(self, rt):
-        if not self.extract_enabled:
-            return 200, {"groups": []}
         return await self._kg(rt, review.candidates)
 
     async def graph_candidates_count(self, rt):
-        if not self.extract_enabled:
-            return 200, {"count": 0, "enabled": False}
         code, body = await self._kg(rt, review.count)
+        # "enabled" stays for app builds that hide the inbox when it is false (the extractor is always on now)
         return code, ({**body, "enabled": True} if code == 200 else body)
 
     async def graph_candidate_approve(self, rt, cand_id: int, edits: dict):

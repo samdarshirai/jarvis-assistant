@@ -24,7 +24,7 @@ def settings(**over):
     base = dict(timezone="Europe/Berlin", brief_enabled=True, brief_time="07:30", mail_poll_minutes=5,
                 leave_lead_minutes=30, auto_event_cap=5, telegram_owner_chat_id=42, fcm_credentials_path="",
                 weather_city="", openrouter_api_key="sk-operator-env-key",
-                extract_enabled=False, extract_poll_minutes=5, memory_digest_enabled=False)
+                extract_poll_minutes=5, memory_digest_enabled=True)
     return SimpleNamespace(**{**base, **over})
 
 
@@ -314,7 +314,7 @@ async def test_start_proactive_builds_and_starts_the_jobs():
     sched = start_proactive(settings(), FakeTenants({}), FakeUsers([]), SimpleNamespace(send_message=AsyncMock()),
                             SimpleNamespace(fcm_tokens=lambda uid: []))
     try:
-        assert sched.running and {j.id for j in sched.get_jobs()} == {"brief", "mail", "sweep", "expire", "memory"}
+        assert sched.running and {j.id for j in sched.get_jobs()} == {"brief", "mail", "sweep", "extract", "expire", "memory"}
     finally:
         sched.shutdown(wait=False)
 
@@ -427,18 +427,13 @@ async def test_a_hung_user_is_cut_off_and_the_next_user_still_runs(monkeypatch, 
     assert hung.audit.records == []
 
 
-def test_extract_job_is_registered_only_when_enabled():
-    jobs = {**JOBS, "extract": AsyncMock()}
-    assert "extract" not in {j.id for j in build_scheduler(settings(), jobs).get_jobs()}
-    on = {j.id: j for j in build_scheduler(settings(extract_enabled=True, extract_poll_minutes=7), jobs).get_jobs()}
-    assert set(on) == {"brief", "mail", "sweep", "extract", "expire"} and on["extract"].trigger.interval == timedelta(minutes=7)
-
-
-def test_the_digest_alone_registers_the_conversation_job_and_memory_upkeep_always_runs():
+def test_the_extract_and_memory_jobs_are_always_registered():
     jobs = {**JOBS, "extract": AsyncMock(), "memory": AsyncMock()}
-    on = {j.id: j for j in build_scheduler(settings(memory_digest_enabled=True), jobs).get_jobs()}
-    assert {"extract", "memory"} <= set(on) and on["memory"].trigger.interval == timedelta(minutes=30)
-    assert "memory" in {j.id for j in build_scheduler(settings(), jobs).get_jobs()}
+    on = {j.id: j for j in build_scheduler(settings(extract_poll_minutes=7), jobs).get_jobs()}
+    assert set(on) == {"brief", "mail", "sweep", "extract", "expire", "memory"}
+    assert on["extract"].trigger.interval == timedelta(minutes=7) and on["memory"].trigger.interval == timedelta(minutes=30)
+    off = {j.id for j in build_scheduler(settings(memory_digest_enabled=False), jobs).get_jobs()}
+    assert {"extract", "memory"} <= off  # the digest switch never stops fact extraction
 
 
 async def test_extract_runs_for_users_without_google_other_jobs_do_not():
@@ -459,11 +454,12 @@ async def test_extract_runs_for_users_without_google_other_jobs_do_not():
 async def test_the_extract_job_calls_the_extractor_with_the_users_llm(monkeypatch):
     seen = []
 
-    async def fake(rt, llm, now, on_candidates=None, facts=True):
-        seen.append((rt.user.id, llm, now))
-        assert facts is False  # the Learned inbox is off: the digest runs without fact candidates
+    async def fake(rt, llm, now, on_candidates=None, digest=True):
+        seen.append((rt.user.id, llm, now, digest))
 
     monkeypatch.setattr("jarvis.proactive.scheduler.run_extract", fake)
     rt = runtime(user(1), llm=None)
     await per_user_jobs(settings())["extract"](rt, FakeNotifier(), None, "Europe/Berlin", WED)
-    assert seen == [(1, None, WED)]
+    assert seen == [(1, None, WED, True)]
+    await per_user_jobs(settings(memory_digest_enabled=False))["extract"](rt, FakeNotifier(), None, "Europe/Berlin", WED)
+    assert seen[-1] == (1, None, WED, False)

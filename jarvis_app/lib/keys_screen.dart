@@ -87,7 +87,7 @@ class _EmbeddingFormState extends State<EmbeddingForm> {
       const SizedBox(height: 8),
       const Text(
         'Optional: an embedding model lets Jarvis find memories by meaning ("my wife\'s favourite food" finds '
-        '"Priya loves Thai curry"). Leave empty to search by words only.',
+        '"Priya loves Thai curry"). It runs on the same provider and key. Leave empty for the default.',
         style: TextStyle(color: mutedText, height: 1.5),
       ),
       const SizedBox(height: 12),
@@ -95,7 +95,7 @@ class _EmbeddingFormState extends State<EmbeddingForm> {
         key: const Key('embed-model'),
         enabled: !_busy,
         controller: _model,
-        decoration: _field('Embedding model id', hint: 'e.g. openai/text-embedding-3-small'),
+        decoration: _field('Embedding model id', hint: 'empty uses the default, qwen/qwen3-embedding-8b'),
       ),
       const SizedBox(height: 8),
       OutlinedButton(

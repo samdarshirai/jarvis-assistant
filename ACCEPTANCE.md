@@ -230,7 +230,7 @@ Not run on a real device yet.
 
 # Manual acceptance (learned candidates)
 
-Not run on a real device yet. Needs `JARVIS_EXTRACT_ENABLED=true`, an LLM key and push set up (`JARVIS_FCM_CREDENTIALS_PATH`).
+Not run on a real device yet. Needs an LLM key and push set up (`JARVIS_FCM_CREDENTIALS_PATH`); the extractor is always on.
 
 | # | Do | Expect |
 |---|----|--------|
@@ -244,4 +244,4 @@ Not run on a real device yet. Needs `JARVIS_EXTRACT_ENABLED=true`, an LLM key an
 | 132 | Have two people named Anna in Memory, then approve a candidate about "Anna" | Jarvis asks which Anna (or a new person) and writes nothing until you pick |
 | 133 | End two conversations with new facts within 30 minutes of each other | Only the first sends a notification; the badge still counts both |
 | 134 | With the app open in the foreground, let a notification arrive | The badge updates; no screen opens and nothing is spoken |
-| 135 | Turn `JARVIS_EXTRACT_ENABLED` off and restart | The Learned section and the badge are gone |
+| 135 | (Removed: the extractor can no longer be switched off.) | |

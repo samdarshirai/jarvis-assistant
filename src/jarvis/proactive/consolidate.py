@@ -55,8 +55,8 @@ def suggest(memory, kg, now: datetime) -> int:
     return made
 
 
-async def run_once(rt, now: datetime, suggest_facts: bool = True) -> dict:
-    """One user's upkeep. `now` is the user's local time. `suggest_facts` is off while the Learned inbox is hidden."""
+async def run_once(rt, now: datetime) -> dict:
+    """One user's upkeep. `now` is the user's local time."""
     memory = getattr(rt, "memory", None)
     if memory is None:
         return {}
@@ -69,7 +69,7 @@ async def run_once(rt, now: datetime, suggest_facts: bool = True) -> dict:
             log.warning("embedding backfill failed: %s", type(e).__name__)
     if now.hour >= NIGHT_HOUR and await asyncio.to_thread(rt.proactive.claim_alert, f"consolidate:{now.date().isoformat()}"):
         out["merged"] = await asyncio.to_thread(dedupe, memory, embedder if embedder and embedder.available else None)
-        if suggest_facts and getattr(rt, "kg", None) is not None:
+        if getattr(rt, "kg", None) is not None:
             out["suggested"] = await asyncio.to_thread(suggest, memory, rt.kg, now)
     if any(out.values()):
         await asyncio.to_thread(rt.audit.record, "proactive", "consolidate", result=out)

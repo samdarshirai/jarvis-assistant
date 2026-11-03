@@ -271,8 +271,8 @@ class BadOutput(Exception):
     """The model's answer held no JSON array: counts as a failed run."""
 
 
-async def _digest(rt, llm, cands: CandidateStore, due, now: datetime, facts: bool) -> dict | None:
-    """One conversation with a memory store: summary, open loops, short-term notes, and (when `facts`) candidates.
+async def _digest(rt, llm, cands: CandidateStore, due, now: datetime) -> dict | None:
+    """One conversation with a memory store: summary, open loops, short-term notes, and fact candidates.
     The counts stored, or None when the conversation moved on and was left for later."""
     memory = rt.memory
     lines, untrusted = await transcript(rt.graph, due.thread_id)
@@ -286,11 +286,10 @@ async def _digest(rt, llm, cands: CandidateStore, due, now: datetime, facts: boo
         digest = parse_digest(msg.content)
         if digest is None:
             raise BadOutput
-        if facts:
-            rows, dropped = validate(_list(digest.get("facts")), user)
-            rows, filtered = await asyncio.to_thread(filter_candidates, rt.kg, cands, rows)
-            dropped += filtered
-            rows = [{**r, "conversation_id": due.id} for r in rows]
+        rows, dropped = validate(_list(digest.get("facts")), user)
+        rows, filtered = await asyncio.to_thread(filter_candidates, rt.kg, cands, rows)
+        dropped += filtered
+        rows = [{**r, "conversation_id": due.id} for r in rows]
         items = validate_items(_list(digest.get("short_term")), user, now.date(), rt.tz)
         items = [i for i in items if not rt.kg.mentions_suppressed(i["text"], i["quote"])]
     summary = digest.get("summary") if isinstance(digest.get("summary"), str) else None
@@ -326,21 +325,19 @@ async def _read(rt, llm, cands: CandidateStore, due, now: datetime) -> tuple[int
     return len(rows), dropped
 
 
-async def run_once(rt, llm, now: datetime, on_candidates=None, facts: bool = True) -> None:
-    """Read every ended, unread conversation of this user (at most MAX_PER_TICK) and store what it holds: with a memory
-    store, the full digest; without one, fact candidates only. `facts=False` skips the Learned-inbox candidates (the
-    extractor flag is off). Skips silently without the user's own LLM key. `on_candidates(conversation_id, count)` is
-    called after candidates were stored: the hook for the Learned notification."""
+async def run_once(rt, llm, now: datetime, on_candidates=None, digest: bool = True) -> None:
+    """Read every ended, unread conversation of this user (at most MAX_PER_TICK) and store what it holds: fact
+    candidates for the Learned inbox, and with a memory store (and `digest`) the summary, open loops and short-term
+    notes. Skips silently without the user's own LLM key. `on_candidates(conversation_id, count)` is called after
+    candidates were stored: the hook for the Learned notification."""
     if llm is None or getattr(rt, "graph", None) is None or getattr(rt, "kg", None) is None:
         return
-    memory = getattr(rt, "memory", None)
-    if memory is None and not facts:
-        return
+    memory = getattr(rt, "memory", None) if digest else None
     cands = CandidateStore(rt.kg.pool, rt.user.id)
     for due in await asyncio.to_thread(cands.due, now, MAX_PER_TICK):
         try:
             if memory is not None:
-                counts = await _digest(rt, llm, cands, due, now, facts)
+                counts = await _digest(rt, llm, cands, due, now)
                 done = None if counts is None else (counts["candidates"], counts["dropped"], counts)
             else:
                 done = await _read(rt, llm, cands, due, now)

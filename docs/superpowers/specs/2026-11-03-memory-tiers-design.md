@@ -61,8 +61,7 @@ and the thread, and the block still fails closed (`MemoryContextError`).
   returns `{summary, open_loops, short_term, facts}`:
   - The input is the user's messages plus the assistant's final replies (cut to 800 characters), never tool results.
     The notes already saved are listed so they are not repeated.
-  - `facts` go through the existing `validate` → `filter_candidates` → Learned inbox, only when
-    `JARVIS_EXTRACT_ENABLED`.
+  - `facts` go through the existing `validate` → `filter_candidates` → Learned inbox (always on).
   - `short_term` goes through `validate_items`: a word-for-word quote from a user message, an end date clamped to
     between 1 hour and 60 days, suppressed names dropped. The items are saved at once.
   - Everything is saved in the transaction that marks the conversation read (`CandidateStore.save(extra=...)`).
@@ -92,7 +91,7 @@ and the thread, and the block still fails closed (`MemoryContextError`).
 - Once a night (after 03:00 local, `claim_alert consolidate:<date>`):
   - Merge duplicates: same words, or cosine ≥ 0.92.
   - Suggest "keep forever" through the Learned inbox for items mentioned in three or more conversations, or flagged as
-    lasting by the digest. Only when the inbox is on. Nothing becomes a lasting fact without the user's tap.
+    lasting by the digest. Nothing becomes a lasting fact without the user's tap.
 
 ## Other behaviour
 
@@ -116,9 +115,8 @@ and the thread, and the block still fails closed (`MemoryContextError`).
 
 | Setting | Default | Effect |
 |---|---|---|
-| `JARVIS_MEMORY_DIGEST_ENABLED` | true | summaries and short-term notes from ended conversations |
-| `JARVIS_EXTRACT_ENABLED` | false | also fact candidates for the Learned inbox, and keep-forever suggestions |
-| `JARVIS_EMBED_MODEL` | "" | server default embedding model (users can set their own) |
+| `JARVIS_MEMORY_DIGEST_ENABLED` | true | summaries and short-term notes from ended conversations (fact candidates and keep-forever suggestions are always on; the `JARVIS_EXTRACT_ENABLED` flag was removed) |
+| `JARVIS_EMBED_MODEL` | `qwen/qwen3-embedding-8b` | server default embedding model on the user's own endpoint (users can set their own; empty = keywords only). Qwen3 vectors are kept to their first 1024 numbers |
 
 ## Trust boundary
 
