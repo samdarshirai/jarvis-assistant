@@ -94,11 +94,12 @@ def test_digest_saves_summary_loops_short_term_notes_and_candidates(pool, uids):
                                                               "summarised": True}} in rt.audit.records
 
 
-def test_with_the_learned_inbox_off_only_memory_is_written(pool, uids):
-    make_conv(pool, uids[0], "t1")
+def test_with_the_digest_off_only_fact_candidates_are_written(pool, uids):
+    cid = make_conv(pool, uids[0], "t1")
     rt = digest_rt(pool, uids[0], {"t1": FLIGHTS + [HumanMessage("my sister Anna lives in Pune")]})
-    asyncio.run(run_once(rt, Llm(DIGEST), NOW, facts=False))
-    assert rows(pool) == [] and len(rt.memory.active()) == 1 and rt.memory.recent_summaries(within=timedelta(days=9))
+    asyncio.run(run_once(rt, Llm(PUNE), NOW, digest=False))
+    assert rows(pool) == [(cid, "Anna", "city", "Pune", "my sister Anna lives in Pune", "new")]
+    assert rt.memory.active() == [] and rt.memory.recent_summaries(within=timedelta(days=9)) == []
 
 
 def test_a_conversation_that_read_email_has_its_summary_flagged(pool, uids):
@@ -122,7 +123,7 @@ def test_off_the_record_conversations_are_never_read(pool, uids):
 def test_a_known_short_term_note_is_refreshed_not_duplicated(pool, uids):
     first, second = make_conv(pool, uids[0], "a", ago=timedelta(hours=3)), make_conv(pool, uids[0], "b")
     rt = digest_rt(pool, uids[0], {"a": FLIGHTS, "b": FLIGHTS})
-    asyncio.run(run_once(rt, Llm(DIGEST, DIGEST), NOW, facts=False))
+    asyncio.run(run_once(rt, Llm(DIGEST, DIGEST), NOW))
     [note] = rt.memory.active()
     assert note.seen_count == 2 and note.conversation_id == first
 
@@ -132,7 +133,7 @@ def test_the_saved_notes_are_shown_to_the_model_so_it_does_not_repeat_them(pool,
     rt = digest_rt(pool, uids[0], {"t1": FLIGHTS})
     rt.memory.add_item("Waiting for the plumber")
     llm = Llm(DIGEST)
-    asyncio.run(run_once(rt, llm, NOW, facts=False))
+    asyncio.run(run_once(rt, llm, NOW))
     assert "<saved_notes>\n- Waiting for the plumber\n</saved_notes>" in llm.seen[0][0][1].content
 
 
@@ -190,14 +191,6 @@ def test_upkeep_expires_and_once_a_night_merges_and_suggests(pool, uids):
         ("me", "note", "Works from Pune on Fridays", "new")]
     again = asyncio.run(consolidate.run_once(rt, local.replace(hour=5)))  # once a night, and never suggested twice
     assert "merged" not in again and len(rows(pool)) == 1
-
-
-def test_without_the_learned_inbox_nothing_is_suggested(pool, uids):
-    rt = upkeep_rt(pool, uids[0], Clock(NOW))
-    cid = make_conv(pool, uids[0], "t1")
-    rt.memory.add_item("Works from Pune on Fridays", conversation_id=cid, durable=True)
-    out = asyncio.run(consolidate.run_once(rt, NOW.astimezone().replace(hour=4), suggest_facts=False))
-    assert "suggested" not in out and rows(pool) == []
 
 
 def test_upkeep_embeds_with_the_users_model(pool, uids):

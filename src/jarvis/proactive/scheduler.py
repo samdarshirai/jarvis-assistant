@@ -129,14 +129,14 @@ def per_user_jobs(s) -> dict:
 
     async def extract(rt, notifier, llm, tz, now):
         await run_extract(rt, llm, now, on_candidates=lambda conv_id, count: announce(rt, notifier, conv_id, count, now),
-                          facts=getattr(s, "extract_enabled", True))  # the job only runs when one flag is on
+                          digest=getattr(s, "memory_digest_enabled", True))
 
     async def expire(rt, notifier, llm, tz, now):
         if getattr(rt, "kg", None) is not None:  # undecided for 30 days: expired, not remembered as dismissed
             await asyncio.to_thread(CandidateStore(rt.kg.pool, rt.kg.user_id).expire, now)
 
     async def memory(rt, notifier, llm, tz, now):
-        await run_consolidate(rt, now, suggest_facts=getattr(s, "extract_enabled", True))
+        await run_consolidate(rt, now)
 
     return {"brief": brief, "mail": mail, "sweep": alerts, "extract": extract, "expire": expire, "memory": memory}
 
@@ -149,11 +149,11 @@ def build_scheduler(s, jobs: dict) -> AsyncIOScheduler:
         sched.add_job(jobs["brief"], IntervalTrigger(minutes=5), id="brief", **common)
     sched.add_job(jobs["mail"], IntervalTrigger(minutes=s.mail_poll_minutes), id="mail", **common)
     sched.add_job(jobs["sweep"], IntervalTrigger(minutes=5), id="sweep", **common)
-    if s.extract_enabled or s.memory_digest_enabled:  # one job reads each ended conversation once for both
+    if "extract" in jobs:  # reads each ended conversation once: fact candidates, and the memory digest
         sched.add_job(jobs["extract"], IntervalTrigger(minutes=s.extract_poll_minutes), id="extract", **common)
     if "memory" in jobs:  # expiry, embeddings and the nightly consolidation
         sched.add_job(jobs["memory"], IntervalTrigger(minutes=30), id="memory", **common)
-    # not behind the flag: switching the extractor off must not leave old candidates undecided forever
+    # undecided candidates expire after 30 days
     sched.add_job(jobs["expire"], IntervalTrigger(hours=6), id="expire", **common)
     return sched
 
