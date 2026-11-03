@@ -112,13 +112,14 @@ def test_other_user_cannot_get_or_resume(pool, uids, clock):
 
 @pytest.fixture
 def scratch(pool):
-    """A pool whose search_path puts an empty private schema first: a checkpoints table made there shadows the shared one, which is never touched."""
+    """A pool whose search_path is a private schema only, so there is no checkpoints table until a test makes one; the shared tables are never touched."""
     from psycopg_pool import ConnectionPool
 
     with pool.connection() as c:
         c.execute("DROP SCHEMA IF EXISTS scratch CASCADE")
         c.execute("CREATE SCHEMA scratch")
-    p = ConnectionPool(os.environ["TEST_DATABASE_URL"], kwargs={"options": "-c search_path=scratch,public"}, open=True)
+        c.execute("CREATE TABLE scratch.conversation (LIKE public.conversation INCLUDING ALL)")  # all list() touches besides checkpoints
+    p = ConnectionPool(os.environ["TEST_DATABASE_URL"], kwargs={"options": "-c search_path=scratch"}, open=True)
     yield p
     p.close()
     with pool.connection() as c:
