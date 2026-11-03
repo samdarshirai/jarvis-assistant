@@ -1,11 +1,17 @@
 import asyncio
-from datetime import date
+import json
+import logging
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from jarvis.proactive.extract import (MAX_CHARS, MAX_MESSAGES, MAX_TEXT, SYSTEM, build_prompt, human_texts, parse,
-                                      validate)
+from jarvis.kg.candidates import MAX_ATTEMPTS, CandidateStore
+from jarvis.kg.store import GraphStore
+from jarvis.proactive.extract import (MAX_CHARS, MAX_MESSAGES, MAX_PER_TICK, MAX_TEXT, SYSTEM, build_prompt,
+                                      filter_candidates, human_texts, parse, run_once, validate)
+from tests.fakes import MemoryAudit
 
 
 class Graph:
@@ -152,13 +158,6 @@ def test_values_are_whitespace_collapsed_and_at_most_ten_survive():
 
 # ---- filtering against the graph (Postgres) ----
 
-from datetime import datetime, timedelta, timezone  # noqa: E402
-
-import pytest  # noqa: E402
-
-from jarvis.kg.candidates import CandidateStore  # noqa: E402
-from jarvis.kg.store import GraphStore  # noqa: E402
-from jarvis.proactive.extract import filter_candidates  # noqa: E402
 
 NOW = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
 SECRET = b"s" * 32
@@ -290,12 +289,6 @@ def test_duplicates_inside_one_batch_collapse(kg, cs):
 
 # ---- the job ----
 
-import json  # noqa: E402
-import logging  # noqa: E402
-
-from jarvis.kg.candidates import MAX_ATTEMPTS  # noqa: E402
-from jarvis.proactive.extract import MAX_PER_TICK, run_once  # noqa: E402
-from tests.fakes import MemoryAudit  # noqa: E402
 
 PUNE = json.dumps([{"subject": "Anna", "subject_kind": "person", "relation": "sister", "predicate": "city",
                     "value": "Pune", "quote": "my sister Anna lives in Pune"}])
@@ -520,3 +513,31 @@ def test_users_are_isolated(pool, uids):
     assert rows(pool, "SELECT extracted_at IS NOT NULL FROM conversation WHERE user_id = %s", uids[1]) == [(False,)]
     asyncio.run(run_once(rt_for(pool, uids[1], shared), Llm("[]"), NOW))
     assert rows(pool, "SELECT user_id FROM fact_candidate") == [(uids[0],)]
+
+
+async def test_end_to_end_through_the_scheduler_job_then_forgetting(pool, uids):
+    """Closed conversation -> candidate (for a user who never connected Google) -> forget removes it and keeps it out."""
+    from jarvis.proactive.scheduler import google_gate, per_user_jobs, run_for_users
+    from jarvis.users import User
+    from tests.fakes import FakeNotifier, FakeProvider, FakeTenants, FakeUsers
+
+    uid = uids[0]
+    cid = make_conv(pool, uid, "t1")
+    said = {"t1": [HumanMessage("my sister Anna lives in Pune")]}
+    rt = rt_for(pool, uid, said, llm=FakeProvider({"fast": [AIMessage(PUNE), AIMessage(PUNE)]}))
+    rt.user = User(uid, "a@example.com", None, "Europe/Berlin", False, False)
+    job = per_user_jobs(SimpleNamespace())["extract"]
+
+    async def tick():
+        await run_for_users("extract", job, FakeUsers([rt.user]), FakeTenants({uid: rt}),
+                            google_gate("extract", lambda u: False), lambda u: FakeNotifier(), now=NOW)
+
+    await tick()
+    assert rows(pool) == [(cid, "Anna", "city", "Pune", "my sister Anna lives in Pune", "new")]
+    anna = rt.kg.create_entity("Anna")
+    assert rt.kg.forget_entity(anna.id)["candidates_deleted"] == 1
+    assert rows(pool) == []
+    make_conv(pool, uid, "t2", ago=timedelta(minutes=50))
+    said["t2"] = said["t1"]
+    await tick()
+    assert rows(pool) == []  # the suppressed name is not proposed again
