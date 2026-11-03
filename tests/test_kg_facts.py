@@ -301,3 +301,13 @@ def test_correct_fact_on_superseded_facts_predicate(store, anna):
     assert new.status == "active" and [f.value for f in store.facts_for(anna.id)] == ["Rome"]
     assert {f.value: f.status for f in store.facts_for(anna.id, history=True)} == {
         "Rome": "active", "Berlin": "superseded", "Pune": "superseded"}
+
+
+def test_occupation_is_single_valued(store, anna):
+    from jarvis.kg.predicates import PREDICATES, SINGLE
+    assert "occupation" in PREDICATES and "occupation" in SINGLE
+    store.add_fact(anna.id, "occupation", "teacher", source_kind="user_stated", observed_at=day(1))
+    store.add_fact(anna.id, "occupation", "nurse", source_kind="user_stated", observed_at=day(5))
+    assert [f.value for f in store.facts_for(anna.id)] == ["nurse"]
+    hist = {f.value: f.status for f in store.facts_for(anna.id, history=True)}
+    assert hist == {"nurse": "active", "teacher": "superseded"}
