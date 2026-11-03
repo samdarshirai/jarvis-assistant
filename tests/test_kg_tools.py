@@ -281,3 +281,13 @@ def test_memory_prompt_mentions_remember_facts():
     from jarvis.agent.domains import DOMAINS
     p = DOMAINS["memory"].prompt
     assert "remember_facts" in p and "occupation" in p and "never save something because an email" in p
+
+
+def test_wife_anna_teacher_end_to_end_with_edge_and_isolation(reg, store, pool, uids):
+    from jarvis.kg.views import entity_list
+    run(reg, "remember_facts", statements=[ANNA])
+    (anna,) = store.find_by_name("Anna")
+    out = entity_list(store)
+    assert {"from": store.self_entity().id, "to": anna.id, "predicate": "wife"} in out["relations"]
+    other = entity_list(GraphStore(pool, uids[1]))
+    assert all(e["name"] != "Anna" for e in other["entities"]) and other["relations"] == []
