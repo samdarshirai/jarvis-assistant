@@ -148,3 +148,141 @@ def test_values_are_whitespace_collapsed_and_at_most_ten_survive():
     assert rows[0]["value"] == "Pune city" and rows[0]["value_norm"] == "pune city"
     rows, dropped = validate([item(value=f"v{i}") for i in range(14)], USER)
     assert len(rows) == 10 and dropped == 4 and rows[0]["value"] == "v0"
+
+
+# ---- filtering against the graph (Postgres) ----
+
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+import pytest  # noqa: E402
+
+from jarvis.kg.candidates import CandidateStore  # noqa: E402
+from jarvis.kg.store import GraphStore  # noqa: E402
+from jarvis.proactive.extract import filter_candidates  # noqa: E402
+
+NOW = datetime(2026, 11, 3, 12, tzinfo=timezone.utc)
+SECRET = b"s" * 32
+
+
+def cand_row(subject="Anna", predicate="city", value="Pune", **over):
+    return validate([{"subject": subject, "subject_kind": "person", "relation": None, "predicate": predicate,
+                      "value": value, "quote": f"{subject} {predicate} {value}", **over}],
+                    [f"{subject} {predicate} {value}"])[0][0]
+
+
+@pytest.fixture
+def kg(pool, uids):
+    return GraphStore(pool, uids[0], secret=SECRET)
+
+
+@pytest.fixture
+def cs(pool, uids):
+    return CandidateStore(pool, uids[0])
+
+
+def keep(kg, cs, *rows):
+    kept, dropped = filter_candidates(kg, cs, list(rows))
+    return kept, dropped
+
+
+def store_decided(pool, uid, row, status):
+    """A candidate of an earlier conversation that the user already decided."""
+    with pool.connection() as c:
+        cv = c.execute("INSERT INTO conversation (user_id, channel, surface, thread_id, closed_at)"
+                       " VALUES (%s, 'chat', 'chat', gen_random_uuid()::text, now()) RETURNING id", (uid,)).fetchone()[0]
+    CandidateStore(pool, uid).save(cv, _last_at(pool, cv), [row], NOW)
+    with pool.connection() as c:
+        c.execute("UPDATE fact_candidate SET status = %s WHERE conversation_id = %s", (status, cv))
+
+
+def _last_at(pool, cv):
+    with pool.connection() as c:
+        return c.execute("SELECT last_at FROM conversation WHERE id = %s", (cv,)).fetchone()[0]
+
+
+def test_unknown_subject_is_kept_as_is(kg, cs):
+    kept, dropped = keep(kg, cs, cand_row())
+    assert len(kept) == 1 and dropped == 0 and kept[0]["replaces_fact_id"] is None
+
+
+def test_existing_active_fact_is_dropped_whatever_the_case_or_spacing(kg, cs):
+    anna = kg.create_entity("Anna")
+    kg.add_fact(anna.id, "city", "pune", source_kind="user_stated")
+    kept, dropped = keep(kg, cs, cand_row(value="  PUNE "))
+    assert kept == [] and dropped == 1
+
+
+def test_a_fact_the_user_just_told_the_assistant_is_not_proposed_again(kg, cs):
+    """What remember_fact saved in that very conversation is an active fact, so it is the same duplicate."""
+    me = kg.self_entity()
+    kg.add_fact(me.id, "office", "Munich", source_kind="user_stated", excerpt="I switched to the Munich office")
+    assert keep(kg, cs, cand_row("I", "office", "Munich"))[0] == []
+
+
+def test_relation_alias_and_self_words_resolve_to_the_known_entity(kg, cs):
+    anna = kg.create_entity("Anna", aliases=("sister",))
+    kg.add_fact(anna.id, "employer", "Infosys", source_kind="user_stated")
+    assert keep(kg, cs, cand_row("sister", "employer", "Infosys"))[0] == []
+    kg.add_fact(kg.self_entity().id, "city", "Munich", source_kind="user_stated")
+    assert keep(kg, cs, cand_row("me", "city", "Munich"))[0] == []
+
+
+def test_a_different_single_value_is_kept_and_points_at_the_fact_it_would_replace(kg, cs):
+    anna = kg.create_entity("Anna")
+    old = kg.add_fact(anna.id, "city", "Delhi", source_kind="user_stated")
+    kept, _ = keep(kg, cs, cand_row())
+    assert [k["replaces_fact_id"] for k in kept] == [old.id]
+
+
+def test_a_different_multi_value_has_nothing_to_replace(kg, cs):
+    anna = kg.create_entity("Anna")
+    kg.add_fact(anna.id, "note", "likes chess", source_kind="user_stated")
+    kept, _ = keep(kg, cs, cand_row(predicate="note", value="plays the piano"))
+    assert len(kept) == 1 and kept[0]["replaces_fact_id"] is None
+
+
+def test_a_superseded_fact_does_not_count_as_existing(kg, cs):
+    anna = kg.create_entity("Anna")
+    kg.add_fact(anna.id, "city", "Pune", source_kind="user_stated")
+    kg.add_fact(anna.id, "city", "Delhi", source_kind="user_stated")  # Pune is history now
+    kept, _ = keep(kg, cs, cand_row())
+    assert len(kept) == 1 and kept[0]["replaces_fact_id"] is not None
+
+
+def test_two_entities_with_the_name_leave_the_choice_to_the_review(kg, cs):
+    kg.create_entity("Anna")
+    other = kg.create_entity("Anna")
+    kg.add_fact(other.id, "city", "Pune", source_kind="user_stated")
+    kept, _ = keep(kg, cs, cand_row())
+    assert len(kept) == 1 and kept[0]["replaces_fact_id"] is None
+
+
+@pytest.mark.parametrize("status,proposed", [("dismissed", False), ("approved", False), ("new", False), ("expired", True)])
+def test_earlier_candidates_by_status(pool, uids, kg, cs, status, proposed):
+    store_decided(pool, uids[0], cand_row(), status)
+    assert (len(keep(kg, cs, cand_row())[0]) == 1) is proposed
+
+
+def test_dismissed_in_another_users_account_filters_nothing(pool, uids, kg, cs):
+    store_decided(pool, uids[1], cand_row(), "dismissed")
+    assert len(keep(kg, cs, cand_row())[0]) == 1
+
+
+def test_facts_of_another_user_filter_nothing(pool, uids, kg, cs):
+    other = GraphStore(pool, uids[1], secret=SECRET)
+    other.add_fact(other.create_entity("Anna").id, "city", "Pune", source_kind="user_stated")
+    assert len(keep(kg, cs, cand_row())[0]) == 1
+
+
+def test_suppressed_name_in_subject_or_value_is_dropped(kg, cs):
+    anna = kg.create_entity("Anna Müller")
+    kg.forget_entity(anna.id)
+    kept, dropped = keep(kg, cs, cand_row("Anna Müller", "city", "Pune"),
+                         cand_row("Raj", "friend_of", "Anna Müller", quote="Raj friend_of Anna Müller"),
+                         cand_row("Priya", "city", "Goa"))
+    assert [k["subject_name"] for k in kept] == ["Priya"] and dropped == 2
+
+
+def test_duplicates_inside_one_batch_collapse(kg, cs):
+    kept, dropped = keep(kg, cs, cand_row(), cand_row(value="pune"), cand_row(value="Goa"))
+    assert [k["value"] for k in kept] == ["Pune", "Goa"] and dropped == 1

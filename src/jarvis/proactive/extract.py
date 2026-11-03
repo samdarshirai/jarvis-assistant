@@ -11,7 +11,7 @@ from datetime import date
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from jarvis.kg.facts import norm
-from jarvis.kg.predicates import KINDS, PREDICATES
+from jarvis.kg.predicates import KINDS, PREDICATES, SINGLE
 
 MAX_TEXT = 1000  # a longer message is most likely pasted text
 MAX_MESSAGES, MAX_CHARS = 100, 20_000  # cost cap: the newest messages that fit
@@ -106,3 +106,39 @@ def validate(items: list, user_texts: list[str]) -> tuple[list[dict], int]:
         rows.append({"subject_name": subject, "subject_kind": kind, "relation": relation, "predicate": predicate,
                      "value": value, "quote": quote, "subject_norm": norm(subject), "value_norm": norm(value)})
     return rows, len(items) - len(rows)
+
+
+def filter_candidates(kg, cands, rows: list[dict]) -> tuple[list[dict], int]:
+    """Drop what is not worth asking about: suppressed names, facts the graph already holds, things already proposed
+    (waiting, approved or dismissed), repeats. A candidate that would change a single-valued fact is kept and points at
+    that fact (`replaces_fact_id`). Blocking: runs database reads, call it from a thread."""
+    kept = []
+    for r in rows:
+        if kg.mentions_suppressed(r["subject_name"], r["value"]):
+            continue
+        entity = _known_entity(kg, r["subject_name"])
+        replaces = None
+        if entity is not None:
+            active = [f for f in kg.facts_for(entity.id) if f.predicate == r["predicate"]]
+            if any(norm(f.value) == r["value_norm"] for f in active):
+                continue
+            if r["predicate"] in SINGLE and active:
+                replaces = active[0].id
+        kept.append({**r, "replaces_fact_id": replaces})
+    keys = [(r["subject_norm"], r["predicate"], r["value_norm"]) for r in kept]
+    seen = cands.known(keys)
+    out = []
+    for r, key in zip(kept, keys):
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out, len(rows) - len(out)
+
+
+def _known_entity(kg, subject: str):
+    """The one entity this subject names, or None when it is new to the graph or ambiguous (the review asks which)."""
+    if norm(subject) in SELF_WORDS:
+        return kg.self_entity()
+    found = kg.find_by_name(subject)
+    return found[0] if len(found) == 1 else None
