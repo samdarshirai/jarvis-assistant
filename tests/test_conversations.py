@@ -1,4 +1,5 @@
 import asyncio
+import os
 import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -109,25 +110,34 @@ def test_other_user_cannot_get_or_resume(pool, uids, clock):
     assert conv.id not in [c.id for c in b.list()]
 
 
-def test_legacy_thread_imported_once(pool, uids, clock):
-    uid = uids[0]
+@pytest.fixture
+def scratch(pool):
+    """A pool whose search_path puts an empty private schema first: a checkpoints table made there shadows the shared one, which is never touched."""
+    from psycopg_pool import ConnectionPool
+
     with pool.connection() as c:
-        c.execute("DROP TABLE IF EXISTS checkpoints, checkpoint_blobs, checkpoint_writes, checkpoint_migrations")
-    s = ConversationStore(pool, uid, clock)
-    assert s.list() == []  # no checkpoint tables: no error
-    try:
-        with pool.connection() as c:
-            c.execute("CREATE TABLE checkpoints (thread_id TEXT NOT NULL, checkpoint_id TEXT NOT NULL)")
-            c.execute("INSERT INTO checkpoints VALUES (%s, 'c1')", (f"user:{uid}",))
-        s.list()
-        got = s.list()
-        assert len(got) == 1
-        assert got[0].thread_id == f"user:{uid}" and got[0].title == "Earlier conversation"
-        assert got[0].closed_at is not None
-        assert ConversationStore(pool, uids[1], clock).list() == []
-    finally:
-        with pool.connection() as c:
-            c.execute("DROP TABLE IF EXISTS checkpoints")
+        c.execute("DROP SCHEMA IF EXISTS scratch CASCADE")
+        c.execute("CREATE SCHEMA scratch")
+    p = ConnectionPool(os.environ["TEST_DATABASE_URL"], kwargs={"options": "-c search_path=scratch,public"}, open=True)
+    yield p
+    p.close()
+    with pool.connection() as c:
+        c.execute("DROP SCHEMA scratch CASCADE")
+
+
+def test_legacy_thread_imported_once(scratch, uids, clock):
+    uid = uids[0]
+    s = ConversationStore(scratch, uid, clock)
+    assert s.list() == []  # no checkpoint rows for this user: nothing imported, no error
+    with scratch.connection() as c:
+        c.execute("CREATE TABLE checkpoints (thread_id TEXT NOT NULL, checkpoint_id TEXT NOT NULL)")
+        c.execute("INSERT INTO checkpoints VALUES (%s, 'c1')", (f"user:{uid}",))
+    s.list()
+    got = s.list()
+    assert len(got) == 1
+    assert got[0].thread_id == f"user:{uid}" and got[0].title == "Earlier conversation"
+    assert got[0].closed_at is not None
+    assert ConversationStore(scratch, uids[1], clock).list() == []
 
 
 def test_messages_json():

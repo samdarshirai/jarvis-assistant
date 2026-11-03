@@ -79,7 +79,7 @@ class ConversationStore:
         with self.pool.connection() as conn:
             rows = conn.execute(f"SELECT {COLS} FROM conversation WHERE user_id = %s ORDER BY last_at DESC LIMIT %s",
                                 (self.user_id, limit)).fetchall()
-        return [Conversation(*r) for r in rows]
+        return [_conv(r) for r in rows]
 
     def resume(self, conv_id: int, surface: str) -> Conversation | None:
         target = self.get(conv_id)
