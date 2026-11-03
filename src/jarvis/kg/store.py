@@ -178,6 +178,14 @@ class GraphStore(FactsMixin):
         with self.pool.connection() as conn:
             return self._suppressed(conn, type, [_norm_key(type, value)])
 
+    def mentions_suppressed(self, *texts: str) -> bool:
+        """True if any text mentions a name or key the user asked to forget (same matcher as excerpt redaction)."""
+        words = sorted(set().union(*(forget.grams(t) for t in texts)))
+        with self.pool.connection() as conn:
+            hs = forget.hmacs(self, conn, words) if words else None
+            return bool(hs) and conn.execute("SELECT 1 FROM suppression WHERE user_id = %s AND key_hmac = ANY(%s) LIMIT 1",
+                                             (self.user_id, hs)).fetchone() is not None
+
     def list_suppressions(self) -> list[dict]:
         with self.pool.connection() as conn:
             rows = conn.execute("SELECT kind, key_type, key_hmac, created_at FROM suppression WHERE user_id = %s"

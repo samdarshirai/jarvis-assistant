@@ -136,7 +136,12 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
                                 for i, n, p, v in mentions[:MAX_LISTED]]}
     if len(mentions) > MAX_LISTED:
         counts["mention_facts_more"] = len(mentions) - MAX_LISTED
-    return counts, ids, gone, redact_ids, sup
+    # extractor candidates about them or quoting them, whatever their status (a dismissed one still holds the user's words)
+    cand_ids = [i for i, subj, quote, value in conn.execute(
+        "SELECT id, subject_norm, quote, value FROM fact_candidate WHERE user_id = %s", (uid,)).fetchall()
+        if subj in terms or _mentions(quote, terms) or _mentions(value, terms)]
+    counts["candidates_deleted"] = len(cand_ids)
+    return counts, ids, gone, redact_ids, sup, cand_ids
 
 
 def preview_forget(store, entity_id: int, *, include_mentions: bool = True) -> dict:
@@ -150,12 +155,13 @@ def forget_entity(store, entity_id: int, *, include_mentions: bool = True) -> di
     """Delete the entity (and all merged into it), its facts, facts about or mentioning it; redact excerpts; suppress its names and keys."""
     uid = store.user_id
     with store.pool.connection() as conn:
-        counts, ids, gone, redact_ids, sup = _plan(store, conn, entity_id, include_mentions)
+        counts, ids, gone, redact_ids, sup, cand_ids = _plan(store, conn, entity_id, include_mentions)
         srcs = [r[0] for r in conn.execute("SELECT DISTINCT source_id FROM fact_source WHERE user_id = %s"
                                            " AND fact_id = ANY(%s)", (uid, gone)).fetchall()]
         conn.execute("DELETE FROM fact WHERE user_id = %s AND id = ANY(%s)", (uid, gone))
         conn.execute("DELETE FROM entity WHERE user_id = %s AND id = ANY(%s)", (uid, ids))
         drop_sources(conn, uid, srcs)
+        conn.execute("DELETE FROM fact_candidate WHERE user_id = %s AND id = ANY(%s)", (uid, cand_ids))
         conn.execute("UPDATE source SET excerpt = '' WHERE user_id = %s AND id = ANY(%s)", (uid, redact_ids))
         counts["suppressed"] = sum(conn.execute(
             "INSERT INTO suppression (user_id, key_type, key_hmac, kind) VALUES (%s, %s, %s, %s)"

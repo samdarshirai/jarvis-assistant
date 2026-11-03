@@ -162,7 +162,7 @@ def test_preview_forget_writes_nothing(pool, store, anna):
     assert len(store.facts_for(maria.id)) == 2
     assert p == store.forget_entity(anna.id)
     assert p == {"entity": "Anna Müller", "facts": 1, "redacted_excerpts": 1, "mentions_deleted": 1, "suppressed": 4,
-                 "merged_entities": 0, "mention_facts": [{"id": p["mention_facts"][0]["id"], "entity": "Maria",
+                 "merged_entities": 0, "candidates_deleted": 0, "mention_facts": [{"id": p["mention_facts"][0]["id"], "entity": "Maria",
                                                           "predicate": "note", "value": "her boss is Anna Müller"}]}
 
 
@@ -348,3 +348,66 @@ def test_alias_suppression_still_written(store):
     s = store.create_entity("Priya Rao", aliases=("sister",))
     store.forget_entity(s.id)
     assert store.is_suppressed("name", "sister")
+
+
+def _conv(pool, uid, thread="c1"):
+    with pool.connection() as c:
+        return c.execute("INSERT INTO conversation (user_id, channel, surface, thread_id, closed_at)"
+                         " VALUES (%s, 'chat', 'chat', %s, now()) RETURNING id", (uid, thread)).fetchone()[0]
+
+
+def _cand(pool, uid, conv, subject, value, quote, status="new", predicate="note"):
+    from jarvis.kg.facts import norm
+    with pool.connection() as c:
+        return c.execute(
+            "INSERT INTO fact_candidate (user_id, conversation_id, subject_name, subject_kind, predicate, value, quote,"
+            " subject_norm, value_norm, status) VALUES (%s, %s, %s, 'person', %s, %s, %s, %s, %s, %s) RETURNING id",
+            (uid, conv, subject, predicate, value, quote, norm(subject), norm(value), status)).fetchone()[0]
+
+
+def test_mentions_suppressed(store, anna):
+    assert store.mentions_suppressed("Anna's new job") is False  # nothing forgotten yet
+    store.forget_entity(anna.id)
+    assert store.mentions_suppressed("Anna Müller") is True
+    assert store.mentions_suppressed("I heard Annie is moving to Pune") is True  # an alias is a full name too
+    assert store.mentions_suppressed("I heard Anna Müller's moving to Pune") is True
+    assert store.mentions_suppressed("Anna is moving to Pune") is False  # a bare first name is never suppressed
+    assert store.mentions_suppressed("Maria", "lives in Pune") is False
+    assert store.mentions_suppressed("") is False
+
+
+def test_mentions_suppressed_without_a_secret_is_false(pool, uids):
+    assert GraphStore(pool, uids[0]).mentions_suppressed("Anna") is False
+
+
+def test_mentions_suppressed_is_per_user(pool, uids, anna, store):
+    store.forget_entity(anna.id)
+    assert GraphStore(pool, uids[1], secret=SECRET).mentions_suppressed("Anna Müller") is False
+
+
+def test_forget_removes_the_entitys_candidates_whatever_their_status(pool, store, anna, uids):
+    cv = _conv(pool, uids[0])
+    mine = [_cand(pool, uids[0], cv, "Anna", "teacher", "Anna is a teacher"),
+            _cand(pool, uids[0], cv, "Anna Müller", "Pune", "Anna Müller lives in Pune", status="dismissed", predicate="city"),
+            _cand(pool, uids[0], cv, "Raj", "works with Anna Müller", "Raj works with Anna Müller", status="approved")]
+    other = _cand(pool, uids[0], cv, "Priya", "nurse", "Priya is a nurse")
+    r = store.forget_entity(anna.id)
+    assert r["candidates_deleted"] == 3
+    left = _count(pool, "SELECT array_agg(id) FROM fact_candidate")
+    assert left == [other] and not set(mine) & set(left)
+
+
+def test_preview_forget_counts_candidates_and_deletes_nothing(pool, store, anna, uids):
+    cv = _conv(pool, uids[0])
+    _cand(pool, uids[0], cv, "Anna", "teacher", "Anna is a teacher")
+    assert store.preview_forget(anna.id)["candidates_deleted"] == 1
+    assert _count(pool, "SELECT count(*) FROM fact_candidate") == 1
+
+
+def test_forget_leaves_other_users_candidates(pool, store, anna, uids):
+    other = GraphStore(pool, uids[1], secret=SECRET)
+    cv = _conv(pool, uids[1], "c2")
+    _cand(pool, uids[1], cv, "Anna", "teacher", "Anna is a teacher")
+    store.forget_entity(anna.id)
+    assert _count(pool, "SELECT count(*) FROM fact_candidate WHERE user_id = %s", uids[1]) == 1
+    assert other.mentions_suppressed("Anna") is False
