@@ -6,7 +6,7 @@ from jarvis.voice import protocol as P
 from tests.fakes import FakeSTT, FakeTTS
 from tests.test_graph import call, tool
 from tests.voice_helpers import (AUTH, FINAL, PARTIAL, build, audio, chat_scripts, ping, read, texts, until,
-                                 until_state)
+                                 until_state, voice_cfg)
 
 from langchain_core.messages import AIMessage
 
@@ -81,8 +81,7 @@ def test_dropped_socket_mid_card_leaves_the_confirmation_pending_for_other_chann
             read(ws)
             ping(ws)
             until(ws, "confirm_card")
-        from jarvis.tenant import thread_config
-        state = c.portal.call(h.graph.aget_state, thread_config(1, voice=True))
+        state = c.portal.call(h.graph.aget_state, voice_cfg(h))
         assert state.interrupts and calls == []
         assert h.svc.sessions == {}
 

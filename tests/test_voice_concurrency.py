@@ -12,10 +12,9 @@ from jarvis.channels.telegram import TelegramChannel
 from jarvis.tenant import thread_config
 from jarvis.voice.ws import HANDLED_TEXT
 
-VOICE_CFG = thread_config(1, voice=True)
 from tests.test_graph import call, tool
 from tests.test_telegram import OWNER, button_update, chat, ids, sent, text_update
-from tests.voice_helpers import AUTH, FINAL, build, ping, read, texts, until, until_state
+from tests.voice_helpers import AUTH, FINAL, build, ping, pin_voice, read, texts, until, until_state, voice_cfg
 
 OK = '{"ok": true}'
 
@@ -58,7 +57,7 @@ def settle(c, h):
 
 def model_view(c, h):
     """What the next agent call is fed (minus its system prompt)."""
-    return repair_tool_gaps(window(c.portal.call(h.graph.aget_state, VOICE_CFG).values["messages"]))
+    return repair_tool_gaps(window(c.portal.call(h.graph.aget_state, voice_cfg(h)).values["messages"]))
 
 
 def assert_ran_once_and_audited(c, h, calls):
@@ -117,6 +116,7 @@ def test_replacement_mid_tool_does_not_cut_the_step():
     calls = []
     t, entered, release = blocking_tool(calls)
     h = build(gym_scripts(), [t], [FINAL("put gym at seven")])
+    pin_voice(h)  # both connections share one thread: the step belongs to it
     with TestClient(h.app) as c:
         first = c.websocket_connect("/voice", headers=AUTH)
         try:
@@ -161,6 +161,7 @@ def test_concurrent_voice_tap_and_telegram_button_run_the_tool_once():
     slow = SlowReads(h.graph)
     h.rt.graph = slow
     ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
+    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         card = present_card(ws)
         tc = chat()
@@ -177,6 +178,7 @@ def test_telegram_text_waits_for_a_running_voice_step():
     t, entered, release = blocking_tool(calls)
     h = build(gym_scripts(AIMessage("chat"), AIMessage("Hi from Telegram.")), [t], [FINAL("put gym at seven")])
     ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
+    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
     with TestClient(h.app) as c:
         try:
             with c.websocket_connect("/voice", headers=AUTH) as ws:
@@ -203,6 +205,7 @@ def test_telegram_shared_thread_with_owner_voice():
     calls = []
     h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("hello")])
     ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
+    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
     with TestClient(h.app) as c:
         tc = chat()
         c.portal.call(ch.on_text, text_update(tc, "put gym at seven"), None)  # proposed on Telegram
@@ -220,8 +223,9 @@ def test_telegram_shared_thread_with_owner_voice():
 def test_spoken_yes_does_not_approve_a_card_this_session_never_presented():
     calls = []
     h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("yes"), FINAL("yes")])
+    pin_voice(h)
     with TestClient(h.app) as c:
-        out = c.portal.call(h.graph.ainvoke, {"messages": [HumanMessage("put gym at seven")]}, VOICE_CFG)
+        out = c.portal.call(h.graph.ainvoke, {"messages": [HumanMessage("put gym at seven")]}, voice_cfg(h))
         iid = out["__interrupt__"][0].id
         with c.websocket_connect("/voice", headers=AUTH) as ws:
             read(ws)
@@ -242,6 +246,7 @@ def test_spoken_yes_meant_for_a_card_resolved_elsewhere_does_not_approve_the_nex
               [tool("create_event", "calendar", calls), tool("create_task", "tasks", calls)],
               [FINAL("gym and remind me about mum"), FINAL("yes")])
     ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
+    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         card_a = present_card(ws)
         tc = chat()

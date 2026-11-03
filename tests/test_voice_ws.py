@@ -4,9 +4,8 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from starlette.websockets import WebSocketDisconnect
 
-from jarvis.tenant import thread_config
 from jarvis.voice.devices import DeviceAuth
-from tests.voice_helpers import AUTH, FINAL, build, chat_scripts, ping, read, until, until_state, texts, audio
+from tests.voice_helpers import AUTH, FINAL, build, chat_scripts, ping, read, until, until_state, texts, audio, voice_cfg
 
 
 def test_missing_or_bad_token_is_closed_before_accept():
@@ -242,7 +241,7 @@ def test_voice_sessions_of_two_users_use_own_threads():
             assert sorted(h.svc.sessions) == [1, 2]  # different devices: neither replaced the other
 
         def said(uid):
-            msgs = c.portal.call(h.graph.aget_state, thread_config(uid, voice=True)).values["messages"]
+            msgs = c.portal.call(h.graph.aget_state, voice_cfg(h, uid)).values["messages"]
             return [m.content for m in msgs]
         assert said(1) == ["i am one", "Hi one."] and said(2) == ["i am two", "Hi two."]
     assert ("stt", "dg-1") in h.keys and h.tenants.lock(1) is not h.tenants.lock(2)
@@ -274,4 +273,4 @@ def test_disabled_user_session_closed():
             for _ in range(10):
                 read(ws)
         assert e.value.code == 4401
-        assert c.portal.call(h.graph.aget_state, thread_config(1, voice=True)).values == {}  # the graph never ran
+        assert c.portal.call(h.graph.aget_state, voice_cfg(h)).values == {}  # the graph never ran
