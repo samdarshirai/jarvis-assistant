@@ -339,3 +339,15 @@ async def test_display_name_validation_is_atomic(pool, uids):
     assert (await c.put('/me', json={'display_name': 'New', 'tz': 'Mars/Olympus'})).status_code == 422
     assert UserStore(pool).get(uids[0]).display_name == 'Alex'
     assert (await c.put('/me', json={})).status_code == 422
+
+
+async def test_embedding_model_is_saved_shown_cleared_and_validated(pool, uids):
+    uid = uids[0]
+    c, t = await setup(pool, uid)
+    r = await c.put("/settings/embedding", json={"model": " qwen/qwen3-embedding-8b "})
+    assert r.status_code == 200 and r.json()["keys"]["embed_model"] == "qwen/qwen3-embedding-8b"
+    assert secrets(pool, uid)["embed_model"] == "qwen/qwen3-embedding-8b"
+    assert (await c.put("/settings/embedding", json={"model": "bad model id!"})).status_code == 422
+    r = await c.put("/settings/embedding", json={"model": ""})  # back to the server default
+    assert r.status_code == 200 and "embed_model" not in r.json()["keys"] and "embed_model" not in secrets(pool, uid)
+    assert "set_embedding" in audit_text(pool)

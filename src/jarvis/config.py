@@ -30,7 +30,9 @@ class Settings(BaseSettings):
     auto_event_cap: int = Field(default=5, ge=0)  # events auto-created from email per rolling 24 h
     extract_poll_minutes: int = Field(default=5, ge=1)  # how often ended conversations are read (needs the user's LLM key)
     memory_digest_enabled: bool = True  # also summarise them and save their short-term notes; facts are always proposed
-    embed_model: str = ""  # server default embedding model id for meaning-based recall; empty = keyword recall only
+    # server default embedding model for meaning-based recall, on the user's own LLM endpoint (same base URL and key);
+    # a user's own setting wins; empty = keyword recall only
+    embed_model: str = "qwen/qwen3-embedding-8b"
 
     @field_validator("brief_time")
     @classmethod

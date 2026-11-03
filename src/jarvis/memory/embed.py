@@ -11,6 +11,13 @@ import httpx
 log = logging.getLogger(__name__)
 BATCH = 32
 MAX_CHARS = 2000  # per text: a long note is embedded by its start
+# Models trained so that a vector's first N numbers are a usable embedding on their own (Matryoshka): kept that short,
+# so recall's dot products in Python stay fast. Qwen3-Embedding-8B returns 4096 numbers; 1024 keep most of the quality.
+SHORTEN = {"qwen/qwen3-embedding": 1024}
+
+
+def keep_dims(model: str) -> int | None:
+    return next((n for prefix, n in SHORTEN.items() if model.startswith(prefix)), None)
 
 
 class Embedder:
@@ -36,7 +43,8 @@ class Embedder:
                 raise EmbeddingError(r.status_code)
             try:
                 data = sorted(r.json()["data"], key=lambda d: d.get("index", 0))
-                vecs = [unit([float(x) for x in d["embedding"]]) for d in data]
+                keep = keep_dims(self.model)
+                vecs = [unit([float(x) for x in d["embedding"]][:keep]) for d in data]
             except (ValueError, KeyError, TypeError):
                 raise EmbeddingError(None) from None
             if len(vecs) != len(chunk):

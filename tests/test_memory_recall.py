@@ -163,3 +163,27 @@ async def test_recall_still_answers_from_keywords_when_embedding_fails(pool, uid
             raise EmbeddingError(500)
 
     assert [h.text for h in await search.recall(pool, uids[0], "plumber", Broken())] == ["Waiting for the plumber"]
+
+
+async def test_qwen3_vectors_are_kept_to_their_first_1024_numbers_other_models_whole():
+    from jarvis.memory.embed import keep_dims
+
+    def handler(request):
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0] * 4096}]})
+
+    qwen = Embedder("https://openrouter.ai/api/v1", "k", "qwen/qwen3-embedding-8b",
+                    httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    [v] = await qwen.embed(["hello"])
+    assert len(v) == 1024 and abs(sum(x * x for x in v) - 1) < 1e-9
+    other = Embedder("https://x.example.com/v1", "k", "openai/text-embedding-3-small",
+                     httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert len((await other.embed(["hello"]))[0]) == 4096
+    assert keep_dims("qwen/qwen3-embedding-4b") == 1024 and keep_dims("other") is None
+
+
+def test_the_default_embedding_model_is_qwen3_on_the_users_own_endpoint(monkeypatch):
+    from jarvis.config import Settings
+    monkeypatch.delenv("JARVIS_EMBED_MODEL", raising=False)
+    s = Settings(_env_file=None, database_url="postgresql://x", telegram_bot_token="t", telegram_owner_chat_id=1,
+                 fernet_key="f")
+    assert s.embed_model == "qwen/qwen3-embedding-8b"

@@ -116,7 +116,7 @@ and the thread, and the block still fails closed (`MemoryContextError`).
 | Setting | Default | Effect |
 |---|---|---|
 | `JARVIS_MEMORY_DIGEST_ENABLED` | true | summaries and short-term notes from ended conversations (fact candidates and keep-forever suggestions are always on; the `JARVIS_EXTRACT_ENABLED` flag was removed) |
-| `JARVIS_EMBED_MODEL` | "" | server default embedding model (users can set their own) |
+| `JARVIS_EMBED_MODEL` | `qwen/qwen3-embedding-8b` | server default embedding model on the user's own endpoint (users can set their own; empty = keywords only). Qwen3 vectors are kept to their first 1024 numbers |
 
 ## Trust boundary
 
