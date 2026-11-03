@@ -61,7 +61,7 @@ class VoiceSession:
         self.ws, self.graph, self.devices, self.device_id, self.stt, self.tts = ws, graph, devices, device_id, stt, tts
         self.user_id, self.token = user_id, token  # the token is re-verified before every graph step
         self.lock, self.steps = lock, steps
-        self.cfg = cfg  # this connection's conversation thread, voice flag set: selects the fast tier
+        self.cfg = {**cfg, "tags": ["voice"], "metadata": {"channel": "voice"}, "run_name": "jarvis-turn"}  # this connection's conversation thread, voice flag set: selects the fast tier
         self.on_text = on_text  # called (off the loop) with each final transcript, before the graph step
         self.state = "listening"
         self.turn: asyncio.Task | None = None

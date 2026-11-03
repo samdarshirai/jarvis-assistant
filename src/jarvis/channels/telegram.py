@@ -135,7 +135,13 @@ class TelegramChannel:
     async def _invoke(self, graph, graph_input, cfg):
         """Run the graph (the caller holds the lock). None means the run failed."""
         try:
-            return await graph.ainvoke(graph_input, {**cfg, "configurable": {**cfg["configurable"], "channel": "telegram"}})
+            return await graph.ainvoke(graph_input, {
+                **cfg,
+                "configurable": {**cfg["configurable"], "channel": "telegram"},
+                "tags": ["telegram"],              # list of strings
+                "metadata": {"channel": "telegram"},  # dict
+                "run_name": "jarvis-turn"
+            })
         except MemoryContextError as error:
             return {"memory_error": str(error)}
         except Exception:

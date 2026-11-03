@@ -231,7 +231,10 @@ class MailWatch:
         """English subject/snippet for the keyword gate; the raw text if translation fails (the gate then just misses)."""
         text = f"Subject: {subject or ''}\nSnippet: {snippet or ''}"
         try:
-            msg = await self.llm.get("fast").ainvoke([SystemMessage(TRANSLATE), HumanMessage(wrap_untrusted(text))])
+            msg = await self.llm.get("fast").ainvoke(
+                [SystemMessage(TRANSLATE), HumanMessage(wrap_untrusted(text))],
+                config={"tags": ["proactive"], "run_name": "email_translate"}
+            )
         except ReauthRequired:
             raise
         except Exception as e:
@@ -242,7 +245,10 @@ class MailWatch:
     async def _extract(self, full: dict, now: datetime):
         text = f"From: {full.get('from')}\nSubject: {full.get('subject')}\n\n{full.get('body')}"
         system = f"{SYSTEM} Today is {now.strftime('%A %Y-%m-%d')} in {self.tz}."
-        msg = await self.llm.get("fast").ainvoke([SystemMessage(system), HumanMessage(wrap_untrusted(text))])
+        msg = await self.llm.get("fast").ainvoke(
+            [SystemMessage(system), HumanMessage(wrap_untrusted(text))],
+            config={"tags": ["proactive"], "run_name": "email_extract"},
+        )
         content = msg.content if isinstance(msg.content, str) else ""
         a, b = content.find("{"), content.rfind("}")
         if a < 0 or b < a:
