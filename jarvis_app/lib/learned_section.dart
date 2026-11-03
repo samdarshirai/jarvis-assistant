@@ -28,6 +28,15 @@ String learnedSentence(Map<String, dynamic> c) {
     'office' => 'office is $v',
     'preferred_channel' => 'prefers $v',
     'friend_of' => 'is a friend of $v',
+    'spouse_of' => 'is the spouse of $v',
+    'partner_of' => 'is the partner of $v',
+    'sibling_of' => 'is a sibling of $v',
+    'colleague_of' => 'works with $v',
+    'relative_of' => 'is related to $v',
+    'parent_of' => 'is the parent of $v',
+    'child_of' => 'is the child of $v',
+    'manager_of' => 'manages $v',
+    'reports_to' => 'reports to $v',
     'relation_to_user' => 'is your $v',
     _ => v,
   };
@@ -95,8 +104,8 @@ class _LearnedSectionState extends State<LearnedSection> {
         _undoBar(c, r);
         return;
       } on ApiError catch (e) {
-        if (e.status == 409 && e.body?['error'] == 'ambiguous_subject') {
-          final pick = await _choose(c, _maps(e.body?['choice']));
+        if (e.status == 409 && (e.body?['error'] == 'ambiguous_subject' || e.body?['error'] == 'ambiguous_other')) {
+          final pick = await _choose(c, _maps(e.body?['choice']), other: e.body?['error'] == 'ambiguous_other');
           if (pick == null) return; // the user backed out: nothing was written
           body = {...body, ...pick};
           continue;
@@ -111,23 +120,24 @@ class _LearnedSectionState extends State<LearnedSection> {
     }
   }
 
-  /// Several people share the name: ask which one, or a new person. Never guesses.
-  Future<Map<String, dynamic>?> _choose(Map<String, dynamic> c, List<Map<String, dynamic>> options) {
+  /// Several people share the name: ask which one, or a new person. Never guesses. For a link candidate `other` asks
+  /// about the person it names instead of its subject.
+  Future<Map<String, dynamic>?> _choose(Map<String, dynamic> c, List<Map<String, dynamic>> options, {bool other = false}) {
     if (!mounted) return Future.value(null);
     return showDialog<Map<String, dynamic>>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: Text('Which ${_clean(c['subject'])}?'),
+        title: Text('Which ${_clean(other ? c['value'] : c['subject'])}?'),
         children: [
           for (final o in options)
             SimpleDialogOption(
               key: ValueKey('pick-${o['id']}'),
-              onPressed: () => Navigator.pop(ctx, {'entity_id': o['id']}),
+              onPressed: () => Navigator.pop(ctx, {other ? 'other_entity_id' : 'entity_id': o['id']}),
               child: Text('${o['name']} (${o['kind']}, #${o['id']})'),
             ),
           SimpleDialogOption(
             key: const Key('pick-new'),
-            onPressed: () => Navigator.pop(ctx, {'new': true}),
+            onPressed: () => Navigator.pop(ctx, {other ? 'new_other' : 'new': true}),
             child: const Text('A new person'),
           ),
         ],

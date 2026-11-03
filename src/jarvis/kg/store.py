@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from jarvis.kg import forget
-from jarvis.kg.facts import Fact, FactsMixin, _clean, norm  # noqa: F401  (Fact re-exported for callers)
+from jarvis.kg.facts import Fact, FactsMixin, Link, _clean, norm  # noqa: F401  (Fact, Link re-exported for callers)
 from jarvis.kg.predicates import KINDS, PREDICATES
 
 KEY_TYPES = ("email", "phone", "google_contact_id", "alias", "name")
@@ -76,10 +76,21 @@ class GraphStore(FactsMixin):
                          " ON CONFLICT DO NOTHING", (self.user_id, r[0], t, v))
         return _ent(r)
 
+    def add_link(self, subject_id: int, predicate: str, object_id: int, *, source_kind: str, ref: str | None = None,
+                 excerpt: str = "", observed_at: datetime | None = None) -> Fact:
+        """Link two existing entities (see kg.predicates.LINKS). ValueError for an unknown type or entity, or a self-link."""
+        obs = observed_at or datetime.now(timezone.utc)
+        if obs.tzinfo is None:
+            raise ValueError("observed_at must be timezone-aware.")
+        return self._write(lambda conn: self._add_link(conn, subject_id, predicate, object_id, source_kind,
+                                                       ref or f"user:{uuid.uuid4()}", self._redact(conn, excerpt[:200]), obs))
+
     def add_statements(self, statements: list[dict]) -> list[dict]:
-        """Save several user statements in ONE transaction: new entities, their relation to the user, and facts.
-        Each statement is {entity_id (None = create from name/kind), name, kind, relation, facts: [(predicate, value)]}.
-        Any failure rolls everything back, new entities included. Returns one {entity, created, facts} per statement."""
+        """Save several user statements in ONE transaction: new entities, their relation to the user, facts, and links.
+        Each statement is {entity_id (None = create from name/kind), name, kind, relation, facts: [(predicate, value)],
+        links: [{predicate, entity_id (None = create from name/kind), name, kind}] (optional)}.
+        Any failure rolls everything back, new entities included. Returns one {entity, created, facts, links} per
+        statement; a link is {fact, other, other_created}."""
         def go(conn):
             made: dict[str, Entity] = {}  # new entities of this call, so a repeated name reuses them
             out = []
@@ -111,7 +122,20 @@ class GraphStore(FactsMixin):
                                   self._redact(conn, value[:200]), datetime.now(timezone.utc))
                     if not (rel_only and i == 0):  # the relation is bookkeeping, not a stated fact
                         saved.append(f)
-                out.append({"entity": ent, "created": created, "facts": saved})
+                made_links = []
+                for ln in st.get("links") or ():
+                    if ln.get("entity_id") is not None:
+                        other, other_created = Entity(ln["entity_id"], ln.get("kind", "person"), ln["name"]), False
+                    elif norm(ln["name"]) in made:
+                        other, other_created = made[norm(ln["name"])], False
+                    else:
+                        other = self._create_entity(conn, ln["name"], ln.get("kind", "person"), (), "user")
+                        made[norm(ln["name"])], other_created = other, True
+                    f = self._add_link(conn, ent.id, ln["predicate"], other.id, "user_stated", f"user:{uuid.uuid4()}",
+                                       self._redact(conn, f"{ent.display_name} {ln['predicate']} {other.display_name}"[:200]),
+                                       datetime.now(timezone.utc))
+                    made_links.append({"fact": f, "other": other, "other_created": other_created})
+                out.append({"entity": ent, "created": created, "facts": saved, "links": made_links})
             return out
         return self._write(go)
 

@@ -4,11 +4,12 @@ order (when the block is over CAP the later ones are cut first):
 1. About the user: every lasting fact about the user (notes included); past MAX_SELF, the notes that share words
    with the message are kept first.
 2. Short-term notes still in force (jarvis.memory), soonest to end first, with their ids.
-3. People and places named in the latest message, with what the user told Jarvis about them.
+3. People and places named in the latest message, with what the user told Jarvis about them and how they are linked
+   to other people ("spouse of Raj"); the people they are linked to (one hop, at most MAX_LINKED) get a line too.
 4. Recent conversations: summaries of the last two days' other conversations, and what they left open.
 
-No model or embedding call: a few indexed queries. Only active, user_stated facts are shown, and every stored word is
-neutralised so a fact cannot imitate the closing tag."""
+No model or embedding call: a few indexed queries (the names, their links, the facts). Only active, user_stated
+facts and links are shown, and every stored word is neutralised so a fact cannot imitate the closing tag."""
 import asyncio
 import logging
 import re
@@ -17,6 +18,7 @@ import time
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.runnables import RunnableLambda
 
+from jarvis.kg.predicates import LINKS
 from jarvis.kg.store import GraphStore, norm
 from jarvis.llm import MemoryContextError
 from jarvis.situation import _c
@@ -26,6 +28,7 @@ TTL = 45.0  # one agent turn calls the model several times
 CAP = 8000
 MAX_CANDIDATES, MAX_ENTITIES, MAX_SELF, MAX_FACTS = 40, 8, 50, 6
 MAX_NOW, MAX_RECENT, MAX_RECENT_CHARS = 8, 3, 300
+MAX_LINKED = 4  # people reached by one hop over a link from a person the message names
 STOP = frozenset("the an of to in on at is are was be it its my me we you he she her him his they them us and or but "
                  "for with from this that these those do did not no so if as by i am im tell say ask call text "
                  "what when where who how can will just about".split())
@@ -45,6 +48,21 @@ JOIN LATERAL (
 WHERE f.user_id = %s AND f.status = 'active' AND f.object_value IS NOT NULL
   AND (f.subject_id = ANY(%s) OR e.kind = 'self')
 ORDER BY coalesce(f.valid_from, f.recorded_at) DESC, f.id DESC"""
+
+
+# links of the named people, both directions; like the facts, only those the user stated
+_LINKS = """
+SELECT f.subject_id, f.object_entity_id, f.predicate, s.display_name, s.kind, o.display_name, o.kind
+FROM fact f JOIN entity s ON s.user_id = f.user_id AND s.id = f.subject_id
+JOIN entity o ON o.user_id = f.user_id AND o.id = f.object_entity_id
+JOIN LATERAL (
+  SELECT x.kind FROM fact_source fs JOIN source x ON x.user_id = fs.user_id AND x.id = fs.source_id
+  WHERE fs.user_id = f.user_id AND fs.fact_id = f.id ORDER BY x.trust DESC, fs.first_seen, x.id LIMIT 1
+) t ON t.kind = 'user_stated'
+WHERE f.user_id = %s AND f.status = 'active' AND f.predicate = ANY(%s) AND f.object_entity_id IS NOT NULL
+  AND s.merged_into IS NULL AND o.merged_into IS NULL
+  AND (f.subject_id = ANY(%s) OR f.object_entity_id = ANY(%s))
+ORDER BY f.id"""
 
 
 def candidates(text: str) -> list[str]:
@@ -102,20 +120,41 @@ def block_for(store: GraphStore, text: str, memory=None, thread: str | None = No
             " WHERE k.user_id = %s AND k.type IN ('name', 'alias') AND k.value_norm = ANY(%s)"
             " AND e.merged_into IS NULL AND e.kind <> 'self' ORDER BY e.id LIMIT %s",
             (store.user_id, cands, MAX_ENTITIES)).fetchall()] if cands else []
-        rows = conn.execute(_FACTS, (store.user_id, ids)).fetchall()
+        links = conn.execute(_LINKS, (store.user_id, list(LINKS), ids, ids)).fetchall() if ids else []
+        pulled: list[int] = []  # one hop: the people the named ones are linked to
+        for sub, obj, _, _, skind, _, okind in links:
+            for other, kind in ((obj, okind), (sub, skind)):
+                if other not in ids and other not in pulled and kind != "self":
+                    pulled.append(other)
+        pulled = pulled[:MAX_LINKED]
+        rows = conn.execute(_FACTS, (store.user_id, ids + pulled)).fetchall()
     me: list[tuple[str, str]] = []
     people: dict[int, tuple[str, list[str]]] = {}
+    shown = set(ids) | set(pulled)
+    said: dict[int, list[str]] = {}  # each shown person's links, read from their side
+    for sub, obj, pred, sname, skind, oname, okind in links:
+        who = lambda name, kind: "the user" if kind == "self" else _s(name, 60)  # noqa: E731
+        if sub in shown:
+            said.setdefault(sub, []).append(f"{LINKS[pred][0]} {who(oname, okind)}")
+        if obj in shown and obj != sub:
+            said.setdefault(obj, []).append(f"{LINKS[pred][1]} {who(sname, skind)}")
+    names = {}
+    for sub, obj, _, sname, skind, oname, okind in links:
+        names[sub], names[obj] = (sname, skind), (oname, okind)
     for sid, kind, name, pred, val, seen in rows:
         if kind == "self":
             me.append((pred, val))
         else:
             head, facts = people.setdefault(sid, (f"- {_s(name, 60)} ({kind}): ", []))
             facts.append(f"{pred}: {_s(val)} [told {seen:%Y-%m-%d}]")
+    for sid in said:  # a linked person with no facts of their own still gets a line
+        if sid not in people and sid in names:
+            people[sid] = (f"- {_s(names[sid][0], 60)} ({names[sid][1]}): ", [])
     lines = (["About the user:"] + _self_lines(me, text) if me else [])
     if memory is not None:
         lines += _now_lines(memory)
-    for head, facts in people.values():
-        lines.append(head + "; ".join(facts[:MAX_FACTS]))
+    for sid, (head, facts) in people.items():
+        lines.append(head + "; ".join(said.get(sid, [])[:MAX_FACTS] + facts[:MAX_FACTS]))
     if memory is not None:
         lines += _recent_lines(memory, thread)
     if not lines:

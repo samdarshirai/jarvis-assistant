@@ -576,7 +576,7 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("GET", "/graph/candidates", None), ("GET", "/graph/candidates/count", None),
           ("POST", "/graph/candidates/bulk", {"ids": [1], "decision": "dismiss"}),
           ("POST", "/graph/candidates/1/approve", None), ("POST", "/graph/candidates/1/dismiss", None),
-          ("GET", "/memory/items", None), ("PATCH", "/memory/items/1", {"text": "x"}), ("DELETE", "/memory/items/1", None),
+          ("POST", "/graph/links", {"from_id": 1, "type": "spouse_of", "to_id": 2}), ("GET", "/memory/items", None), ("PATCH", "/memory/items/1", {"text": "x"}), ("DELETE", "/memory/items/1", None),
           ("POST", "/memory/items/1/promote", None), ("PUT", "/settings/embedding", {"model": "m"})]
 PUBLIC = {"/", "/privacy", "/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}

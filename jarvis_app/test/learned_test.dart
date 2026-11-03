@@ -76,6 +76,8 @@ void main() {
       expect(learnedSentence(cand(1, subject: 'me', kind: 'self', relation: null, predicate: 'employer', value: 'Acme')),
           'You: works at Acme');
       expect(learnedSentence(cand(1, predicate: 'note', value: 'likes tea')), 'Anna, your wife: likes tea');
+      expect(learnedSentence(cand(1, relation: null, predicate: 'spouse_of', value: 'Raj')), 'Anna: is the spouse of Raj');
+      expect(learnedSentence(cand(1, relation: null, predicate: 'reports_to', value: 'Dev')), 'Anna: reports to Dev');
     });
   });
 
@@ -186,6 +188,39 @@ void main() {
       await t.pumpAndSettle();
       expect(api.bodies['POST /graph/candidates/1/approve'], {'entity_id': 4});
       expect(find.byKey(const ValueKey('candidate-1')), findsNothing);
+    });
+
+    testWidgets('an ambiguous other person asks about the person named, and sends other_entity_id', (t) async {
+      final api = LearnedApi([grp(7, [cand(1, relation: null, predicate: 'spouse_of', value: 'Raj')])]);
+      api.results['POST /graph/candidates/1/approve'] = ApiError(409, {
+        'error': 'ambiguous_other',
+        'choice': [{'id': 8, 'name': 'Raj', 'kind': 'person'}, {'id': 9, 'name': 'Raj', 'kind': 'person'}],
+      }, '/graph/candidates/1/approve');
+      await pumpSection(t, api);
+      expect(find.textContaining('Anna: is the spouse of Raj'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('approve-1')));
+      await t.pumpAndSettle();
+      expect(find.text('Which Raj?'), findsOneWidget); // the other person, not Anna
+      api.results['POST /graph/candidates/1/approve'] = {'fact_ids': [5]};
+      await t.tap(find.byKey(const ValueKey('pick-9')));
+      await t.pumpAndSettle();
+      expect(api.bodies['POST /graph/candidates/1/approve'], {'other_entity_id': 9});
+      expect(find.byKey(const ValueKey('candidate-1')), findsNothing);
+    });
+
+    testWidgets('a new other person is sent as new_other', (t) async {
+      final api = LearnedApi([grp(7, [cand(1, relation: null, predicate: 'friend_of', value: 'Raj')])]);
+      api.results['POST /graph/candidates/1/approve'] = ApiError(409, {
+        'error': 'ambiguous_other',
+        'choice': [{'id': 8, 'name': 'Raj', 'kind': 'person'}, {'id': 9, 'name': 'Raj', 'kind': 'person'}],
+      }, '/x');
+      await pumpSection(t, api);
+      await t.tap(find.byKey(const ValueKey('approve-1')));
+      await t.pumpAndSettle();
+      api.results['POST /graph/candidates/1/approve'] = {'fact_ids': [5]};
+      await t.tap(find.byKey(const Key('pick-new')));
+      await t.pumpAndSettle();
+      expect(api.bodies['POST /graph/candidates/1/approve'], {'new_other': true});
     });
 
     testWidgets('"a new person" is sent as new, and backing out writes nothing', (t) async {

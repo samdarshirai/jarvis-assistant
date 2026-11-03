@@ -64,6 +64,9 @@ CREATE TABLE IF NOT EXISTS fact (
 CREATE INDEX IF NOT EXISTS fact_subject_idx ON fact (user_id, subject_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS fact_one_active_single_idx ON fact (user_id, subject_id, predicate)
   WHERE status = 'active' AND predicate IN ({_SINGLE_IN});
+CREATE INDEX IF NOT EXISTS fact_object_idx ON fact (user_id, object_entity_id) WHERE object_entity_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS fact_one_active_link ON fact (user_id, subject_id, predicate, object_entity_id)
+  WHERE status = 'active' AND object_entity_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS fact_source (
   {USER_REF},
   fact_id INTEGER NOT NULL,
