@@ -970,3 +970,35 @@ async def test_graph_store_failure_is_502(pool, uids):
     ra.kg.list_entities = lambda: (_ for _ in ()).throw(RuntimeError("db down"))
     r = a("GET", "/graph/entities")
     assert (r.status_code, r.json()) == (502, {"error": "unavailable"})
+
+
+async def test_graph_entities_kin_edge_from_me(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    (d,) = kg.add_statements([{"entity_id": None, "name": "Anna", "kind": "person", "relation": "wife",
+                               "facts": [("occupation", "teacher")]}])
+    me = kg.self_entity()
+    rel = a("GET", "/graph/entities").json()["relations"]
+    assert {"from": me.id, "to": d["entity"].id, "predicate": "wife"} in rel
+    assert len(rel) == 1  # no edge for the occupation value, none to a self-link
+
+
+async def test_graph_entities_kin_edge_not_on_self_and_deduped(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    me, anna = kg.self_entity(), kg.create_entity("Anna", "person")
+    kg.add_fact(me.id, "relation_to_user", "self", source_kind="user_stated")
+    kg.add_fact(anna.id, "relation_to_user", "sister", source_kind="user_stated")
+    kg.add_fact(anna.id, "relation_to_user", "friend", source_kind="user_stated")
+    kg.add_fact(anna.id, "relation_to_user", "SISTER", source_kind="user_stated")  # same value again
+    rel = a("GET", "/graph/entities").json()["relations"]
+    assert sorted((r["from"], r["to"], r["predicate"]) for r in rel) == sorted([(me.id, anna.id, "sister"), (me.id, anna.id, "friend")])
+
+
+async def test_graph_entities_kin_edge_gone_after_forget(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    kg = ra.kg
+    (d,) = kg.add_statements([{"entity_id": None, "name": "Anna", "kind": "person", "relation": "wife", "facts": []}])
+    assert a("GET", "/graph/entities").json()["relations"]
+    kg.forget_entity(d["entity"].id)
+    assert a("GET", "/graph/entities").json()["relations"] == []

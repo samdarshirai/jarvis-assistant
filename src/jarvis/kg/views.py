@@ -34,6 +34,13 @@ def entity_list(store) -> dict:
         by_name.setdefault(norm(e.display_name), []).append(e.id)
     ids = {e.id for e in ents}
     rel = {(s, t, p) for s, p, v in facts if s in ids for t in by_name.get(norm(v), ()) if t != s}
+    # a kin word links the person to "me", labelled with the word itself ("wife"); deleted with the person's fact
+    kin = [(s, v.strip()) for s, p, v in facts if p == "relation_to_user" and s in ids and v.strip()]
+    if kin:
+        me = next((e.id for e in ents if e.kind == "self"), None) or store.self_entity().id  # created on first use
+        rows = rows if any(r["id"] == me for r in rows) else rows + [
+            {"id": me, "name": "Me", "kind": "self", "fact_count": counts.get(me, 0)}]
+        rel |= {(me, s, v) for s, v in kin if s != me}
     return {"entities": sorted(rows, key=lambda r: (r["name"].casefold(), r["id"])),
             "relations": [{"from": s, "to": t, "predicate": p} for s, t, p in sorted(rel)]}
 
