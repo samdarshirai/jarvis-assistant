@@ -141,7 +141,16 @@ def _plan(store, conn, entity_id: int, include_mentions: bool):
         "SELECT id, subject_norm, quote, value FROM fact_candidate WHERE user_id = %s", (uid,)).fetchall()
         if subj in terms or _mentions(quote, terms) or _mentions(value, terms)]
     counts["candidates_deleted"] = len(cand_ids)
-    return counts, ids, gone, redact_ids, sup, cand_ids
+    # short-term notes and conversation summaries that mention them (memory tiers: jarvis.memory)
+    item_ids = [i for i, text, quote in conn.execute(
+        "SELECT id, text, coalesce(quote, '') FROM memory_item WHERE user_id = %s", (uid,)).fetchall()
+        if _mentions(text, terms) or _mentions(quote, terms)]
+    conv_ids = [i for i, summary, loops, rolling in conn.execute(
+        "SELECT id, coalesce(summary, ''), coalesce(open_loops::text, ''), coalesce(rolling_summary, '')"
+        " FROM conversation WHERE user_id = %s AND (summary IS NOT NULL OR rolling_summary IS NOT NULL)",
+        (uid,)).fetchall() if _mentions(summary, terms) or _mentions(loops, terms) or _mentions(rolling, terms)]
+    counts["short_term_deleted"], counts["summaries_cleared"] = len(item_ids), len(conv_ids)
+    return counts, ids, gone, redact_ids, sup, cand_ids, item_ids, conv_ids
 
 
 def preview_forget(store, entity_id: int, *, include_mentions: bool = True) -> dict:
@@ -155,13 +164,19 @@ def forget_entity(store, entity_id: int, *, include_mentions: bool = True) -> di
     """Delete the entity (and all merged into it), its facts, facts about or mentioning it; redact excerpts; suppress its names and keys."""
     uid = store.user_id
     with store.pool.connection() as conn:
-        counts, ids, gone, redact_ids, sup, cand_ids = _plan(store, conn, entity_id, include_mentions)
+        counts, ids, gone, redact_ids, sup, cand_ids, item_ids, conv_ids = _plan(store, conn, entity_id, include_mentions)
         srcs = [r[0] for r in conn.execute("SELECT DISTINCT source_id FROM fact_source WHERE user_id = %s"
                                            " AND fact_id = ANY(%s)", (uid, gone)).fetchall()]
         conn.execute("DELETE FROM fact WHERE user_id = %s AND id = ANY(%s)", (uid, gone))
         conn.execute("DELETE FROM entity WHERE user_id = %s AND id = ANY(%s)", (uid, ids))
         drop_sources(conn, uid, srcs)
         conn.execute("DELETE FROM fact_candidate WHERE user_id = %s AND id = ANY(%s)", (uid, cand_ids))
+        conn.execute("DELETE FROM memory_item WHERE user_id = %s AND id = ANY(%s)", (uid, item_ids))
+        conn.execute("UPDATE conversation SET summary = NULL, open_loops = NULL, rolling_summary = NULL,"
+                     " rolling_upto = NULL WHERE user_id = %s AND id = ANY(%s)", (uid, conv_ids))
+        conn.execute("DELETE FROM memory_embedding WHERE user_id = %s AND ((ref_kind = 'fact' AND ref_id = ANY(%s))"
+                     " OR (ref_kind = 'item' AND ref_id = ANY(%s)) OR (ref_kind = 'conversation' AND ref_id = ANY(%s)))",
+                     (uid, gone, item_ids, conv_ids))
         conn.execute("UPDATE source SET excerpt = '' WHERE user_id = %s AND id = ANY(%s)", (uid, redact_ids))
         counts["suppressed"] = sum(conn.execute(
             "INSERT INTO suppression (user_id, key_type, key_hmac, kind) VALUES (%s, %s, %s, %s)"

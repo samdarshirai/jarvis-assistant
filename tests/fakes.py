@@ -123,7 +123,7 @@ class MemoryConversations:
         c = self.open_for(surface)
         return c if c and self.clock() - c.last_at <= IDLE else self.start(surface)
 
-    def start(self, surface):
+    def start(self, surface, off_record=False):
         now = self.clock()
         for c in [c for c in self.rows.values() if c.surface == surface and c.closed_at is None]:
             self.rows[c.id] = replace(c, closed_at=now)

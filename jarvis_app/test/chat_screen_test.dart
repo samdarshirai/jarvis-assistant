@@ -25,6 +25,16 @@ class FakeApi extends ApiClient {
   }
 }
 
+class _DeletingApi extends FakeApi {
+  _DeletingApi(super.handler, this.deleted);
+  final List<String> deleted;
+  @override
+  Future<Map<String, dynamic>> delete(String path) async {
+    deleted.add(path);
+    return {'ok': true};
+  }
+}
+
 Widget app(FakeApi api, {VoidCallback? onVoice, List<List<Map<String, dynamic>>>? ran, VoidCallback? onNeedsSetup}) => MaterialApp(
     home: ChatScreen(
         api: api, onVoice: onVoice ?? () {}, runPhoneActions: (a) async => ran?.add(a), onNeedsSetup: onNeedsSetup));
@@ -152,11 +162,54 @@ void main() {
     await send(t, 'yo');
     expect(find.text('hi'), findsOneWidget);
     await t.tap(find.byIcon(Icons.add_comment_outlined));
-    await t.pump();
-    await t.pump();
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('new-chat')));
+    await t.pumpAndSettle();
     expect(api.calls.last.$1, '/conversations');
+    expect(api.calls.last.$2, isNull);
     expect(find.text('hi'), findsNothing);
     expect(find.text('Type a request, or tap the mic.'), findsOneWidget);
+    expect(find.byKey(const Key('off-record-banner')), findsNothing);
+  });
+
+  testWidgets('an off-the-record chat says so until the server starts a fresh conversation', (t) async {
+    final api = FakeApi((p, b) async => p == '/conversations'
+        ? {'conversation': {...conv(7), 'off_record': true}}
+        : {'reply': 'ok', 'conversation': conv(8), 'card': null, 'client_actions': []});
+    await t.pumpWidget(app(api));
+    await t.tap(find.byIcon(Icons.add_comment_outlined));
+    await t.pumpAndSettle();
+    await t.tap(find.byKey(const Key('new-chat-off-record')));
+    await t.pumpAndSettle();
+    expect(api.calls.last.$2, {'off_record': true});
+    expect(find.byKey(const Key('off-record-banner')), findsOneWidget);
+    await send(t, 'hello'); // the idle rule moved to conversation 8: a normal one
+    expect(find.byKey(const Key('off-record-banner')), findsNothing);
+  });
+
+  testWidgets('a saved short-term note shows as a chip whose Undo deletes it', (t) async {
+    final deleted = <String>[];
+    final api = _DeletingApi((p, b) async => {
+          'reply': 'Noted, till Friday.',
+          'card': null,
+          'client_actions': [],
+          'memory_events': [
+            {'type': 'memory_saved', 'id': 12, 'text': 'In Pune until Friday', 'expires_at': '2026-11-06T22:59:00+00:00'},
+            {'type': 'memory_forgotten', 'id': 3},
+          ],
+        }, deleted);
+    final ran = <List<Map<String, dynamic>>>[];
+    await t.pumpWidget(app(api, ran: ran));
+    await send(t, "I'm in Pune till Friday");
+    expect(find.text('Noted, till Friday.'), findsOneWidget);
+    expect(find.textContaining('In Pune until Friday'), findsOneWidget);
+    expect(ran, isEmpty, reason: 'memory events are not phone actions');
+    await t.tap(find.byKey(const ValueKey('undo-note-12')));
+    await t.pump();
+    await t.pump();
+    expect(deleted, ['/memory/items/12']);
+    expect(find.text('Not kept'), findsOneWidget);
+    expect(find.byKey(const ValueKey('undo-note-12')), findsNothing);
   });
 
   testWidgets('opening the chat shows the open conversation from /chat/current; confirm names it', (t) async {

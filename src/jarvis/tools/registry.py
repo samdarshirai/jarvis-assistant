@@ -1,3 +1,4 @@
+import inspect
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -19,6 +20,10 @@ class Tool:
     untrusted_tag: str = "untrusted_email"  # wrapper tag for this tool's output: untrusted_email or untrusted_web
     confirm_after_untrusted: bool = False  # ungated normally; gated while untrusted email/web text was read this turn or is in the history window
     refuse_after_untrusted: bool = False  # never runs and never prompts while untrusted email/web text is in play
+    context: bool = False  # fn also gets _ctx={"thread_id": ...}: which conversation the call belongs to
+
+
+SHARED = "*"  # a tool of this domain is offered in every domain (the memory tools)
 
 
 class Registry:
@@ -38,12 +43,12 @@ class Registry:
         return True if t is None else t.needs_confirm
 
     def for_domain(self, domain: str) -> list[Tool]:
-        return [t for t in self._tools.values() if t.domain == domain]
+        return [t for t in self._tools.values() if t.domain in (domain, SHARED)]
 
     def lc_tools(self, domain: str) -> list[StructuredTool]:
         # Only used to describe tools to the model; execution goes through Tool.fn in the graph.
         return [
-            StructuredTool.from_function(func=t.fn, name=t.name, description=t.description,
-                                         args_schema=t.args_schema)
+            StructuredTool.from_function(**({"coroutine": t.fn} if inspect.iscoroutinefunction(t.fn) else {"func": t.fn}),
+                                         name=t.name, description=t.description, args_schema=t.args_schema)
             for t in self.for_domain(domain)
         ]

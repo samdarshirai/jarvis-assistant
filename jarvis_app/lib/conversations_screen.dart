@@ -121,7 +121,15 @@ class _ConversationsScreenState extends State<ConversationsScreen> {
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
-                                  subtitle: Text(_ago(c['last_at'])),
+                                  subtitle: Text(
+                                    [
+                                      if (c['summary'] is String && (c['summary'] as String).isNotEmpty) c['summary'],
+                                      _ago(c['last_at']),
+                                    ].join('\n'),
+                                    maxLines: 3,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  isThreeLine: c['summary'] is String && (c['summary'] as String).isNotEmpty,
                                   onTap: () => _open(c['id'] as int),
                                 ),
                             ],

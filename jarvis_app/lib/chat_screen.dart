@@ -4,15 +4,25 @@ import 'api.dart';
 import 'calendar_screen.dart' show RoundButton;
 import 'confirm_card.dart';
 import 'conversations_screen.dart';
+import 'short_term_section.dart' show untilText;
 import 'theme.dart';
 
 const _sheet = Color(0xFFFFF8F4), _userBubble = Color(0xFFFCE0D5), _jarvisBubble = Color(0xFFF2E8E3);
 
 class _Msg {
-  _Msg(this.text, {this.mine = false, this.card});
+  _Msg(this.text, {this.mine = false, this.card, this.note});
   final String text;
   final bool mine;
   final _Card? card;
+  final _Note? note;
+}
+
+/// A short-term note Jarvis just saved: shown as a chip with Undo.
+class _Note {
+  _Note(this.id, this.text, this.until);
+  final int id;
+  final String text, until;
+  bool undone = false;
 }
 
 class _Card {
@@ -40,7 +50,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _text = TextEditingController();
   final _scroll = ScrollController();
   final _msgs = <_Msg>[];
-  bool _busy = false, _locked = false;
+  bool _busy = false, _locked = false, _offRecord = false;
   int? _conversationId;
 
   @override
@@ -129,25 +139,78 @@ class _ChatScreenState extends State<ChatScreen> {
         if (_conversationId != null && conv['id'] != _conversationId) {
           final last = _msgs.isNotEmpty && _msgs.last.mine ? _msgs.last : null;
           _msgs..clear()..addAll([?last]);
+          _offRecord = false; // the server started a fresh (recorded) conversation
         }
         _conversationId = conv['id'] as int;
       }
       if (reply is String && reply.trim().isNotEmpty) _msgs.add(_Msg(reply));
+      for (final e in (r['memory_events'] as List? ?? const [])) {
+        if (e is Map && e['type'] == 'memory_saved' && e['id'] is int) {
+          final until = e['expires_at'] != null ? untilText(e['expires_at']) : '';
+          _msgs.add(_Msg('', note: _Note(e['id'] as int, '${e['text']}', until)));
+        }
+      }
       if (card is Map) {
         _msgs.add(_Msg('', card: _Card('${card['interrupt_id']}', '${card['summary']}', card['after_untrusted'] == true)));
       }
     });
   }
 
-  Future<void> _newChat() async {
+  Future<void> _undoNote(_Note n) async {
+    if (n.undone) return;
+    try {
+      await widget.api.delete('/memory/items/${n.id}');
+      if (mounted) setState(() => n.undone = true);
+    } on ApiError catch (e) {
+      if (!mounted) return;
+      if (e.status == 404) {
+        setState(() => n.undone = true); // already gone
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't undo that.")));
+      }
+    } catch (_) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Couldn't undo that.")));
+    }
+  }
+
+  /// New chat: a normal one, or off the record (nothing from it is summarised or remembered).
+  Future<void> _newChatMenu() async {
+    if (_busy) return;
+    final off = await showModalBottomSheet<bool>(
+      context: context,
+      backgroundColor: _sheet,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          ListTile(
+            key: const Key('new-chat'),
+            leading: const Icon(Icons.add_comment_outlined, color: ink),
+            title: const Text('New chat', style: TextStyle(color: ink)),
+            onTap: () => Navigator.pop(ctx, false),
+          ),
+          ListTile(
+            key: const Key('new-chat-off-record'),
+            leading: const Icon(Icons.visibility_off_outlined, color: ink),
+            title: const Text('Off the record', style: TextStyle(color: ink)),
+            subtitle: Text('Jarvis still uses what it knows, but remembers nothing from this chat',
+                style: TextStyle(color: ink.withValues(alpha: 0.6))),
+            onTap: () => Navigator.pop(ctx, true),
+          ),
+        ]),
+      ),
+    );
+    if (off != null) await _newChat(offRecord: off);
+  }
+
+  Future<void> _newChat({bool offRecord = false}) async {
     if (_busy) return;
     try {
-      final r = await widget.api.post('/conversations');
+      final r = await widget.api.post('/conversations', offRecord ? {'off_record': true} : null);
       if (!mounted) return;
       final id = (r['conversation'] as Map?)?['id'];
       setState(() {
         _msgs.clear();
         _conversationId = id is int ? id : null;
+        _offRecord = offRecord;
       });
     } catch (_) {
       if (mounted) setState(() => _msgs.add(_Msg("Couldn't start a new chat.")));
@@ -167,6 +230,7 @@ class _ChatScreenState extends State<ChatScreen> {
     final id = (r['conversation'] as Map?)?['id'], card = r['card'];
     setState(() {
       _conversationId = id is int ? id : null;
+      _offRecord = false;
       _msgs.clear();
       for (final m in (r['messages'] as List? ?? const [])) {
         if (m is Map) _msgs.add(_Msg('${m['text']}', mine: m['role'] == 'user'));
@@ -195,7 +259,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Text('Talk with Jarvis',
                         textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, color: cream)),
                   ),
-                  RoundButton(icon: Icons.add_comment_outlined, tooltip: 'New chat', onTap: _newChat),
+                  RoundButton(icon: Icons.add_comment_outlined, tooltip: 'New chat', onTap: _newChatMenu),
                   const SizedBox(width: 6),
                   RoundButton(icon: Icons.history, tooltip: 'Past chats', onTap: _history),
                 ]),
@@ -232,6 +296,17 @@ class _ChatScreenState extends State<ChatScreen> {
               child: Text('Today', style: TextStyle(fontSize: 12, color: ink.withValues(alpha: 0.7))),
             ),
           ),
+          if (_offRecord)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.visibility_off_outlined, size: 14, color: ink.withValues(alpha: 0.6)),
+                const SizedBox(width: 6),
+                Text('Off the record: nothing from this chat is remembered',
+                    key: const Key('off-record-banner'),
+                    style: TextStyle(fontSize: 12, color: ink.withValues(alpha: 0.6))),
+              ]),
+            ),
           const SizedBox(height: 12),
           if (_msgs.isEmpty)
             Padding(
@@ -242,7 +317,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 child: const Column(children: [Text('Type a request, or tap the mic.'), Text('Try "set an alarm for 6:30".')]),
               ),
             ),
-          for (final m in _msgs) m.card != null ? _cardView(m.card!) : _bubble(m.text, m.mine),
+          for (final m in _msgs)
+            m.note != null ? _noteView(m.note!) : m.card != null ? _cardView(m.card!) : _bubble(m.text, m.mine),
           if (_busy) _bubble('Thinking…', false),
         ],
       );
@@ -261,6 +337,30 @@ class _ChatScreenState extends State<ChatScreen> {
                   bottomLeft: Radius.circular(mine ? 22 : 6),
                   bottomRight: Radius.circular(mine ? 6 : 22))),
           child: Text(text, style: const TextStyle(color: ink, fontSize: 15, height: 1.4)),
+        ),
+      );
+
+  Widget _noteView(_Note n) => Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          key: ValueKey('note-${n.id}'),
+          margin: const EdgeInsets.only(bottom: 8),
+          padding: const EdgeInsets.only(left: 12, right: 4),
+          decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFE4D6D0)), borderRadius: BorderRadius.circular(18)),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(n.undone ? Icons.remove_circle_outline : Icons.push_pin_outlined, size: 16, color: ink),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                n.undone ? 'Not kept' : 'Noted${n.until.isEmpty ? '' : ' ${n.until}'}: ${n.text}',
+                style: TextStyle(fontSize: 13, color: ink.withValues(alpha: 0.8)),
+              ),
+            ),
+            if (!n.undone)
+              TextButton(key: ValueKey('undo-note-${n.id}'), onPressed: () => _undoNote(n), child: const Text('Undo')),
+            if (n.undone) const SizedBox(width: 8, height: 36),
+          ]),
         ),
       );
 

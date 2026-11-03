@@ -300,7 +300,7 @@ class RecordingLLM:
     def get(self, tier):
         return SimpleNamespace(ainvoke=self._run)
 
-    async def _run(self, messages):
+    async def _run(self, messages, config=None):
         self.messages = messages
         return js(self.reply)
 
@@ -344,7 +344,7 @@ async def test_one_failing_message_does_not_block_the_next():
         def get(self, tier):
             return SimpleNamespace(ainvoke=self.run)
 
-        async def run(self, messages):
+        async def run(self, messages, config=None):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("llm hiccup")

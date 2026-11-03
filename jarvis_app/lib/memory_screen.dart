@@ -6,6 +6,7 @@ import 'graph3d.dart';
 import 'learned.dart';
 import 'learned_section.dart';
 import 'memory_graph.dart';
+import 'short_term_section.dart';
 import 'theme.dart';
 
 const _months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -189,7 +190,8 @@ class _MemoryScreenState extends State<MemoryScreen> {
         : _error
         ? ErrorRetry(onRetry: _load)
         : Column(children: [
-            // the Learned inbox sits above the graph/list and disappears when there is nothing to review
+            // short-term notes, then the Learned inbox, above the graph/list; each disappears when empty
+            ShortTermSection(key: const Key('right-now'), api: widget.api, onGraphChanged: _load),
             LearnedSection(key: const Key('learned'), api: widget.api, learned: widget.learned, onGraphChanged: _load),
             Expanded(child: _showList || _people.isEmpty ? _body() : _graph()),
           ]),

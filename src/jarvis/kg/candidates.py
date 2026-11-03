@@ -28,13 +28,15 @@ class CandidateStore:
         with self.pool.connection() as conn:
             rows = conn.execute(
                 "SELECT id, thread_id, last_at FROM conversation WHERE user_id = %s AND extracted_at IS NULL"
-                " AND last_at > %s AND (closed_at IS NOT NULL OR last_at < %s) ORDER BY last_at, id LIMIT %s",
+                " AND NOT off_record AND last_at > %s AND (closed_at IS NOT NULL OR last_at < %s)"
+                " ORDER BY last_at, id LIMIT %s",
                 (self.user_id, now - MAX_AGE, now - IDLE, limit)).fetchall()
         return [Due(*r) for r in rows]
 
-    def save(self, conv_id: int, seen_last_at: datetime, rows: list[dict], now: datetime) -> bool:
+    def save(self, conv_id: int, seen_last_at: datetime, rows: list[dict], now: datetime, extra=None) -> bool:
         """Store the candidates and mark the conversation extracted in one transaction. False (nothing written) when it
-        was already extracted, or has moved on since `seen_last_at` (resumed and extended while the model ran)."""
+        was already extracted, or has moved on since `seen_last_at` (resumed and extended while the model ran).
+        `extra(conn)` writes the rest of the digest (summary, short-term notes) in the same transaction."""
         with self.pool.connection() as conn:
             if not conn.execute(
                     "UPDATE conversation SET extracted_at = %s WHERE id = %s AND user_id = %s AND extracted_at IS NULL"
@@ -45,6 +47,8 @@ class CandidateStore:
                     f"INSERT INTO fact_candidate (user_id, conversation_id, {', '.join(COLUMNS)})"
                     f" VALUES (%s, %s, {', '.join(['%s'] * len(COLUMNS))})",
                     [(self.user_id, conv_id, *(r.get(c) for c in COLUMNS)) for r in rows])
+            if extra is not None:
+                extra(conn)
         return True
 
     def fail(self, conv_id: int, now: datetime) -> bool:

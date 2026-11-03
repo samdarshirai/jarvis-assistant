@@ -114,11 +114,25 @@ CREATE TABLE IF NOT EXISTS conversation (
   closed_at TIMESTAMPTZ,
   extracted_at TIMESTAMPTZ,  -- set once the fact extractor has read the conversation (or given up)
   extract_attempts INTEGER NOT NULL DEFAULT 0,
+  summary TEXT,  -- the conversation-end digest: what was discussed, for the next conversations and recall
+  open_loops JSONB,  -- things left open ("compare flights: nothing booked yet")
+  summary_untrusted BOOLEAN NOT NULL DEFAULT false,  -- the conversation read email or web text: the summary is data only
+  off_record BOOLEAN NOT NULL DEFAULT false,  -- no digest, no summary, no saved memories
+  rolling_summary TEXT,  -- the older part of a long conversation, outside the model's history window
+  rolling_upto INTEGER,  -- how many messages the rolling summary covers
+  summary_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(title, '') || ' ' || coalesce(summary, ''))) STORED,
   UNIQUE (user_id, id)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS conversation_one_open ON conversation (user_id, surface) WHERE closed_at IS NULL;
 CREATE INDEX IF NOT EXISTS conversation_recent ON conversation (user_id, last_at DESC);
 """
+# Columns the memory tiers added to conversation (also in SCHEMA above, for new databases).
+CONVERSATION_MEMORY_COLUMNS = [
+    ("summary", "TEXT"), ("open_loops", "JSONB"), ("summary_untrusted", "BOOLEAN NOT NULL DEFAULT false"),
+    ("off_record", "BOOLEAN NOT NULL DEFAULT false"), ("rolling_summary", "TEXT"), ("rolling_upto", "INTEGER"),
+    ("summary_tsv", "TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', coalesce(title, '') || ' ' || "
+                    "coalesce(summary, ''))) STORED"),
+]
 # Every per-user table, with the column its pre-users primary key was on (None: an id PK that stays).
 # audit_log keeps a nullable user_id: system rows (startup, purge) belong to nobody.
 DATA_TABLES = {"audit_log": None, "oauth_tokens": "provider", "devices": None, "memories": None, "notes": None,
@@ -147,6 +161,7 @@ def init_schema(pool: ConnectionPool) -> None:
             conn.execute("ALTER TABLE conversation ADD COLUMN IF NOT EXISTS extracted_at TIMESTAMPTZ")
             conn.execute("UPDATE conversation SET extracted_at = now()")
         adds.append(("conversation", "extract_attempts", "INTEGER NOT NULL DEFAULT 0"))
+        adds += [("conversation", c, d) for c, d in CONVERSATION_MEMORY_COLUMNS]
         for t, col, decl in [*adds, ("auth_attempts", "finish_code_hash", "TEXT"), ("users", "display_name", "TEXT")]:
             if (t, col) not in have:
                 conn.execute(f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS {col} {decl}")

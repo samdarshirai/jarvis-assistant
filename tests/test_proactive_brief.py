@@ -61,7 +61,7 @@ class LLM:
         assert tier == "fast"
         return SimpleNamespace(ainvoke=self.run)
 
-    async def run(self, messages):
+    async def run(self, messages, config=None):
         self.seen.append(messages)
         if self.exc:
             raise self.exc

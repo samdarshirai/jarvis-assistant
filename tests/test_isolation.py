@@ -572,7 +572,12 @@ ROUTES = [("GET", "/calendar", None), ("GET", "/tasks", None), ("POST", "/tasks"
           ("DELETE", "/graph/entities/1", None), ("PATCH", "/graph/facts/1", {"value": "x"}), ("DELETE", "/graph/facts/1", None),
           ("GET", "/graph/suppressions", None), ("DELETE", "/graph/suppressions", {"key_type": "email", "key_hmac": "x"}),
           ("GET", "/conversations", None), ("POST", "/conversations", None), ("GET", "/conversations/1", None),
-          ("POST", "/conversations/1/resume", None), ("GET", "/chat/current", None)]
+          ("POST", "/conversations/1/resume", None), ("GET", "/chat/current", None),
+          ("GET", "/graph/candidates", None), ("GET", "/graph/candidates/count", None),
+          ("POST", "/graph/candidates/bulk", {"ids": [1], "decision": "dismiss"}),
+          ("POST", "/graph/candidates/1/approve", None), ("POST", "/graph/candidates/1/dismiss", None),
+          ("GET", "/memory/items", None), ("PATCH", "/memory/items/1", {"text": "x"}), ("DELETE", "/memory/items/1", None),
+          ("POST", "/memory/items/1/promote", None), ("PUT", "/settings/embedding", {"model": "m"})]
 PUBLIC = {"/", "/privacy", "/health", "/auth/start", "/auth/callback", "/auth/claim", "/voice", "/openapi.json", "/docs",
           "/docs/oauth2-redirect", "/redoc"}
 

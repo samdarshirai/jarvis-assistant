@@ -29,7 +29,7 @@ class MemoryAwareProvider(GraphAwareProvider):
         super().__init__(provider, None)
         self.memories = memories
 
-    async def _block(self, text):
+    async def _block(self, text, thread=None):
         try:
             rows = await asyncio.to_thread(self.memories)
         except Exception:

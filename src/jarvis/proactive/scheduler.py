@@ -14,6 +14,7 @@ from jarvis.llm_check import _code as llm_error_code
 from jarvis.kg.candidates import CandidateStore
 from jarvis.proactive.alerts import sweep
 from jarvis.proactive.brief import run_brief
+from jarvis.proactive.consolidate import run_once as run_consolidate
 from jarvis.proactive.extract import run_once as run_extract
 from jarvis.proactive.learned import announce
 from jarvis.proactive.mailwatch import MailWatch
@@ -23,7 +24,7 @@ log = logging.getLogger(__name__)
 # ponytail: mail watch auto-creates calendar events, and the app has no Undo for them yet (Undo is a Telegram button,
 # the owner's only), so it runs for the owner only; set True once the app can undo an auto-added event.
 FRIEND_MAIL_WATCH = False
-NO_GOOGLE = frozenset({"extract", "expire"})  # jobs that read nothing from Google, so they also run for users who never connected it
+NO_GOOGLE = frozenset({"extract", "expire", "memory"})  # jobs that read nothing from Google, so they also run for users who never connected it
 USER_DEADLINE = 120.0  # seconds one user's run of one job may take
 REAUTH_TEXT = "Jarvis needs Google access again. Open the app and sign in."
 ISSUE_TEXT = {
@@ -124,16 +125,20 @@ def per_user_jobs(s) -> dict:
             return
         await run_brief(rt.calendar, rt.tasks, rt.gmail, llm, notifier, rt.audit, tz, now=now,
                         weather_city=await state("weather_city") or (s.weather_city if rt.user.is_owner else ""),
-                        location=lambda: weather.load_coords(rt.proactive))
+                        location=lambda: weather.load_coords(rt.proactive), memory=getattr(rt, "memory", None))
 
     async def extract(rt, notifier, llm, tz, now):
-        await run_extract(rt, llm, now, on_candidates=lambda conv_id, count: announce(rt, notifier, conv_id, count, now))
+        await run_extract(rt, llm, now, on_candidates=lambda conv_id, count: announce(rt, notifier, conv_id, count, now),
+                          facts=getattr(s, "extract_enabled", True))  # the job only runs when one flag is on
 
     async def expire(rt, notifier, llm, tz, now):
         if getattr(rt, "kg", None) is not None:  # undecided for 30 days: expired, not remembered as dismissed
             await asyncio.to_thread(CandidateStore(rt.kg.pool, rt.kg.user_id).expire, now)
 
-    return {"brief": brief, "mail": mail, "sweep": alerts, "extract": extract, "expire": expire}
+    async def memory(rt, notifier, llm, tz, now):
+        await run_consolidate(rt, now, suggest_facts=getattr(s, "extract_enabled", True))
+
+    return {"brief": brief, "mail": mail, "sweep": alerts, "extract": extract, "expire": expire, "memory": memory}
 
 
 def build_scheduler(s, jobs: dict) -> AsyncIOScheduler:
@@ -144,8 +149,10 @@ def build_scheduler(s, jobs: dict) -> AsyncIOScheduler:
         sched.add_job(jobs["brief"], IntervalTrigger(minutes=5), id="brief", **common)
     sched.add_job(jobs["mail"], IntervalTrigger(minutes=s.mail_poll_minutes), id="mail", **common)
     sched.add_job(jobs["sweep"], IntervalTrigger(minutes=5), id="sweep", **common)
-    if s.extract_enabled:
+    if s.extract_enabled or s.memory_digest_enabled:  # one job reads each ended conversation once for both
         sched.add_job(jobs["extract"], IntervalTrigger(minutes=s.extract_poll_minutes), id="extract", **common)
+    if "memory" in jobs:  # expiry, embeddings and the nightly consolidation
+        sched.add_job(jobs["memory"], IntervalTrigger(minutes=30), id="memory", **common)
     # not behind the flag: switching the extractor off must not leave old candidates undecided forever
     sched.add_job(jobs["expire"], IntervalTrigger(hours=6), id="expire", **common)
     return sched

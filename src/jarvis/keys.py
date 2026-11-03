@@ -71,7 +71,8 @@ class Keys:
         return {"email": user.email, "tz": user.tz, "display_name": user.display_name,
                 "setup": {"google": PgTokenStore(pool, uid).get(PROVIDER) is not None, "llm": creds is not None},
                 "keys": {"llm_base_url": creds and creds.base_url, "llm_key_last4": last4(sec.get("llm_key")),
-                         "model_fast": creds and ",".join(creds.fast), "model_strong": creds and ",".join(creds.strong)}}
+                         "model_fast": creds and ",".join(creds.fast), "model_strong": creds and ",".join(creds.strong),
+                         **({"embed_model": sec["embed_model"]} if sec.get("embed_model") else {})}}
 
     async def me(self, rt) -> dict:
         return await asyncio.to_thread(self._me, rt.user.id)
@@ -109,6 +110,23 @@ class Keys:
         await asyncio.to_thread(save)
         return await self._changed(rt, "set_timezone" if set(updates) == {"tz"} else "update_profile",
                                    {"tz": updates["tz"]} if set(updates) == {"tz"} else {"fields": list(updates)})
+
+    async def set_embedding(self, rt, model: str):
+        """The embedding model for meaning-based recall, on the user's own endpoint; "" switches it off (keyword
+        recall). Not test-called: an endpoint without embeddings just falls back to keywords."""
+        model = model.strip()
+        if model and not _model_id.fullmatch(model):
+            return JSONResponse({"error": "bad_request"}, status_code=422)
+
+        def save():
+            with self.tenants.pool.connection() as c:
+                if model:
+                    _put_secret(c, self._store().fernet, rt.user.id, "embed_model", model)
+                else:
+                    c.execute("DELETE FROM user_secrets WHERE user_id = %s AND name = 'embed_model'", (rt.user.id,))
+
+        await asyncio.to_thread(save)
+        return await self._changed(rt, "set_embedding", {"model": model or None})
 
     async def set_llm(self, rt, base_url: str, api_key: str, model_fast: str | None = None,
                       model_strong: str | None = None):

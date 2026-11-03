@@ -14,15 +14,18 @@ from jarvis.google.auth import PgTokenStore, build_service
 from jarvis.google.calendar import CalendarClient
 from jarvis.google.gmail import GmailClient
 from jarvis.google.tasks import TasksClient
-from jarvis.llm import LLMProvider, creds_for
+from jarvis.llm import LLMProvider, creds_for, guarded_http_client
 from jarvis.kg.block import GraphAwareProvider
 from jarvis.kg.store import GraphStore
+from jarvis.memory.embed import Embedder
+from jarvis.memory.store import MemoryStore
 from jarvis.notes import NoteStore
 from jarvis.proactive.store import ProactiveStore
 from jarvis.situation import Situation, SituationAwareProvider
 from jarvis.tools.calendar_tools import register_calendar_tools
 from jarvis.tools.gmail_tools import register_gmail_tools
 from jarvis.tools.graph_tools import register_graph_tools
+from jarvis.tools.memory_tools import register_memory_tools
 from jarvis.tools.note_tools import register_note_tools
 from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
@@ -57,7 +60,7 @@ def cached_service(build, ttl: float = 1800.0, clock=time.monotonic, epoch=lambd
 
 
 def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int | None = None,
-                   graph_store=None) -> Registry:
+                   graph_store=None, memory=None, embedder=None) -> Registry:
     registry = Registry()
     gmail = GmailClient(svc("gmail", "v1"))
     register_calendar_tools(registry, CalendarClient(svc("calendar", "v3"), tz), tz, gmail.sent_to)
@@ -68,6 +71,8 @@ def build_registry(svc, tz: str, pool=None, tavily_key: str = "", user_id: int |
         register_note_tools(registry, NoteStore(pool, user_id))
     if graph_store is not None:
         register_graph_tools(registry, graph_store)
+    if memory is not None:
+        register_memory_tools(registry, memory, tz, embedder=embedder)
     register_research_tools(registry, FallbackSearch(WebSearch(tavily_key), DdgSearch()) if tavily_key else DdgSearch())
     return registry
 
@@ -94,6 +99,8 @@ class UserRuntime:
     google_epoch: list[int] = field(default_factory=lambda: [0], repr=False)  # bumped by invalidate()
     kg: "GraphStore | None" = None  # the user's knowledge graph
     conversations: "ConversationStore | None" = None
+    memory: "MemoryStore | None" = None  # short-term notes and conversation summaries
+    embedder: "Embedder | None" = None  # meaning-based recall; None without an embedding model
 
     @property
     def llm_ready(self) -> bool:
@@ -161,10 +168,14 @@ class Tenants:
                                   epoch=lambda: epoch[0])
 
         kg = GraphStore(pool, user_id, s.fernet_key.encode())
-        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id, graph_store=kg)
+        memory = MemoryStore(pool, user_id)
         creds = creds_for(secrets, s)
+        embed_model = (secrets.get("embed_model") or getattr(s, "embed_model", "") or "").strip()
+        embedder = Embedder(creds.base_url, creds.api_key, embed_model, guarded_http_client()) if creds and embed_model else None
+        registry = build_registry(svc, tz, pool, s.tavily_api_key, user_id, graph_store=kg, memory=memory,
+                                  embedder=embedder)
         raw = self.llm_provider_factory(creds, audit) if creds else None
-        llm = GraphAwareProvider(raw, kg) if raw else None
+        llm = GraphAwareProvider(raw, kg, memory=memory) if raw else None
         proactive = ProactiveStore(pool, user_id)
         calendar, tasks, gmail = CalendarClient(svc("calendar", "v3"), tz), TasksClient(svc("tasks", "v1")), GmailClient(svc("gmail", "v1"))
         # Only the chat graph sees the situation (proactive jobs and mail extraction use `llm`). Memory wraps it, so the
@@ -172,15 +183,20 @@ class Tenants:
         chat = None
         if raw:
             chat = SituationAwareProvider(raw, Situation(calendar, tasks, gmail, proactive, tz, NoteStore(pool, user_id)))
-            chat = GraphAwareProvider(chat, kg)
-        graph = build_graph(chat, registry, audit, self.saver, tz) if raw else None
+            chat = GraphAwareProvider(chat, kg, memory=memory)
+        graph = build_graph(chat, registry, audit, self.saver, tz, memory=memory, summarizer=raw) if raw else None
         return UserRuntime(user=user, secrets=secrets, audit=audit, notes=NoteStore(pool, user_id),
                            proactive=proactive, calendar=calendar, tasks=tasks, gmail=gmail,
                            registry=registry, llm=llm, graph=graph, lock=lock, tz=tz, google_epoch=epoch, kg=kg,
-                           conversations=ConversationStore(pool, user_id))
+                           conversations=ConversationStore(pool, user_id), memory=memory, embedder=embedder)
 
 
 async def _close(rt: UserRuntime) -> None:
+    if rt.embedder is not None:
+        try:
+            await rt.embedder.aclose()
+        except Exception:
+            log.exception("could not close the embeddings client for user %s", rt.user.id)
     if rt.llm is not None:
         try:
             await rt.llm.aclose()

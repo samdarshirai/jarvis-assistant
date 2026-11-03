@@ -170,6 +170,19 @@ class SuppressionIn(BaseModel):
     key_hmac: Annotated[str, StringConstraints(min_length=1, max_length=256)]
 
 
+class MemoryItemIn(BaseModel):
+    text: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)] | None = None
+    until: date | None = None  # the last day the note matters
+
+
+class ConversationNewIn(BaseModel):
+    off_record: bool = False
+
+
+class EmbeddingIn(BaseModel):
+    model: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)]  # "" = keyword recall only
+
+
 class ChatIn(BaseModel):
     text: Annotated[str, StringConstraints(min_length=1, max_length=2000)]
 
@@ -495,6 +508,24 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     async def graph_suppression_lift(request: Request, body: SuppressionIn):
         return await graph(request, "graph_suppression_lift", body.key_type, body.key_hmac)
 
+    @app.get("/memory/items")
+    async def memory_items(request: Request):
+        return await graph(request, "memory_items")
+
+    @app.patch("/memory/items/{item_id}")
+    async def memory_item_update(request: Request, item_id: ConvId, body: MemoryItemIn):
+        if body.text is None and body.until is None:
+            return JSONResponse({"error": "bad_request"}, status_code=422)
+        return await graph(request, "memory_item_update", item_id, body.text, body.until)
+
+    @app.delete("/memory/items/{item_id}")
+    async def memory_item_delete(request: Request, item_id: ConvId):
+        return await graph(request, "memory_item_delete", item_id)
+
+    @app.post("/memory/items/{item_id}/promote")
+    async def memory_item_promote(request: Request, item_id: ConvId):
+        return await graph(request, "memory_item_promote", item_id)
+
     @app.get("/mail")
     async def mail(request: Request, limit: int = 20):
         svc, rt, err = await guarded(request)
@@ -536,9 +567,9 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
         return err or await svc.conversations(rt)
 
     @app.post("/conversations")
-    async def conversation_new(request: Request):
+    async def conversation_new(request: Request, body: ConversationNewIn | None = None):
         svc, rt, err = await guarded(request)
-        return err or await svc.new_conversation(rt)
+        return err or await svc.new_conversation(rt, (body or ConversationNewIn()).off_record)
 
     @app.post("/conversations/{conv_id}/resume")
     async def conversation_resume(request: Request, conv_id: ConvId):
@@ -570,6 +601,11 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     async def put_llm(request: Request, body: LLMIn):
         svc, rt, err = await guarded(request, "keys")
         return err or await svc.set_llm(rt, body.base_url, body.api_key, body.model_fast, body.model_strong)
+
+    @app.put("/settings/embedding")
+    async def put_embedding(request: Request, body: EmbeddingIn):
+        svc, rt, err = await guarded(request, "keys")
+        return err or await svc.set_embedding(rt, body.model)
 
     @app.put("/device/fcm")
     async def put_fcm(request: Request, body: FcmIn):
