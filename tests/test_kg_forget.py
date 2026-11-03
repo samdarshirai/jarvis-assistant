@@ -162,7 +162,8 @@ def test_preview_forget_writes_nothing(pool, store, anna):
     assert len(store.facts_for(maria.id)) == 2
     assert p == store.forget_entity(anna.id)
     assert p == {"entity": "Anna Müller", "facts": 1, "redacted_excerpts": 1, "mentions_deleted": 1, "suppressed": 4,
-                 "merged_entities": 0, "candidates_deleted": 0, "mention_facts": [{"id": p["mention_facts"][0]["id"], "entity": "Maria",
+                 "merged_entities": 0, "candidates_deleted": 0, "short_term_deleted": 0, "summaries_cleared": 0,
+                 "mention_facts": [{"id": p["mention_facts"][0]["id"], "entity": "Maria",
                                                           "predicate": "note", "value": "her boss is Anna Müller"}]}
 
 
@@ -411,3 +412,24 @@ def test_forget_leaves_other_users_candidates(pool, store, anna, uids):
     store.forget_entity(anna.id)
     assert _count(pool, "SELECT count(*) FROM fact_candidate WHERE user_id = %s", uids[1]) == 1
     assert other.mentions_suppressed("Anna") is False
+
+
+def test_forget_also_clears_short_term_notes_summaries_and_their_vectors(pool, uids, store, anna):
+    from jarvis.memory.store import MemoryStore
+
+    mem = MemoryStore(pool, uids[0])
+    about, other = mem.add_item("Lunch with Anna Müller on Friday", "plan")[0], mem.add_item("In Pune till Friday")[0]
+    with pool.connection() as c:
+        conv = c.execute("INSERT INTO conversation (user_id, channel, surface, thread_id) VALUES (%s, 'chat', 'chat',"
+                         " 'f1') RETURNING id", (uids[0],)).fetchone()[0]
+        mem.save_digest(c, conv, "Planned the lunch with Anna Müller.", ["book a table for Anna"], False)
+        for kind, ref in (("item", about.id), ("item", other.id), ("conversation", conv)):
+            c.execute("INSERT INTO memory_embedding (user_id, ref_kind, ref_id, model, digest, vec)"
+                      " VALUES (%s, %s, %s, 'm', 'd', '{1,0}')", (uids[0], kind, ref))
+    p = store.preview_forget(anna.id)
+    assert p["short_term_deleted"] == 1 and p["summaries_cleared"] == 1 and mem.get(about.id) is not None
+    out = store.forget_entity(anna.id)
+    assert out["short_term_deleted"] == 1 and out["summaries_cleared"] == 1
+    assert mem.get(about.id) is None and mem.get(other.id) is not None
+    assert _count(pool, "SELECT count(*) FROM conversation WHERE summary IS NOT NULL OR open_loops IS NOT NULL") == 0
+    assert _count(pool, "SELECT count(*) FROM memory_embedding") == 1  # only the unrelated note's vector is left

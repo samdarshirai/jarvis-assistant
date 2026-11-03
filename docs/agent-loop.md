@@ -2,7 +2,10 @@
 
 The agent loop lives in `src/jarvis/agent/graph.py` (`build_graph`). It is a LangGraph `StateGraph`
 compiled with a Postgres checkpointer (`AsyncPostgresSaver`, wired in `src/jarvis/main.py`).
-Telegram and voice share one conversation thread and one `asyncio.Lock`, so only one graph step runs at a time.
+Each conversation has its own checkpoint thread (`conversations.py`); a user's channels share one `asyncio.Lock`, so only
+one graph step runs at a time. Long threads keep a rolling summary of what fell out of the 40-message window, and the
+memory tools (`remember_for_now`, `forget_short_term`, `recall`) are offered in every domain (see
+`docs/superpowers/specs/2026-11-03-memory-tiers-design.md`).
 
 ## State
 
@@ -13,6 +16,7 @@ Telegram and voice share one conversation thread and one `asyncio.Lock`, so only
 | `idx` | Position in `domains` |
 | `approved` | The gate cleared the current tool step |
 | `client_actions` | Phone-side actions (alarms, timers...) collected for the device |
+| `memory_events` | Short-term notes saved or forgotten this turn, returned by `/chat` for the Noted/Undo chip |
 | `read_untrusted` | Email or web content has been read this turn |
 | `review_mode` | Per-turn `normal`, `reason`, or `lookup`; reviews use the strong tier |
 | `research_calls` | Per-turn search/fetch attempt counts, capped at two each |

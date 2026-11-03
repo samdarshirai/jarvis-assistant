@@ -43,16 +43,18 @@ class ConversationStore:
             return c
         return self.start(surface)
 
-    def start(self, surface: str) -> Conversation:
+    def start(self, surface: str, off_record: bool = False) -> Conversation:
+        """A new conversation; `off_record`: no summary, no short-term notes, no fact candidates from it."""
         now = self.clock()
         try:
             with self.pool.connection() as conn:
                 conn.execute("UPDATE conversation SET closed_at = %s WHERE user_id = %s AND surface = %s"
                              " AND closed_at IS NULL", (now, self.user_id, surface))
                 return _conv(conn.execute(
-                    f"INSERT INTO conversation (user_id, channel, surface, thread_id, created_at, last_at)"
-                    f" VALUES (%s, %s, %s, %s, %s, %s) RETURNING {COLS}",
-                    (self.user_id, surface, surface, f"user:{self.user_id}:c:{uuid.uuid4().hex}", now, now)).fetchone())
+                    f"INSERT INTO conversation (user_id, channel, surface, thread_id, created_at, last_at, off_record)"
+                    f" VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING {COLS}",
+                    (self.user_id, surface, surface, f"user:{self.user_id}:c:{uuid.uuid4().hex}", now, now,
+                     off_record)).fetchone())
         except psycopg.errors.UniqueViolation:  # a concurrent start won the partial index: use theirs
             c = self.open_for(surface)
             if c is None:

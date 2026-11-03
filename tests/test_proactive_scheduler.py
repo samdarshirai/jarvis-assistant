@@ -24,7 +24,7 @@ def settings(**over):
     base = dict(timezone="Europe/Berlin", brief_enabled=True, brief_time="07:30", mail_poll_minutes=5,
                 leave_lead_minutes=30, auto_event_cap=5, telegram_owner_chat_id=42, fcm_credentials_path="",
                 weather_city="", openrouter_api_key="sk-operator-env-key",
-                extract_enabled=False, extract_poll_minutes=5)
+                extract_enabled=False, extract_poll_minutes=5, memory_digest_enabled=False)
     return SimpleNamespace(**{**base, **over})
 
 
@@ -314,7 +314,7 @@ async def test_start_proactive_builds_and_starts_the_jobs():
     sched = start_proactive(settings(), FakeTenants({}), FakeUsers([]), SimpleNamespace(send_message=AsyncMock()),
                             SimpleNamespace(fcm_tokens=lambda uid: []))
     try:
-        assert sched.running and {j.id for j in sched.get_jobs()} == {"brief", "mail", "sweep", "expire"}
+        assert sched.running and {j.id for j in sched.get_jobs()} == {"brief", "mail", "sweep", "expire", "memory"}
     finally:
         sched.shutdown(wait=False)
 
@@ -434,6 +434,13 @@ def test_extract_job_is_registered_only_when_enabled():
     assert set(on) == {"brief", "mail", "sweep", "extract", "expire"} and on["extract"].trigger.interval == timedelta(minutes=7)
 
 
+def test_the_digest_alone_registers_the_conversation_job_and_memory_upkeep_always_runs():
+    jobs = {**JOBS, "extract": AsyncMock(), "memory": AsyncMock()}
+    on = {j.id: j for j in build_scheduler(settings(memory_digest_enabled=True), jobs).get_jobs()}
+    assert {"extract", "memory"} <= set(on) and on["memory"].trigger.interval == timedelta(minutes=30)
+    assert "memory" in {j.id for j in build_scheduler(settings(), jobs).get_jobs()}
+
+
 async def test_extract_runs_for_users_without_google_other_jobs_do_not():
     from jarvis.proactive.scheduler import google_gate
     rt = runtime(user(1))
@@ -443,7 +450,7 @@ async def test_extract_runs_for_users_without_google_other_jobs_do_not():
         ran.append(rt.user.id)
 
     never = lambda uid: False  # noqa: E731
-    for name, expected in (("extract", [1]), ("expire", [1]), ("mail", [])):
+    for name, expected in (("extract", [1]), ("expire", [1]), ("memory", [1]), ("mail", [])):
         ran.clear()
         await run_for_users(name, job, FakeUsers([rt.user]), FakeTenants({1: rt}), google_gate(name, never), lambda u: FakeNotifier(), now=WED)
         assert ran == expected
@@ -452,8 +459,9 @@ async def test_extract_runs_for_users_without_google_other_jobs_do_not():
 async def test_the_extract_job_calls_the_extractor_with_the_users_llm(monkeypatch):
     seen = []
 
-    async def fake(rt, llm, now, on_candidates=None):
+    async def fake(rt, llm, now, on_candidates=None, facts=True):
         seen.append((rt.user.id, llm, now))
+        assert facts is False  # the Learned inbox is off: the digest runs without fact candidates
 
     monkeypatch.setattr("jarvis.proactive.scheduler.run_extract", fake)
     rt = runtime(user(1), llm=None)

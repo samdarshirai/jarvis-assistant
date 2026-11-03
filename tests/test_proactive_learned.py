@@ -92,7 +92,7 @@ async def test_make_notifier_sends_the_data_push_to_that_users_devices_only(monk
 
 
 async def test_the_extract_job_announces_through_the_notifier(monkeypatch):
-    async def fake(rt, llm, now, on_candidates=None):
+    async def fake(rt, llm, now, on_candidates=None, facts=True):
         await on_candidates(11, 2)
 
     monkeypatch.setattr("jarvis.proactive.scheduler.run_extract", fake)

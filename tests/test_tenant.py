@@ -163,7 +163,9 @@ async def test_runtime_always_has_a_graph(pool, uids):
     from jarvis.kg.store import GraphStore
     rt = await tenants(pool).get(uids[0])
     assert isinstance(rt.kg, GraphStore)
-    assert all(rt.registry.get(n) is None for n in ("remember", "forget", "recall"))
+    assert all(rt.registry.get(n) is None for n in ("remember", "forget"))
+    # memory tiers: the short-term and recall tools are offered in every domain
+    assert {rt.registry.get(n).domain for n in ("remember_for_now", "forget_short_term", "recall")} == {"*"}
 
 
 SITUATION = "Right now"

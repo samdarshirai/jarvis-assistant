@@ -40,6 +40,78 @@ String keyErrorText(Object e) {
 InputDecoration _field(String label, {String? hint}) =>
     InputDecoration(labelText: label, hintText: hint);
 
+/// The embedding model for meaning-based memory search, on the same provider; empty = keyword search only.
+class EmbeddingForm extends StatefulWidget {
+  const EmbeddingForm({super.key, required this.api, required this.onSaved, this.model});
+  final ApiClient api;
+  final FutureOr<void> Function() onSaved;
+  final String? model;
+
+  @override
+  State<EmbeddingForm> createState() => _EmbeddingFormState();
+}
+
+class _EmbeddingFormState extends State<EmbeddingForm> {
+  late final _model = TextEditingController(text: widget.model);
+  bool _busy = false;
+  String? _error;
+
+  @override
+  void dispose() {
+    _model.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await widget.api.put('/settings/embedding', {'model': _model.text.trim()});
+      if (!mounted) return;
+      await widget.onSaved();
+    } catch (_) {
+      if (mounted) setState(() => _error = "Couldn't save that model id.");
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      const Text('Memory search', style: TextStyle(color: cream)),
+      const SizedBox(height: 8),
+      const Text(
+        'Optional: an embedding model lets Jarvis find memories by meaning ("my wife\'s favourite food" finds '
+        '"Priya loves Thai curry"). Leave empty to search by words only.',
+        style: TextStyle(color: mutedText, height: 1.5),
+      ),
+      const SizedBox(height: 12),
+      TextField(
+        key: const Key('embed-model'),
+        enabled: !_busy,
+        controller: _model,
+        decoration: _field('Embedding model id', hint: 'e.g. openai/text-embedding-3-small'),
+      ),
+      const SizedBox(height: 8),
+      OutlinedButton(
+        key: const Key('embed-save'),
+        onPressed: _busy ? null : _save,
+        child: Text(_busy ? 'Saving…' : 'Save'),
+      ),
+      if (_error != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text(_error!, style: const TextStyle(color: danger)),
+        ),
+    ],
+  );
+}
+
 /// LLM base URL + key (+ model ids under "Advanced"); "Test and save" runs the backend's key test.
 class LlmForm extends StatefulWidget {
   const LlmForm({
@@ -272,6 +344,14 @@ class _KeysScreenState extends State<KeysScreen> {
           modelStrong: k['model_strong'] as String?,
           onSaved: () => _saved('AI key works. Saved.'),
         ),
+        if (setup['llm'] == true) ...[
+          const SizedBox(height: 24),
+          EmbeddingForm(
+            api: widget.api,
+            model: k['embed_model'] as String?,
+            onSaved: () => _saved('Memory search updated.'),
+          ),
+        ],
       ],
     );
   }

@@ -106,4 +106,44 @@ CREATE TABLE IF NOT EXISTS fact_candidate (
 );
 CREATE INDEX IF NOT EXISTS fact_candidate_status_idx ON fact_candidate (user_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS fact_candidate_seen_idx ON fact_candidate (user_id, subject_norm, predicate, value_norm);
+CREATE INDEX IF NOT EXISTS conversation_summary_tsv ON conversation USING GIN (summary_tsv);
+-- Short-term memory: time-bound things the user mentioned ("in Pune till Friday", "waiting on the plumber"). Saved
+-- without a confirmation (the chat shows it with Undo), shown in every prompt while active, expired by the clock.
+CREATE TABLE IF NOT EXISTS memory_item (
+  id SERIAL PRIMARY KEY,
+  {USER_REF},
+  kind TEXT NOT NULL CHECK (kind IN ('context', 'plan', 'commitment')),
+  text TEXT NOT NULL,
+  text_norm TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'expired', 'promoted')),
+  origin TEXT NOT NULL CHECK (origin IN ('tool', 'digest')),
+  conversation_id INTEGER,
+  quote TEXT,
+  durable BOOLEAN NOT NULL DEFAULT false,  -- the digest thinks this may be lasting: consolidation suggests keeping it
+  seen_count INTEGER NOT NULL DEFAULT 1,  -- conversations that mentioned it
+  seen_in INTEGER[] NOT NULL DEFAULT '{{}}',  -- their ids, so one conversation counts once
+  suggested_at TIMESTAMPTZ,  -- a keep-forever candidate was put in the Learned inbox
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_at TIMESTAMPTZ,  -- promoted or expired (a deleted item is gone)
+  tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('english', text)) STORED,
+  UNIQUE (user_id, id),
+  FOREIGN KEY (user_id, conversation_id) REFERENCES conversation (user_id, id) ON DELETE SET NULL (conversation_id)
+);
+CREATE INDEX IF NOT EXISTS memory_item_active_idx ON memory_item (user_id, status, expires_at);
+CREATE INDEX IF NOT EXISTS memory_item_tsv_idx ON memory_item USING GIN (tsv);
+-- Meaning-based search: one vector per fact, item, conversation summary or note. Plain REAL[] so any Postgres works
+-- (no pgvector); recall compares them in Python, fine at one person's scale. `digest` is the sha256 of the text that
+-- was embedded, so an edited text is embedded again; a row whose source is gone is deleted by the backfill job.
+CREATE TABLE IF NOT EXISTS memory_embedding (
+  {USER_REF},
+  ref_kind TEXT NOT NULL CHECK (ref_kind IN ('fact', 'item', 'conversation', 'note')),
+  ref_id INTEGER NOT NULL,
+  model TEXT NOT NULL,
+  digest TEXT NOT NULL,
+  vec REAL[] NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (user_id, ref_kind, ref_id)
+);
 """

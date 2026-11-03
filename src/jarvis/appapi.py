@@ -12,6 +12,7 @@ from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDIN
 from jarvis.google.auth import ReauthRequired
 from jarvis.kg import review, views
 from jarvis.llm import MemoryContextError
+from jarvis.memory.store import item_json
 from jarvis.tenant import auth_runtime, thread_config
 from jarvis.timeutil import now_local
 from jarvis.voice.ws import card_lines, is_tap_only
@@ -287,7 +288,8 @@ class AppService:
         if result.get("__interrupt__"):
             return {"reply": None, "card": self._card(result["__interrupt__"][0]), "client_actions": []}
         return {"reply": "\n\n".join(turn_replies(result["messages"]) or [EMPTY_TEXT]), "card": None,
-                "client_actions": result.get("client_actions") or []}
+                "client_actions": result.get("client_actions") or [],
+                **({"memory_events": ev} if (ev := result.get("memory_events")) else {})}  # the Noted chip, Undo
 
     async def chat(self, rt, text: str) -> dict:
         async def decide():
@@ -323,10 +325,56 @@ class AppService:
     # --- conversations: (status, body) where a status can differ ---
     async def conversations(self, rt) -> dict:
         rows = await asyncio.to_thread(rt.conversations.list)
-        return {"conversations": [conversation_json(c) for c in rows]}
+        memory = getattr(rt, "memory", None)
+        summaries = await asyncio.to_thread(memory.summaries_for, [c.id for c in rows]) if memory else {}
+        return {"conversations": [{**conversation_json(c), "summary": summaries.get(c.id)} for c in rows]}
 
-    async def new_conversation(self, rt) -> dict:
-        return {"conversation": conversation_json(await asyncio.to_thread(rt.conversations.start, "chat"))}
+    async def new_conversation(self, rt, off_record: bool = False) -> dict:
+        conv = await asyncio.to_thread(rt.conversations.start, "chat", off_record) if off_record else \
+            await asyncio.to_thread(rt.conversations.start, "chat")
+        return {"conversation": {**conversation_json(conv), "off_record": off_record}}
+
+    # --- short-term memory: the Memory screen's "Right now" list and the chat's Undo ---
+    async def _memory(self, rt, fn, *args):
+        """(status, body) for a MemoryStore call: 404 unknown or foreign, 400 bad input, 502 the database failed."""
+        if getattr(rt, "memory", None) is None:
+            return 503, {"error": "unavailable"}
+        try:
+            return 200, await asyncio.wait_for(asyncio.to_thread(fn, *args), self.source_timeout)
+        except LookupError:
+            return 404, {"error": "not_found"}
+        except ValueError:
+            return 400, {"error": "bad_request"}
+        except Exception:
+            log.exception("memory call failed")
+            return 502, {"error": "unavailable"}
+
+    async def memory_items(self, rt):
+        return await self._memory(rt, lambda: {"items": [item_json(i) for i in rt.memory.active()]})
+
+    async def memory_item_update(self, rt, item_id: int, text: str | None, until: date | None):
+        end = datetime.combine(until, time(23, 59), tzinfo=ZoneInfo(rt.tz)) if until else None
+        code, body = await self._memory(rt, lambda: {"item": item_json(rt.memory.update(item_id, text=text, expires_at=end))})
+        if code == 200:
+            await self._audit(rt, "memory_item_update", {"item_id": item_id}, {"ok": True})
+        return code, body
+
+    async def memory_item_delete(self, rt, item_id: int):
+        def go():
+            if not rt.memory.delete(item_id):
+                raise LookupError("item")
+            return {"ok": True}
+
+        code, body = await self._memory(rt, go)
+        if code == 200:
+            await self._audit(rt, "memory_item_delete", {"item_id": item_id}, {"deleted": True})
+        return code, body
+
+    async def memory_item_promote(self, rt, item_id: int):
+        code, body = await self._memory(rt, rt.memory.promote, item_id, rt.kg)
+        if code == 200:
+            await self._audit(rt, "memory_item_promote", {"item_id": item_id}, body)
+        return code, body
 
     async def _detail(self, rt, conv) -> dict:
         out = {"conversation": conversation_json(conv), "messages": [], "card": None}
