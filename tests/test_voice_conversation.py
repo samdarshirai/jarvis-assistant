@@ -10,6 +10,15 @@ def settle(c):
     c.portal.call(asyncio.sleep, 0.3)
 
 
+def wait_until(c, cond, timeout=5.0):
+    """Poll for a server-side teardown instead of guessing how long a slow runner needs."""
+    async def poll():
+        end = asyncio.get_running_loop().time() + timeout
+        while not cond() and asyncio.get_running_loop().time() < end:
+            await asyncio.sleep(0.05)
+    c.portal.call(poll)
+
+
 def voice_rows(h):
     return sorted((r for r in h.rt.conversations.rows.values() if r.surface == "voice"), key=lambda r: r.id)
 
@@ -48,7 +57,7 @@ def test_conversation_closed_on_every_exit():
         with c.websocket_connect("/voice", headers=AUTH) as ws:  # (b) stt dies under the session
             read(ws)
             settle(c)
-        settle(c)
+        wait_until(c, lambda: len(voice_rows(h)) == 3 and all(h.rt.conversations.get(r.id).closed_at for r in voice_rows(h)))
         rows = voice_rows(h)
         assert len(rows) == 3 and all(h.rt.conversations.get(r.id).closed_at for r in rows)
 
@@ -64,7 +73,7 @@ def test_replaced_session_does_not_close_newer_conversation():
                 first, second = voice_rows(h)
                 assert h.rt.conversations.get(first.id).closed_at
                 assert h.rt.conversations.get(second.id).closed_at is None
-        settle(c)
+        wait_until(c, lambda: h.rt.conversations.get(second.id).closed_at)
         assert h.rt.conversations.get(second.id).closed_at
 
 
