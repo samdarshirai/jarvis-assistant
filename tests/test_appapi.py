@@ -402,11 +402,44 @@ async def test_confirm_uses_given_conversation_and_new_chat_keeps_pending_card()
 async def test_confirm_with_foreign_or_unknown_conversation_id():
     g = ThreadGraph()
     r, other = rt(graph=g), rt(uid=2)
-    foreign = other.conversations.start("chat")
+    r.conversations.start("chat")
+    for _ in range(3):
+        foreign = other.conversations.start("chat")
+    assert r.conversations.get(foreign.id) is None  # B's real id does not exist in A's store
     g.pending[foreign.thread_id] = [CARD]
-    for cid in (foreign.id + 40, 99999):
-        assert (await svc().confirm(r, "i1", "yes", cid))["reply"] == "Already handled."
-    assert g.written == []
+    s = svc()
+    for cid in (foreign.id, 99999):
+        out = await s.confirm(r, "i1", "yes", cid)
+        assert out["reply"] == "Already handled." and "conversation" not in out
+        assert (await s.resume_conversation(r, cid))[0] == 404
+        assert (await s.conversation_detail(r, cid))[0] == 404
+    assert g.written == [] and g.inputs == []
+    assert other.conversations.get(foreign.id).closed_at is None
+
+
+async def test_confirm_mismatch_in_existing_conversation_names_it():
+    r = rt(graph=ThreadGraph())
+    c = r.conversations.start("chat")
+    out = await svc().confirm(r, "nope", "yes", c.id)
+    assert out["reply"] == "Already handled." and out["conversation"]["id"] == c.id
+
+
+async def test_foreign_conversation_id_is_refused_on_real_store(pool, uids):
+    from jarvis.conversations import ConversationStore
+    ua, ub = uids
+    g = ThreadGraph()
+    ra = rt(graph=g, uid=ua)
+    ra.conversations = ConversationStore(pool, ua)
+    sb = ConversationStore(pool, ub)
+    theirs = sb.start("chat")
+    g.pending[theirs.thread_id] = [CARD]
+    s = svc()
+    out = await s.confirm(ra, "i1", "yes", theirs.id)
+    assert out["reply"] == "Already handled." and "conversation" not in out
+    assert (await s.resume_conversation(ra, theirs.id))[0] == 404
+    assert (await s.conversation_detail(ra, theirs.id))[0] == 404
+    after = sb.get(theirs.id)
+    assert g.written == [] and (after.closed_at, after.surface) == (None, "chat")
 
 
 async def test_resume_returns_messages_and_card_and_voice_is_refused():

@@ -276,7 +276,7 @@ class AppService:
             cfg = thread_config(conv.thread_id)
             interrupts = (await rt.graph.aget_state(cfg)).interrupts
             if decision not in ("yes", "no") or not interrupts or interrupts[0].id != interrupt_id:
-                return handled
+                return {**handled, "conversation": conversation_json(conv)}
             return {**await self._present(rt, Command(resume=decision == "yes"), cfg),
                     "conversation": conversation_json(conv)}
 
