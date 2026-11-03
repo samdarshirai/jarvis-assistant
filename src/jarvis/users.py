@@ -107,7 +107,7 @@ class UserStore:
             c.execute("DELETE FROM users WHERE id = %s", (user_id,))
             for t in CHECKPOINT_TABLES:
                 if _table_exists(c, t):
-                    c.execute(f"DELETE FROM {t} WHERE thread_id = %s", (thread_id(user_id),))
+                    c.execute(f"DELETE FROM {t} WHERE thread_id = %s OR thread_id LIKE %s", (thread_id(user_id), f"user:{user_id}:c:%"))
 
 
 def _put_secret(c, fernet: Fernet, user_id: int, name: str, value: str) -> None:
@@ -225,11 +225,12 @@ def run(argv: list[str], pool, s) -> str:
         return f"Disabled {email}; revoked {Devices(pool).revoke_user(u.id)} device(s)."
     counts = {}
     with pool.connection() as c:
-        for t in (*DATA_TABLES, "user_secrets"):
+        for t in (*DATA_TABLES, "user_secrets", "conversation"):
             counts[t] = c.execute(f"SELECT count(*) FROM {t} WHERE user_id = %s", (u.id,)).fetchone()[0]
         for t in CHECKPOINT_TABLES:
             if _table_exists(c, t):
-                counts[t] = c.execute(f"SELECT count(*) FROM {t} WHERE thread_id = %s", (thread_id(u.id),)).fetchone()[0]
+                counts[t] = c.execute(f"SELECT count(*) FROM {t} WHERE thread_id = %s OR thread_id LIKE %s",
+                                      (thread_id(u.id), f"user:{u.id}:c:%")).fetchone()[0]
     lines = "\n".join(f"  {t}: {n}" for t, n in counts.items())
     if not a.yes:
         return f"Would delete {email} and:\n{lines}\nNothing deleted; rerun with --yes."

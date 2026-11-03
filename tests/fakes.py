@@ -1,10 +1,14 @@
 import asyncio
+import uuid
+from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 
+from jarvis.conversations import IDLE, Conversation
 from jarvis.voice.stt import SttEvent  # noqa: F401  (re-exported for tests)
 
 
@@ -105,12 +109,64 @@ class FakeTTS:
             raise
 
 
+class MemoryConversations:
+    """In-memory twin of ConversationStore (same methods and rules); list() has no legacy import."""
+
+    def __init__(self, user_id: int, clock=lambda: datetime.now(timezone.utc)):
+        self.user_id, self.clock = user_id, clock
+        self.rows: dict[int, Conversation] = {}
+
+    def open_for(self, surface):
+        return next((c for c in self.rows.values() if c.surface == surface and c.closed_at is None), None)
+
+    def current(self, surface):
+        c = self.open_for(surface)
+        return c if c and self.clock() - c.last_at <= IDLE else self.start(surface)
+
+    def start(self, surface):
+        now = self.clock()
+        for c in [c for c in self.rows.values() if c.surface == surface and c.closed_at is None]:
+            self.rows[c.id] = replace(c, closed_at=now)
+        cid = len(self.rows) + 1
+        self.rows[cid] = Conversation(cid, surface, surface, None, f"user:{self.user_id}:c:{uuid.uuid4().hex}", now, now, None)
+        return self.rows[cid]
+
+    def touch(self, conv_id, text=None):
+        c = self.rows.get(conv_id)
+        if c:
+            self.rows[conv_id] = replace(c, last_at=self.clock(), title=c.title or (text or "").strip()[:60] or None)
+
+    def close(self, conv_id):
+        c = self.rows.get(conv_id)
+        if c and c.closed_at is None:
+            self.rows[conv_id] = replace(c, closed_at=self.clock())
+
+    def get(self, conv_id):
+        return self.rows.get(conv_id)
+
+    def list(self, limit=50):
+        return sorted(self.rows.values(), key=lambda c: c.last_at, reverse=True)[:limit]
+
+    def resume(self, conv_id, surface):
+        t = self.get(conv_id)
+        now = self.clock()
+        if t is None or (t.closed_at is None and t.surface == "voice" and now - t.last_at <= IDLE):
+            return None
+        for c in [c for c in self.rows.values() if c.surface == surface and c.closed_at is None and c.id != conv_id]:
+            self.rows[c.id] = replace(c, closed_at=now)
+        self.rows[conv_id] = replace(t, surface=surface, closed_at=None, last_at=now)
+        return self.rows[conv_id]
+
+
 class FakeTenants:
     """Tenants twin: get(uid) returns a minimal runtime (user, secrets, graph, lock); lock(uid) is that runtime's lock."""
 
     def __init__(self, runtimes: dict | None = None):
         self.runtimes: dict[int, SimpleNamespace] = runtimes if runtimes is not None else {}
         self.s = SimpleNamespace(deepgram_api_key="", tavily_api_key="")
+        for uid, rt in self.runtimes.items():
+            if not hasattr(rt, "conversations"):
+                rt.conversations = MemoryConversations(uid)
         self._users = {uid: rt.user for uid, rt in self.runtimes.items()}
         self.users = SimpleNamespace(get=self._users.get)
         self._locks: dict[int, asyncio.Lock] = {
@@ -119,7 +175,7 @@ class FakeTenants:
 
     def add(self, uid, graph, secrets=None, disabled=False):
         rt = SimpleNamespace(user=SimpleNamespace(id=uid, disabled=disabled), secrets=dict(secrets or {}),
-                             graph=graph, lock=self.lock(uid))
+                             graph=graph, lock=self.lock(uid), conversations=MemoryConversations(uid))
         self.runtimes[uid] = rt
         self._users[uid] = SimpleNamespace(id=uid, disabled=disabled)
         return rt

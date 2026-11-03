@@ -7,6 +7,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from jarvis.agent.graph import turn_replies
+from jarvis.conversations import IDLE, conversation_json, messages_json
 from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.google.auth import ReauthRequired
 from jarvis.kg import views
@@ -232,8 +233,8 @@ class AppService:
         t.add_done_callback(self.steps.discard)
         return await asyncio.shield(t)
 
-    async def _present(self, rt, graph_input) -> dict:
-        cfg = {**thread_config(rt.user.id), "tags": ["app"], "metadata": {"channel": "app"}, "run_name": "jarvis-turn"}
+    async def _present(self, rt, graph_input, cfg) -> dict:
+        cfg = {**cfg, "tags": ["app"], "metadata": {"channel": "app"}, "run_name": "jarvis-turn"}
         try:
             result = await rt.graph.ainvoke(graph_input, cfg)
         except Exception as error:
@@ -253,18 +254,78 @@ class AppService:
 
     async def chat(self, rt, text: str) -> dict:
         async def decide():
-            pending = (await rt.graph.aget_state(thread_config(rt.user.id))).interrupts
-            if pending:
-                return {"reply": PENDING_TEXT, "card": self._card(pending[0]), "client_actions": []}
-            return await self._present(rt, {"messages": [HumanMessage(text)]})
+            conv = await asyncio.to_thread(rt.conversations.current, "chat")
+            await asyncio.to_thread(rt.conversations.touch, conv.id, text)
+            conv = await asyncio.to_thread(rt.conversations.get, conv.id)
+            cfg = thread_config(conv.thread_id)
+            pending = (await rt.graph.aget_state(cfg)).interrupts
+            out = ({"reply": PENDING_TEXT, "card": self._card(pending[0]), "client_actions": []} if pending
+                   else await self._present(rt, {"messages": [HumanMessage(text)]}, cfg))
+            return {**out, "conversation": conversation_json(conv)}
 
         return await self._run(rt, decide)
 
-    async def confirm(self, rt, interrupt_id: str, decision: str) -> dict:
+    async def confirm(self, rt, interrupt_id: str, decision: str, conversation_id: int | None = None) -> dict:
         async def decide():
-            interrupts = (await rt.graph.aget_state(thread_config(rt.user.id))).interrupts
+            handled = {"reply": HANDLED_TEXT, "card": None, "client_actions": []}
+            if conversation_id is None:
+                conv = await asyncio.to_thread(rt.conversations.open_for, "chat")
+            else:
+                conv = await asyncio.to_thread(rt.conversations.get, conversation_id)
+            if conv is None:
+                return handled
+            cfg = thread_config(conv.thread_id)
+            interrupts = (await rt.graph.aget_state(cfg)).interrupts
             if decision not in ("yes", "no") or not interrupts or interrupts[0].id != interrupt_id:
-                return {"reply": HANDLED_TEXT, "card": None, "client_actions": []}
-            return await self._present(rt, Command(resume=decision == "yes"))
+                return {**handled, "conversation": conversation_json(conv)}
+            return {**await self._present(rt, Command(resume=decision == "yes"), cfg),
+                    "conversation": conversation_json(conv)}
 
         return await self._run(rt, decide)
+
+    # --- conversations: (status, body) where a status can differ ---
+    async def conversations(self, rt) -> dict:
+        rows = await asyncio.to_thread(rt.conversations.list)
+        return {"conversations": [conversation_json(c) for c in rows]}
+
+    async def new_conversation(self, rt) -> dict:
+        return {"conversation": conversation_json(await asyncio.to_thread(rt.conversations.start, "chat"))}
+
+    async def _detail(self, rt, conv) -> dict:
+        out = {"conversation": conversation_json(conv), "messages": [], "card": None}
+        if rt.graph is None:  # no LLM key yet: the row is still listed, its thread is unreadable
+            return out
+        try:
+            interrupts = (await rt.graph.aget_state(thread_config(conv.thread_id))).interrupts
+            out["card"] = self._card(interrupts[0]) if interrupts else None
+        except Exception:
+            log.error("could not read pending confirmation")
+        try:
+            out["messages"] = await messages_json(rt.graph, conv.thread_id)
+        except Exception:
+            log.error("could not read conversation messages")
+        return out
+
+    async def current_chat(self, rt) -> dict:
+        """The open chat conversation if it is still within IDLE (the rule current() uses); never starts one."""
+        conv = await asyncio.to_thread(rt.conversations.open_for, "chat")
+        if conv is None or rt.conversations.clock() - conv.last_at > IDLE:
+            return {"conversation": None, "messages": [], "card": None}
+        return await self._detail(rt, conv)
+
+    async def resume_conversation(self, rt, conv_id: int) -> tuple[int, dict]:
+        async def decide():
+            if await asyncio.to_thread(rt.conversations.get, conv_id) is None:
+                return 404, {"error": "not_found"}
+            conv = await asyncio.to_thread(rt.conversations.resume, conv_id, "chat")
+            if conv is None:
+                return 409, {"error": "in_progress"}
+            return 200, await self._detail(rt, conv)
+
+        return await self._run(rt, decide)
+
+    async def conversation_detail(self, rt, conv_id: int) -> tuple[int, dict]:
+        conv = await asyncio.to_thread(rt.conversations.get, conv_id)
+        if conv is None:
+            return 404, {"error": "not_found"}
+        return 200, await self._detail(rt, conv)

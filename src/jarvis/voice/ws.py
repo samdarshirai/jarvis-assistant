@@ -57,11 +57,12 @@ def _where(e: BaseException | None) -> str:
 
 class VoiceSession:
     def __init__(self, ws: WebSocket, graph, devices, device_id: int, stt, tts, lock: asyncio.Lock, steps: set,
-                 cfg: dict, *, user_id: int, token: str):
+                 cfg: dict, *, user_id: int, token: str, on_text=None):
         self.ws, self.graph, self.devices, self.device_id, self.stt, self.tts = ws, graph, devices, device_id, stt, tts
         self.user_id, self.token = user_id, token  # the token is re-verified before every graph step
         self.lock, self.steps = lock, steps
-        self.cfg = {**cfg, "tags": ["voice"], "metadata": {"channel": "voice"}, "run_name": "jarvis-turn"}  # the user's one thread (FR-1), voice flag set: selects the fast tier
+        self.cfg = {**cfg, "tags": ["voice"], "metadata": {"channel": "voice"}, "run_name": "jarvis-turn"}  # this connection's conversation thread, voice flag set: selects the fast tier
+        self.on_text = on_text  # called (off the loop) with each final transcript, before the graph step
         self.state = "listening"
         self.turn: asyncio.Task | None = None
         self.utterance_bytes = 0
@@ -281,6 +282,11 @@ class VoiceSession:
                 else:
                     self.utterance_bytes = 0
                     await self.send("transcript", role="user", text=ev.text, final=True)
+                    if self.on_text:
+                        try:
+                            await asyncio.to_thread(self.on_text, ev.text)
+                        except Exception:
+                            log.error("conversation touch failed")
                     await self._start(self._utterance(ev.text))
             # a clean end of the stream is a failure too (cancellation raises instead, so teardown never lands here)
             log.error("stt stream ended unexpectedly")
@@ -412,9 +418,19 @@ class VoiceService:
             await ws.send_text(P.frame("error", message="Speech recognition is unavailable."))
             await ws.close(code=P.CLOSE_UPSTREAM)
             return
-        session = VoiceSession(ws, rt.graph, self.devices, device.device_id, stream, self.tts_factory(key),
-                               self.tenants.lock(uid), self.steps, thread_config(uid, voice=True),
-                               user_id=uid, token=token)
+        conv = None
+        try:
+            conv = await asyncio.to_thread(rt.conversations.start, "voice")
+            session = VoiceSession(ws, rt.graph, self.devices, device.device_id, stream, self.tts_factory(key),
+                                   self.tenants.lock(uid), self.steps, thread_config(conv.thread_id, voice=True),
+                                   user_id=uid, token=token,
+                                   on_text=lambda t: rt.conversations.touch(conv.id, t))
+        except Exception:
+            log.error("could not start voice conversation")
+            with contextlib.suppress(Exception):
+                await stream.close()
+            await ws.close(code=P.CLOSE_UPSTREAM)
+            return
         old = self.sessions.pop(device.device_id, None)
         self.sessions[device.device_id] = session
         if old:
@@ -424,6 +440,8 @@ class VoiceService:
         finally:
             if self.sessions.get(device.device_id) is session:
                 del self.sessions[device.device_id]
+            with contextlib.suppress(Exception):  # idempotent, and only this connection's own id
+                await asyncio.to_thread(rt.conversations.close, conv.id)
             with contextlib.suppress(Exception):
                 await ws.close()
 

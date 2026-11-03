@@ -102,6 +102,20 @@ CREATE TABLE IF NOT EXISTS proactive_state (
   value TEXT NOT NULL,
   PRIMARY KEY (user_id, key)
 );
+CREATE TABLE IF NOT EXISTS conversation (
+  id SERIAL PRIMARY KEY,
+  {USER_REF},
+  channel TEXT NOT NULL CHECK (channel IN ('voice','chat','telegram')),
+  surface TEXT NOT NULL CHECK (surface IN ('voice','chat','telegram')),
+  title TEXT,
+  thread_id TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  closed_at TIMESTAMPTZ,
+  UNIQUE (user_id, id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS conversation_one_open ON conversation (user_id, surface) WHERE closed_at IS NULL;
+CREATE INDEX IF NOT EXISTS conversation_recent ON conversation (user_id, last_at DESC);
 """
 # Every per-user table, with the column its pre-users primary key was on (None: an id PK that stays).
 # audit_log keeps a nullable user_id: system rows (startup, purge) belong to nobody.

@@ -34,8 +34,11 @@ def tenants(pool, **kw):
 
 
 def test_thread_config_shape():
-    assert thread_config(7) == {"configurable": {"thread_id": "user:7"}, "recursion_limit": 40}
-    assert thread_config(7, voice=True) == {"configurable": {"thread_id": "user:7", "voice": True}, "recursion_limit": 40}
+    assert thread_config("user:7:c:abc") == {"configurable": {"thread_id": "user:7:c:abc"}, "recursion_limit": 40}
+    assert thread_config("user:7:c:abc", voice=True)["configurable"] == {"thread_id": "user:7:c:abc", "voice": True}
+    assert thread_config("user:7")["configurable"]["thread_id"] == "user:7"
+    with pytest.raises(TypeError):
+        thread_config(7)
 
 
 async def test_get_builds_scoped_runtime(pool, uids):
