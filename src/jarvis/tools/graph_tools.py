@@ -1,9 +1,9 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 from typing import Annotated
 
-from jarvis.kg.predicates import PREDICATES
+from jarvis.kg.predicates import LINK_TYPES, PREDICATES, label_for
 from jarvis.kg.store import GraphStore
 from jarvis.tools.registry import Registry, Tool
 
@@ -27,13 +27,30 @@ class FactItem(BaseModel):
     value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
 
 
+class LinkItem(BaseModel):
+    type: Literal[LINK_TYPES]  # type: ignore[valid-type]
+    other: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] = Field(
+        description="The other person: a name, a kin word like 'wife', or 'me'")
+    other_kind: Literal["person", "place", "org", "thing"] = "person"
+
+
 class StatementArgs(BaseModel):
     subject: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] = Field(
         description="Who the facts are about: a name, a kin word like 'sister', or 'me'")
     kind: Literal["person", "place", "org", "thing"] = "person"
     relation: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)] | None = Field(
         default=None, description="How the subject relates to the user, e.g. 'wife'; pass when introducing someone")
-    facts: list[FactItem] = Field(min_length=1, max_length=MAX_FACTS)
+    facts: list[FactItem] = Field(default_factory=list, max_length=MAX_FACTS)
+    links: list[LinkItem] = Field(
+        default_factory=list, max_length=MAX_FACTS,
+        description="Relationships between this subject and another person, e.g. {type: spouse_of, other: Raj}. "
+                    "Use for people related to each other; how someone relates to the user is `relation`")
+
+    @model_validator(mode="after")
+    def _something_to_save(self):
+        if not self.facts and not self.links:
+            raise ValueError("A statement needs at least one fact or link.")
+        return self
 
 
 class RememberFactsArgs(BaseModel):
@@ -68,20 +85,36 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
             if how == "many":
                 return {"error": "ambiguous", "subject": st["subject"],
                         "candidates": [{"id": e.id, "name": e.display_name} for e in ent]}
+            links = []
+            for ln in st.get("links") or ():
+                ohow, other = _resolve(ln["other"])
+                if ohow == "many":  # never guess which Raj: nothing is saved until the user says
+                    return {"error": "ambiguous_other", "other": ln["other"],
+                            "candidates": [{"id": e.id, "name": e.display_name} for e in other]}
+                links.append({"predicate": ln["type"], "entity_id": other.id if other else None,
+                              "name": other.display_name if other else ln["other"],
+                              "kind": other.kind if other else ln.get("other_kind", "person")})
             plan.append({"entity_id": ent.id if ent else None, "name": ent.display_name if ent else st["subject"],
                          "kind": ent.kind if ent else st.get("kind", "person"),
                          "relation": None if how == "self" else st.get("relation"),
-                         "facts": [(f["predicate"], f["value"]) for f in st["facts"]]})
+                         "facts": [(f["predicate"], f["value"]) for f in st.get("facts") or ()], "links": links})
         done = store.add_statements(plan)
         return {"remembered": [{"subject": d["entity"].display_name, "created": d["created"],
                                 "facts": [{"predicate": f.predicate, "value": f.value, "fact_id": f.id}
-                                          for f in d["facts"]]} for d in done]}
+                                          for f in d["facts"]],
+                                "links": [{"link": label_for(ln["fact"].predicate), "other": ln["other"].display_name,
+                                           "other_created": ln["other_created"], "fact_id": ln["fact"].id}
+                                          for ln in d["links"]]} for d in done]}
 
     def remember_facts_describe(a):
         parts = []
         for st in a["statements"]:
             who = st["subject"] + (f" ({st['relation']})" if st.get("relation") else "")
-            parts.append(f"{who} — " + "; ".join(f"{f['predicate']}: {f['value']}" for f in st["facts"]))
+            bits = [f"{f['predicate']}: {f['value']}" for f in st.get("facts") or ()]
+            for ln in st.get("links") or ():
+                new = " (new)" if ln["other"].strip().lower() not in _SELF_WORDS and not store.find_by_name(ln["other"]) else ""
+                bits.append(f"{label_for(ln['type'])} {ln['other']}{new}")
+            parts.append(f"{who} — " + "; ".join(bits))
         return "Remember: " + " | ".join(parts)
 
     def _save(ent, predicate, value):
@@ -115,10 +148,13 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
         return [{"predicate": f.predicate, "value": f.value, "source": f.source_kind,
                  "observed_at": f.observed_at.isoformat() if f.observed_at else None} for f in fs]
 
+    def _links(e):
+        return [{"relation": ln.label, "other": ln.other_name, "other_id": ln.other_id} for ln in store.links_for(e.id)]
+
     def graph_lookup(name):
         ents = [store.self_entity()] if name.strip().lower() in _SELF_WORDS else store.find_by_name(name)
-        return [{"id": e.id, "name": e.display_name, "kind": e.kind,
-                 "facts": _facts(store.facts_for(e.id)), "pending": _facts(store.pending_for(e.id))}
+        return [{"id": e.id, "name": e.display_name, "kind": e.kind, "facts": _facts(store.facts_for(e.id)),
+                 "links": _links(e), "pending": _facts(store.pending_for(e.id))}
                 for e in ents[:8]]
 
     def _plural(n, word):
@@ -155,12 +191,15 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
     registry.add(Tool(
         name="remember_facts", domain="memory", args_schema=RememberFactsArgs, fn=remember_facts,
         description="Save everything the user said about one or more people, places or organisations in ONE call: "
-                    "one statement per subject, with its relation to the user (when introducing someone) and all its facts.",
+                    "one statement per subject, with its relation to the user (when introducing someone), all its facts "
+                    "and its links to other people (spouse_of, sibling_of, parent_of, child_of, manager_of, reports_to, "
+                    "colleague_of, friend_of, partner_of, relative_of).",
         needs_confirm=True, refuse_after_untrusted=True, describe=remember_facts_describe,
         done=lambda r: "Got it, I'll remember that."))
     registry.add(Tool(
         name="graph_lookup", domain="memory", args_schema=LookupArgs, fn=graph_lookup,
-        description="Look up what is known about a person, place or organisation (or 'me'), with sources and times.",
+        description="Look up what is known about a person, place or organisation (or 'me'): facts with sources and "
+                    "times, and links to other people (use them to follow 'my wife's brother').",
         needs_confirm=False))
     registry.add(Tool(
         name="forget_entity", domain="memory", args_schema=ForgetEntityArgs, fn=forget_entity,

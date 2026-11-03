@@ -245,3 +245,19 @@ Not run on a real device yet. Needs an LLM key and push set up (`JARVIS_FCM_CRED
 | 133 | End two conversations with new facts within 30 minutes of each other | Only the first sends a notification; the badge still counts both |
 | 134 | With the app open in the foreground, let a notification arrive | The badge updates; no screen opens and nothing is spoken |
 | 135 | (Removed: the extractor can no longer be switched off.) | |
+
+# Manual acceptance (relationship links)
+
+Not run on a real device yet. Needs an LLM key.
+
+| # | Do | Expect |
+|---|----|--------|
+| 136 | Say "Anna is married to Raj Mehta" and confirm | The card reads "Anna — spouse of Raj Mehta (new)". Memory shows both people, and the 3D view draws a line between them |
+| 137 | Open Anna in Memory | A "Relationships" section lists "spouse of Raj Mehta". Tapping it opens Raj, who lists "spouse of Anna" |
+| 138 | Ask "Who is Anna's spouse?" | It answers Raj Mehta without asking you to look anything up |
+| 139 | Say "my wife Priya's brother is Rohan, he lives in Delhi", then ask "Where does my wife's brother live?" | Delhi |
+| 140 | Have two people named Raj, then say "Anna is friends with Raj" | Jarvis asks which Raj and saves nothing until you answer |
+| 141 | Open Anna, tap Add relationship, pick "sibling of" and a person | The link appears; the other person lists it too |
+| 142 | Remove a relationship with the bin button | It disappears from both people and from the 3D view |
+| 143 | Forget Raj Mehta | Anna's "spouse of Raj Mehta" and the 3D line are gone |
+| 144 | End a chat where you said "my colleague Dev reports to Ira", then open the Learned inbox | A suggestion "Dev: reports to Ira"; approving it links them, and with two Iras it asks which |

@@ -2,10 +2,19 @@
 
 
 from jarvis.kg.facts import norm
+from jarvis.kg.predicates import LINK_TYPES, LINKS
 
 
 class SelfEntity(Exception):
     """The self entity cannot be forgotten."""
+
+
+class AmbiguousOther(Exception):
+    """Several entities have the other person's name; `options` are what the user may pick from."""
+
+    def __init__(self, options: list[dict]):
+        super().__init__("ambiguous other")
+        self.options = options
 
 
 def fact_json(f) -> dict:
@@ -21,19 +30,36 @@ def _entity(store, entity_id: int):
     return e
 
 
+def _link_rows(store) -> list[tuple[int, int, str]]:
+    """(subject, object, link type) of every active link, as stored."""
+    with store.pool.connection() as conn:
+        return conn.execute("SELECT subject_id, object_entity_id, predicate FROM fact WHERE user_id = %s AND status = 'active'"
+                            " AND object_entity_id IS NOT NULL AND predicate = ANY(%s) ORDER BY id",
+                            (store.user_id, list(LINKS))).fetchall()
+
+
+def link_json(ln) -> dict:
+    return {"fact_id": ln.fact_id, "type": ln.predicate, "label": ln.label, "other_id": ln.other_id,
+            "other_name": ln.other_name, "other_kind": ln.other_kind, "outgoing": ln.outgoing}
+
+
 def entity_list(store) -> dict:
     with store.pool.connection() as conn:
         counts = dict(conn.execute("SELECT subject_id, count(*) FROM fact WHERE user_id = %s AND status = 'active'"
                                    " GROUP BY subject_id", (store.user_id,)).fetchall())
+        # a fact with an object entity is a link (below); only the text ones are matched to people by name
         facts = conn.execute("SELECT subject_id, predicate, object_value FROM fact WHERE user_id = %s"
-                             " AND status = 'active' AND object_value IS NOT NULL", (store.user_id,)).fetchall()
+                             " AND status = 'active' AND object_value IS NOT NULL AND object_entity_id IS NULL",
+                             (store.user_id,)).fetchall()
     ents = store.list_entities()
     rows = [{"id": e.id, "name": e.display_name, "kind": e.kind, "fact_count": counts.get(e.id, 0)} for e in ents]
+    links = _link_rows(store)
     by_name: dict[str, list[int]] = {}
     for e in ents:
         by_name.setdefault(norm(e.display_name), []).append(e.id)
     ids = {e.id for e in ents}
     rel = {(s, t, p) for s, p, v in facts if s in ids for t in by_name.get(norm(v), ()) if t != s}
+    rel |= {(s, t, p) for s, t, p in links if s in ids and t in ids and s != t}
     # a kin word links the person to "me", labelled with the word itself ("wife"); deleted with the person's fact
     kin = [(s, v.strip()) for s, p, v in facts if p == "relation_to_user" and s in ids and v.strip()]
     if kin:
@@ -47,17 +73,51 @@ def entity_list(store) -> dict:
 
 def entity_detail(store, entity_id: int) -> dict:
     e = _entity(store, entity_id)
-    every = store.facts_for(e.id, history=True)
+    every = [f for f in store.facts_for(e.id, history=True) if f.object_id is None]  # links are listed apart
     return {"id": e.id, "name": e.display_name, "kind": e.kind,
             "facts": [fact_json(f) for f in every if f.status == "active"],
+            "links": [link_json(ln) for ln in store.links_for(e.id)],
             "history": [fact_json(f) for f in every if f.status != "active"],
             "pending": [fact_json(f) for f in store.pending_for(e.id)]}
 
 
+def link_create(store, from_id: int, link_type: str, to_id: int | None = None, to_name: str | None = None) -> dict:
+    """The user links two people by hand. The other person is an id, or a name: 'me' is the user, one match is used, none
+    creates a new person, several raise AmbiguousOther. One transaction. Unknown entities raise LookupError; a self-link or
+    an unknown type ValueError."""
+    if link_type not in LINK_TYPES:
+        raise ValueError("Unknown link type.")
+    src = _entity(store, from_id)
+    if (to_id is None) == (not to_name or not to_name.strip()):
+        raise ValueError("Give either to_id or to_name.")
+    other_id, name, kind = None, to_name, "person"
+    if to_id is not None:
+        other = _entity(store, to_id)
+        other_id, name, kind = other.id, other.display_name, other.kind
+    elif norm(to_name) in ("me", "i", "self", "myself"):
+        me = store.self_entity()
+        other_id, name, kind = me.id, me.display_name, "self"
+    else:
+        found = store.find_by_name(to_name)
+        if len(found) > 1:
+            raise AmbiguousOther([{"id": e.id, "name": e.display_name, "kind": e.kind} for e in found])
+        if found:
+            other_id, name, kind = found[0].id, found[0].display_name, found[0].kind
+    (done,) = store.add_statements([{"entity_id": src.id, "name": src.display_name, "kind": src.kind, "relation": None,
+                                     "facts": [], "links": [{"predicate": link_type, "entity_id": other_id,
+                                                              "name": name, "kind": kind}]}])
+    made = done["links"][0]
+    return {"fact_id": made["fact"].id, "type": made["fact"].predicate,
+            "other": {"id": made["other"].id, "name": made["other"].display_name, "created": made["other_created"]}}
+
+
 def fact_correct(store, fact_id: int, value: str) -> dict:
     with store.pool.connection() as conn:
-        if store._fact(conn, fact_id) is None:  # user-scoped lookup
-            raise LookupError("fact")
+        old = store._fact(conn, fact_id)  # user-scoped lookup
+    if old is None:
+        raise LookupError("fact")
+    if old.object_id is not None:
+        raise ValueError("A link has no value to edit: delete it and add another.")
     return fact_json(store.correct_fact(fact_id, value))
 
 

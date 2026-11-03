@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from psycopg.errors import UniqueViolation
 
-from jarvis.kg.predicates import PREDICATES, SINGLE, TRUST
+from jarvis.kg.predicates import ALIASES, LINKS, PREDICATES, SINGLE, SYMMETRIC, TRUST
 
 
 def norm(text: str) -> str:
@@ -27,12 +27,25 @@ class Fact:
     excerpt: str
     observed_at: datetime
     recorded_at: datetime
+    object_id: int | None = None  # the other entity of a link (see kg.predicates.LINKS)
+
+
+@dataclass(frozen=True)
+class Link:
+    """One link seen from an entity: `label` reads "<this entity> <label> <other>" in the direction it is seen from."""
+    fact_id: int
+    predicate: str
+    label: str
+    other_id: int
+    other_name: str
+    other_kind: str
+    outgoing: bool  # this entity is the stored subject
 
 
 # provenance shown is the fact's highest-trust source, earliest link on ties
 _SELECT = """
 SELECT f.id, f.subject_id, f.predicate, f.object_value, f.status, f.valid_from, f.valid_to,
-       s.kind, coalesce(s.excerpt, ''), s.observed_at, f.recorded_at
+       s.kind, coalesce(s.excerpt, ''), s.observed_at, f.recorded_at, f.object_entity_id
 FROM fact f LEFT JOIN LATERAL (
   SELECT s.kind, s.excerpt, s.observed_at FROM fact_source fs
   JOIN source s ON s.user_id = fs.user_id AND s.id = fs.source_id
@@ -80,6 +93,65 @@ class FactsMixin:
                     raise
         if out is not None and out is not False:
             self.version += 1
+        return out
+
+    def _source(self, conn, kind: str, ref: str, excerpt: str, obs) -> int:
+        return conn.execute(
+            "INSERT INTO source (user_id, kind, ref, observed_at, excerpt, trust) VALUES (%s, %s, %s, %s, %s, %s)"
+            " ON CONFLICT (user_id, kind, ref) DO UPDATE SET last_seen_at = now() RETURNING id",
+            (self.user_id, kind, ref, obs, excerpt, TRUST[kind])).fetchone()[0]
+
+    def _add_link(self, conn, subject_id: int, predicate: str, object_id: int, kind: str, ref: str, excerpt: str,
+                  obs) -> Fact:
+        """Link two entities: the other end's current name is kept as the value. A repeat confirms the existing link
+        (a symmetric one also from the other side); "child of" and "reports to" are stored swapped. Raises ValueError for
+        an unknown type, source or entity, and for a link to oneself."""
+        uid = self.user_id
+        if predicate in ALIASES:
+            predicate, subject_id, object_id = ALIASES[predicate], object_id, subject_id
+        if predicate not in LINKS:
+            raise ValueError(f"Unknown link type: {predicate!r}.")
+        if kind not in TRUST:
+            raise ValueError(f"Unknown source kind: {kind!r}.")
+        if subject_id == object_id:
+            raise ValueError("An entity cannot be linked to itself.")
+        ids = sorted({subject_id, object_id})  # one order for every writer: no deadlock between two links
+        names = dict(conn.execute("SELECT id, display_name FROM entity WHERE user_id = %s AND id = ANY(%s)"
+                                  " ORDER BY id FOR NO KEY UPDATE", (uid, ids)).fetchall())
+        if len(names) != 2:
+            raise ValueError("unknown entity")
+        src = self._source(conn, kind, ref, excerpt, obs)
+        pairs = [(subject_id, object_id)] + ([(object_id, subject_id)] if predicate in SYMMETRIC else [])
+        found = conn.execute(
+            "SELECT id FROM fact WHERE user_id = %s AND predicate = %s AND status = 'active' AND (subject_id, object_entity_id)"
+            " IN (SELECT * FROM unnest(%s::int[], %s::int[])) ORDER BY id LIMIT 1",
+            (uid, predicate, [p[0] for p in pairs], [p[1] for p in pairs])).fetchone()
+        if found:
+            fid = found[0]
+        else:
+            fid = conn.execute(
+                "INSERT INTO fact (user_id, subject_id, predicate, object_entity_id, object_value, valid_from, status)"
+                " VALUES (%s, %s, %s, %s, %s, %s, 'active') RETURNING id",
+                (uid, subject_id, predicate, object_id, names[object_id], obs)).fetchone()[0]
+        conn.execute("INSERT INTO fact_source (user_id, fact_id, source_id) VALUES (%s, %s, %s)"
+                     " ON CONFLICT (fact_id, source_id) DO UPDATE SET last_confirmed_at = now()", (uid, fid, src))
+        return self._fact(conn, fid)
+
+    def links_for(self, entity_id: int) -> list[Link]:
+        """Active links of an entity, both directions, labelled as seen from it."""
+        with self.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT f.id, f.predicate, f.subject_id, f.object_entity_id, s.display_name, s.kind, o.display_name, o.kind"
+                " FROM fact f JOIN entity s ON s.user_id = f.user_id AND s.id = f.subject_id"
+                " JOIN entity o ON o.user_id = f.user_id AND o.id = f.object_entity_id"
+                " WHERE f.user_id = %s AND f.status = 'active' AND f.predicate = ANY(%s)"
+                " AND (f.subject_id = %s OR f.object_entity_id = %s) ORDER BY f.id",
+                (self.user_id, list(LINKS), entity_id, entity_id)).fetchall()
+        out = []
+        for fid, pred, sub, obj, sname, skind, oname, okind in rows:
+            outgoing = sub == entity_id
+            out.append(Link(fid, pred, LINKS[pred][0 if outgoing else 1], obj if outgoing else sub,
+                            oname if outgoing else sname, okind if outgoing else skind, outgoing))
         return out
 
     def _fact(self, conn, fact_id: int) -> Fact | None:
@@ -144,10 +216,7 @@ class FactsMixin:
             active = row and (row[0], row[1], self._trust(conn, row[0]))
             if force and active and obs <= active[1]:
                 obs = active[1] + timedelta(microseconds=1)  # a correction is always the newest statement
-        src = conn.execute(
-            "INSERT INTO source (user_id, kind, ref, observed_at, excerpt, trust) VALUES (%s, %s, %s, %s, %s, %s)"
-            " ON CONFLICT (user_id, kind, ref) DO UPDATE SET last_seen_at = now() RETURNING id",
-            (uid, kind, ref, obs, excerpt, t_in)).fetchone()[0]
+        src = self._source(conn, kind, ref, excerpt, obs)
 
         def link(fid):
             conn.execute("INSERT INTO fact_source (user_id, fact_id, source_id) VALUES (%s, %s, %s)"

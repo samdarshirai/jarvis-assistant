@@ -291,3 +291,65 @@ def test_wife_anna_teacher_end_to_end_with_edge_and_isolation(reg, store, pool, 
     assert {"from": store.self_entity().id, "to": anna.id, "predicate": "wife"} in out["relations"]
     other = entity_list(GraphStore(pool, uids[1]))
     assert all(e["name"] != "Anna" for e in other["entities"]) and other["relations"] == []
+
+
+# --- links between people ---
+
+def links_of(store, name):
+    (e,) = store.find_by_name(name)
+    return [(l.label, l.other_name) for l in store.links_for(e.id)]
+
+
+def test_remember_facts_links_two_people_and_creates_the_new_one(reg, store):
+    r = run(reg, "remember_facts", statements=[
+        {"subject": "Anna", "relation": "sister", "facts": [{"predicate": "city", "value": "Pune"}],
+         "links": [{"type": "spouse_of", "other": "Raj Mehta"}]}])
+    (done,) = r["remembered"]
+    assert done["links"] == [{"link": "spouse of", "other": "Raj Mehta", "other_created": True,
+                              "fact_id": done["links"][0]["fact_id"]}]
+    assert links_of(store, "Anna") == [("spouse of", "Raj Mehta")] and links_of(store, "Raj Mehta") == [("spouse of", "Anna")]
+
+
+def test_a_statement_may_be_only_links_and_child_of_reads_from_both_ends(reg, store):
+    run(reg, "remember_facts", statements=[{"subject": "Kabir", "links": [{"type": "child_of", "other": "Mira"}]}])
+    assert links_of(store, "Kabir") == [("child of", "Mira")] and links_of(store, "Mira") == [("parent of", "Kabir")]
+    with pytest.raises(ValidationError):
+        run(reg, "remember_facts", statements=[{"subject": "Kabir"}])  # nothing to save
+    with pytest.raises(ValidationError):
+        run(reg, "remember_facts", statements=[{"subject": "A", "links": [{"type": "neighbour_of", "other": "B"}]}])
+
+
+def test_two_people_with_the_other_name_ask_which_and_save_nothing(reg, store):
+    store.create_entity("Raj"), store.create_entity("Raj")
+    r = run(reg, "remember_facts", statements=[{"subject": "Anna", "links": [{"type": "friend_of", "other": "Raj"}]}])
+    assert r["error"] == "ambiguous_other" and len(r["candidates"]) == 2
+    assert store.find_by_name("Anna") == []
+
+
+def test_a_link_to_me_and_a_repeat_do_not_duplicate(reg, store):
+    st = [{"subject": "Anna", "links": [{"type": "colleague_of", "other": "me"}]}]
+    run(reg, "remember_facts", statements=st)
+    run(reg, "remember_facts", statements=st)
+    (anna,) = store.find_by_name("Anna")
+    assert [(l.label, l.other_name) for l in store.links_for(anna.id)] == [("colleague of", "Me")]
+
+
+def test_the_confirm_card_says_who_is_new(reg, store):
+    store.create_entity("Raj")
+    d = reg.get("remember_facts").describe
+    args = {"statements": [{"subject": "Anna", "links": [{"type": "spouse_of", "other": "Raj"}]},
+                           {"subject": "Dev", "links": [{"type": "reports_to", "other": "Ira"}]}]}
+    assert d(args) == "Remember: Anna — spouse of Raj | Dev — reports to Ira (new)"
+
+
+def test_graph_lookup_shows_links_from_both_ends(reg, store):
+    run(reg, "remember_facts", statements=[{"subject": "Anna", "links": [{"type": "parent_of", "other": "Kabir"}]}])
+    (kabir,) = run(reg, "graph_lookup", name="Kabir")
+    assert kabir["links"] == [{"relation": "child of", "other": "Anna", "other_id": kabir["links"][0]["other_id"]}]
+    (anna,) = run(reg, "graph_lookup", name="Anna")
+    assert [l["relation"] for l in anna["links"]] == ["parent of"]
+
+
+def test_the_tool_is_still_confirmed_and_refused_after_untrusted_text(reg):
+    t = reg.get("remember_facts")
+    assert t.needs_confirm and t.refuse_after_untrusted

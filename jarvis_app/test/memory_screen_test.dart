@@ -26,6 +26,13 @@ class GraphApi extends ApiClient {
   }
 
   @override
+  Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) async {
+    calls.add('POST $path');
+    lastBody = body;
+    return _r('POST $path') as Map<String, dynamic>;
+  }
+
+  @override
   Future<Map<String, dynamic>> patch(String path, Map<String, dynamic> body) async {
     calls.add('PATCH $path');
     lastBody = body;
@@ -388,4 +395,132 @@ void main() {
     await t.pumpAndSettle();
     expect(find.byKey(const Key('memory-graph')), findsOneWidget);
   });
+
+  group('relationships', () {
+    Map<String, Object> linked() => routes()
+      ..['/graph/entities'] = {
+        'entities': [
+          {'id': 1, 'name': 'Priya', 'kind': 'person', 'fact_count': 2},
+          {'id': 2, 'name': 'Raj Mehta', 'kind': 'person', 'fact_count': 1},
+        ]
+      }
+      ..['/graph/entities/1'] = {
+        'id': 1,
+        'name': 'Priya',
+        'kind': 'person',
+        'facts': [fact(10, 'works_at', 'Acme')],
+        'links': [
+          {'fact_id': 40, 'type': 'spouse_of', 'label': 'spouse of', 'other_id': 2, 'other_name': 'Raj Mehta', 'other_kind': 'person', 'outgoing': true},
+        ],
+        'history': [],
+        'pending': [],
+      }
+      ..['/graph/entities/2'] = {
+        'id': 2,
+        'name': 'Raj Mehta',
+        'kind': 'person',
+        'facts': [],
+        'links': [
+          {'fact_id': 40, 'type': 'spouse_of', 'label': 'spouse of', 'other_id': 1, 'other_name': 'Priya', 'other_kind': 'person', 'outgoing': false},
+        ],
+        'history': [],
+        'pending': [],
+      };
+
+    testWidgets('a person lists their relationships, opens the other person, and removes one', (t) async {
+      final api = GraphApi(linked());
+      await pump(t, api, list: true);
+      await t.tap(find.text('Priya'));
+      await t.pumpAndSettle();
+      expect(find.text('Relationships'), findsOneWidget);
+      expect(find.text('spouse of Raj Mehta'), findsOneWidget);
+      await t.tap(find.text('spouse of Raj Mehta'));
+      await t.pumpAndSettle();
+      expect(find.text('spouse of Priya'), findsOneWidget); // Raj's side of the same link
+      await t.pageBack();
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const ValueKey('delete-link-40')));
+      await t.pumpAndSettle();
+      expect(api.calls, contains('DELETE /graph/facts/40'));
+      expect(find.text('spouse of Raj Mehta'), findsNothing);
+      expect(find.text('Relationships'), findsNothing);
+    });
+
+    testWidgets('add a relationship by picking a person', (t) async {
+      final api = GraphApi(linked()..['POST /graph/links'] = {'fact_id': 41});
+      await pump(t, api, list: true);
+      await t.tap(find.text('Priya'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('add-link')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('link-type')));
+      await t.pumpAndSettle();
+      await t.tap(find.text('sibling of').last);
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('link-name')), 'raj');
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const ValueKey('pick-person-2')));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('link-save')));
+      await t.pumpAndSettle();
+      expect(api.calls, contains('POST /graph/links'));
+      expect(api.lastBody, {'from_id': 1, 'type': 'sibling_of', 'to_id': 2});
+    });
+
+    testWidgets('a typed new name is sent as a name', (t) async {
+      final api = GraphApi(linked()..['POST /graph/links'] = {'fact_id': 41});
+      await pump(t, api, list: true);
+      await t.tap(find.text('Priya'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('add-link')));
+      await t.pumpAndSettle();
+      expect(t.widget<FilledButton>(find.byKey(const Key('link-save'))).onPressed, isNull); // nothing typed yet
+      await t.enterText(find.byKey(const Key('link-name')), 'Dev Shah');
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('link-save')));
+      await t.pumpAndSettle();
+      expect(api.lastBody, {'from_id': 1, 'type': 'spouse_of', 'to_name': 'Dev Shah'});
+    });
+
+    testWidgets('two people with the name: asks which, then links that one', (t) async {
+      final api = _AmbiguousApi(linked());
+      await pump(t, api, list: true);
+      await t.tap(find.text('Priya'));
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('add-link')));
+      await t.pumpAndSettle();
+      await t.enterText(find.byKey(const Key('link-name')), 'Raj'); // typed, not picked: the server decides
+      await t.pumpAndSettle();
+      await t.tap(find.byKey(const Key('link-save')));
+      await t.pumpAndSettle();
+      expect(find.text('Which Raj?'), findsOneWidget);
+      await t.tap(find.byKey(const ValueKey('which-3')));
+      await t.pumpAndSettle();
+      expect(api.posts, [
+        {'from_id': 1, 'type': 'spouse_of', 'to_name': 'Raj'},
+        {'from_id': 1, 'type': 'spouse_of', 'to_id': 3},
+      ]);
+    });
+  });
+}
+
+/// The server's answer to a typed name that two people share: 409 ambiguous_other, then success once an id is sent.
+class _AmbiguousApi extends GraphApi {
+  _AmbiguousApi(super.routes);
+  final posts = <Map<String, dynamic>>[];
+
+  @override
+  Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) async {
+    posts.add({...?body});
+    if (body != null && body.containsKey('to_name')) {
+      throw ApiError(409, {
+        'error': 'ambiguous_other',
+        'choice': [
+          {'id': 2, 'name': 'Raj Mehta', 'kind': 'person'},
+          {'id': 3, 'name': 'Raj Rao', 'kind': 'person'},
+        ],
+      }, path);
+    }
+    return {'fact_id': 41};
+  }
 }

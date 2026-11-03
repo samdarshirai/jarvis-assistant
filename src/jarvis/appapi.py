@@ -142,6 +142,8 @@ class AppService:
             return 404, {"error": "not_found"}
         except views.SelfEntity:
             return 409, {"error": "cannot_forget_self"}
+        except views.AmbiguousOther as e:
+            return 409, {"error": "ambiguous_other", "choice": e.options}
         except ValueError:  # a rejected value or kind (candidate edits): the caller's input, not an outage
             return 400, {"error": "bad_request"}
         except Exception:
@@ -164,6 +166,13 @@ class AppService:
         code, body = await self._kg(rt, views.fact_correct, fact_id, value)
         if code == 200:
             await self._audit(rt, "graph_fact_correct", {"fact_id": fact_id}, {"fact_id": body["id"]})
+        return code, body
+
+    async def graph_link_create(self, rt, from_id: int, link_type: str, to_id: int | None, to_name: str | None):
+        code, body = await self._kg(rt, views.link_create, from_id, link_type, to_id, to_name)
+        if code == 200:
+            await self._audit(rt, "graph_link_create", {"from_id": from_id, "type": link_type},
+                              {"fact_id": body["fact_id"], "other_id": body["other"]["id"], "created": body["other"]["created"]})
         return code, body
 
     async def graph_fact_delete(self, rt, fact_id: int):
@@ -196,8 +205,8 @@ class AppService:
 
     async def graph_candidate_approve(self, rt, cand_id: int, edits: dict):
         code, body = await self._kg(rt, lambda kg: review.approve(kg, cand_id, **edits))
-        if code == 200 and "choice" in body:
-            return 409, {"error": "ambiguous_subject", **body}  # nothing was written: the user picks, then retries
+        if code == 200 and "choice" in body:  # nothing was written: the user picks, then retries
+            return 409, {"error": f"ambiguous_{body.get('which', 'subject')}", "choice": body["choice"]}
         if code == 200:
             await self._audit(rt, "graph_candidate_approve", {"candidate_id": cand_id},
                               {"entity_id": body["entity"]["id"], "created": body["created"], "fact_ids": body["fact_ids"]})

@@ -1082,3 +1082,74 @@ async def test_graph_entities_kin_edge_gone_after_forget(pool, uids):
     assert a("GET", "/graph/entities").json()["relations"]
     kg.forget_entity(d["entity"].id)
     assert a("GET", "/graph/entities").json()["relations"] == []
+
+
+async def test_graph_view_draws_edges_from_links_and_lists_them_apart_from_facts(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    anna, raj1, raj2 = (ra.kg.create_entity(n) for n in ("Anna", "Raj", "Raj"))
+    ra.kg.add_link(anna.id, "spouse_of", raj1.id, source_kind="user_stated")
+    ra.kg.add_link(anna.id, "friend_of", raj2.id, source_kind="user_stated")
+    ra.kg.add_fact(anna.id, "city", "Pune", source_kind="user_stated")
+    body = a("GET", "/graph/entities").json()
+    assert sorted((r["from"], r["to"], r["predicate"]) for r in body["relations"]) == sorted([
+        (anna.id, raj1.id, "spouse_of"), (anna.id, raj2.id, "friend_of")])  # two Rajs: two distinct edges
+    detail = a("GET", f"/graph/entities/{raj1.id}").json()
+    assert detail["facts"] == [] and [(l["label"], l["other_name"], l["outgoing"]) for l in detail["links"]] == [
+        ("spouse of", "Anna", False)]
+    assert [f["predicate"] for f in a("GET", f"/graph/entities/{anna.id}").json()["facts"]] == ["city"]
+    ra.kg.add_fact(anna.id, "friend_of", "Carl", source_kind="user_stated")  # text, no such person: no edge
+    ra.kg.create_entity("Carl")
+    assert len(a("GET", "/graph/entities").json()["relations"]) == 3  # old name matching still draws unlinked text
+
+
+async def test_a_link_has_no_value_to_edit_but_can_be_deleted(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    anna, raj = ra.kg.create_entity("Anna"), ra.kg.create_entity("Raj")
+    f = ra.kg.add_link(anna.id, "spouse_of", raj.id, source_kind="user_stated")
+    assert a("PATCH", f"/graph/facts/{f.id}", json={"value": "Someone"}).status_code == 400
+    assert a("DELETE", f"/graph/facts/{f.id}").status_code == 200 and ra.kg.links_for(anna.id) == []
+
+
+async def test_candidate_approve_with_ambiguous_other_returns_a_choice_and_writes_nothing(pool, uids):
+    a, _, ra, _ = await kg_users(pool, uids)
+    anna = ra.kg.create_entity("Anna")
+    r1, r2 = ra.kg.create_entity("Raj"), ra.kg.create_entity("Raj")
+    from tests.test_kg_review import link_row
+    (cid,) = seed_candidates(pool, uids[0], link_row())
+    r = a("POST", f"/graph/candidates/{cid}/approve")
+    assert r.status_code == 409 and r.json()["error"] == "ambiguous_other"
+    assert {o["id"] for o in r.json()["choice"]} == {r1.id, r2.id} and ra.kg.links_for(anna.id) == []
+    r = a("POST", f"/graph/candidates/{cid}/approve", json={"other_entity_id": r2.id})
+    assert r.status_code == 200 and r.json()["other"]["id"] == r2.id
+    assert [(l.label, l.other_id) for l in ra.kg.links_for(anna.id)] == [("spouse of", r2.id)]
+
+
+async def test_graph_links_route_creates_a_link_by_id_or_name(pool, uids):
+    a, b, ra, rb = await kg_users(pool, uids)
+    anna, raj, mira = (ra.kg.create_entity(n) for n in ("Anna", "Raj", "Mira"))
+    r = a("POST", "/graph/links", json={"from_id": anna.id, "type": "spouse_of", "to_id": raj.id})
+    assert r.status_code == 200 and r.json()["other"] == {"id": raj.id, "name": "Raj", "created": False}
+    r = a("POST", "/graph/links", json={"from_id": anna.id, "type": "child_of", "to_name": "Mira"})  # an existing name
+    assert r.status_code == 200 and r.json()["type"] == "parent_of" and not r.json()["other"]["created"]
+    r = a("POST", "/graph/links", json={"from_id": anna.id, "type": "friend_of", "to_name": "Dev Shah"})  # a new person
+    assert r.json()["other"]["created"] and ra.kg.find_by_name("Dev Shah")
+    r = a("POST", "/graph/links", json={"from_id": anna.id, "type": "colleague_of", "to_name": "me"})
+    assert r.status_code == 200 and r.json()["other"]["name"] == "Me"
+    assert sorted(l.label for l in ra.kg.links_for(anna.id)) == ["child of", "colleague of", "friend of", "spouse of"]
+    assert ra.audit.rows and "Dev" not in str(ra.audit.rows)  # ids and counts only
+    assert [l.other_name for l in ra.kg.links_for(mira.id)] == ["Anna"]
+
+
+async def test_graph_links_route_refuses_bad_input_and_other_peoples_entities(pool, uids):
+    a, b, ra, rb = await kg_users(pool, uids)
+    anna, raj1, raj2 = ra.kg.create_entity("Anna"), ra.kg.create_entity("Raj"), ra.kg.create_entity("Raj")
+    theirs = rb.kg.create_entity("Eve")
+    post = lambda **kw: a("POST", "/graph/links", json={"type": "spouse_of", **kw})  # noqa: E731
+    r = post(from_id=anna.id, to_name="Raj")
+    assert r.status_code == 409 and r.json()["error"] == "ambiguous_other" and len(r.json()["choice"]) == 2
+    assert post(from_id=anna.id, to_id=anna.id).status_code == 400  # a person is not their own spouse
+    assert post(from_id=anna.id, to_id=theirs.id).status_code == 404  # another user's entity
+    assert post(from_id=theirs.id, to_id=anna.id).status_code == 404
+    assert post(from_id=anna.id).status_code == 422 and post(from_id=anna.id, to_id=1, to_name="x").status_code == 422
+    assert a("POST", "/graph/links", json={"from_id": anna.id, "type": "neighbour_of", "to_id": raj1.id}).status_code == 422
+    assert ra.kg.links_for(anna.id) == [] and rb.kg.links_for(theirs.id) == []

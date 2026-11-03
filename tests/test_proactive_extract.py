@@ -541,3 +541,30 @@ async def test_end_to_end_through_the_scheduler_job_then_forgetting(pool, uids):
     said["t2"] = said["t1"]
     await tick()
     assert rows(pool) == []  # the suppressed name is not proposed again
+
+
+# ---- links between people ----
+
+def test_link_predicates_are_accepted_and_a_link_to_oneself_is_not():
+    from jarvis.kg.predicates import LINK_TYPES
+    got, dropped = validate([
+        {"subject": "Anna", "subject_kind": "person", "predicate": "spouse_of", "value": "Raj", "quote": "Anna is married to Raj"},
+        {"subject": "Kabir", "subject_kind": "person", "predicate": "child_of", "value": "Mira", "quote": "Kabir is Mira's son"},
+        {"subject": "Anna", "subject_kind": "person", "predicate": "spouse_of", "value": "anna", "quote": "Anna is married to Raj"},
+        {"subject": "Anna", "subject_kind": "person", "predicate": "neighbour_of", "value": "Raj", "quote": "Anna is married to Raj"}],
+        ["Anna is married to Raj, Kabir is Mira's son"])
+    assert [(r["predicate"], r["value"]) for r in got] == [("spouse_of", "Raj"), ("child_of", "Mira")] and dropped == 2
+    assert all(t in SYSTEM for t in LINK_TYPES)
+
+
+def test_a_link_already_in_the_graph_is_not_proposed_from_either_side(kg, cs):
+    anna, raj, kid, mum = (kg.create_entity(n) for n in ("Anna", "Raj", "Kabir", "Mira"))
+    kg.add_link(anna.id, "spouse_of", raj.id, source_kind="user_stated")
+    kg.add_link(mum.id, "parent_of", kid.id, source_kind="user_stated")
+    kept, dropped = keep(kg, cs,
+                         cand_row("Raj", "spouse_of", "Anna"),  # the same marriage, said from the other side
+                         cand_row("Anna", "spouse_of", "Raj"),
+                         cand_row("Kabir", "child_of", "Mira"),  # the same parenthood
+                         cand_row("Mira", "child_of", "Kabir"),  # the reverse: new information
+                         cand_row("Anna", "colleague_of", "Raj"))  # a different kind of link
+    assert [(r["subject_name"], r["predicate"]) for r in kept] == [("Mira", "child_of"), ("Anna", "colleague_of")] and dropped == 3

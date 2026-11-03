@@ -147,3 +147,55 @@ def test_expire_marks_old_undecided_candidates_without_remembering_them(pool, ui
     assert status(pool, c1) == ("expired", None) and status(pool, c2)[0] == "new"
     assert cs.known([("anna", "city", "pune")]) == set()
     assert CandidateStore(pool, uids[1]).expire(NOW) == 0
+
+
+# ---- link candidates ----
+
+def link_row(**over):
+    return row(**{"predicate": "spouse_of", "value": "Raj", "value_norm": "raj", "relation": None,
+                  "quote": "Anna is married to Raj", **over})
+
+
+def test_approving_a_link_candidate_links_the_two_people(pool, uids, g, cs):
+    anna, raj = g.create_entity("Anna"), g.create_entity("Raj")
+    _, (c1,) = add(pool, cs, uids[0], [link_row()], closed=True)
+    out = review.approve(g, c1)
+    assert out["other"] == {"id": raj.id, "name": "Raj", "created": False} and out["entity"]["id"] == anna.id
+    assert [(l.label, l.other_name) for l in g.links_for(anna.id)] == [("spouse of", "Raj")]
+    assert out["fact_ids"] == [out["fact"]["id"]] and status(pool, c1)[0] == "approved"
+
+
+def test_a_new_other_person_is_created_and_me_means_the_user(pool, uids, g, cs):
+    _, (c1, c2) = add(pool, cs, uids[0], [link_row(), link_row(value="me", value_norm="me")], closed=True)
+    out = review.approve(g, c1)
+    assert out["other"]["created"] and g.find_by_name("Raj")
+    me = review.approve(g, c2)
+    assert me["other"]["name"] == "Me" and not me["other"]["created"]
+
+
+def test_an_ambiguous_other_asks_and_writes_nothing_then_resolves_by_pick_or_new(pool, uids, g, cs):
+    g.create_entity("Anna")
+    r1, r2 = g.create_entity("Raj"), g.create_entity("Raj")
+    _, (c1, c2) = add(pool, cs, uids[0], [link_row(), link_row(predicate="friend_of")], closed=True)
+    out = review.approve(g, c1)
+    assert out["which"] == "other" and {o["id"] for o in out["choice"]} == {r1.id, r2.id}
+    assert status(pool, c1)[0] == "new" and q(pool, "SELECT count(*) FROM fact WHERE user_id = %s", uids[0]) == [(0,)]
+    assert review.approve(g, c1, other_entity_id=r2.id)["other"]["id"] == r2.id
+    made = review.approve(g, c2, new_other=True)["other"]
+    assert made["created"] and made["id"] not in (r1.id, r2.id)
+
+
+def test_a_foreign_other_entity_is_not_found(pool, uids, g, cs):
+    other = GraphStore(pool, uids[1]).create_entity("Raj")
+    g.create_entity("Anna")
+    _, (c1,) = add(pool, cs, uids[0], [link_row()], closed=True)
+    with pytest.raises(LookupError):
+        review.approve(g, c1, other_entity_id=other.id)
+    assert status(pool, c1)[0] == "new"
+
+
+def test_bulk_approve_sends_an_ambiguous_link_to_the_user_to_choose(pool, uids, g, cs):
+    g.create_entity("Anna"), g.create_entity("Raj"), g.create_entity("Raj")
+    _, (c1,) = add(pool, cs, uids[0], [link_row()], closed=True)
+    out = review.bulk(g, [c1], "approve")
+    assert out["needs_choice"] == [c1] and out["approved"] == []

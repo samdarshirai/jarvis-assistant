@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from fastapi import FastAPI, Path, Request, WebSocket
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse
-from pydantic import AwareDatetime, BaseModel, Field, StringConstraints
+from pydantic import AwareDatetime, BaseModel, Field, StringConstraints, model_validator
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from jarvis import weather
@@ -20,7 +20,8 @@ from jarvis.channels.telegram import TelegramChannel
 from jarvis.config import get_settings
 from jarvis.dashboard import DashboardService
 from jarvis.db import init_schema, make_pool
-from jarvis.kg.migrate import migrate_memories
+from jarvis.kg.migrate import link_existing, migrate_memories
+from jarvis.kg.predicates import LINK_TYPES
 from jarvis.keys import Keys
 from jarvis.proactive.mailwatch import undo_event
 from jarvis.proactive.scheduler import start_proactive
@@ -45,6 +46,10 @@ async def lifespan(app: FastAPI):
         if owner_id is None:
             raise RuntimeError("No owner yet: set JARVIS_OWNER_EMAIL to the owner's Google email.")
         migrate_memories(pool, s.fernet_key.encode())  # after ensure_owner: it gives a pre-multi-user DB's memories their user_id
+        try:
+            link_existing(pool)  # friend_of text -> links; a failure must never stop the boot
+        except Exception as e:
+            log.warning("linking existing friendships failed: %s", type(e).__name__)
         purge_audit(pool, 90)
         purge_proactive(pool, 90)
         devices = Devices(pool)
@@ -158,6 +163,22 @@ class CandidateApproveIn(BaseModel):
     relation: Annotated[str, StringConstraints(strip_whitespace=True, max_length=100)] | None = None
     entity_id: Annotated[int, Field(ge=1, le=2**31 - 1)] | None = None
     new: bool = False
+    other_entity_id: Annotated[int, Field(ge=1, le=2**31 - 1)] | None = None  # a link candidate: which other person
+    new_other: bool = False
+
+
+class LinkIn(BaseModel):
+    """Link two people by hand: `to_id`, or `to_name` (a new person when nobody has the name)."""
+    from_id: Annotated[int, Field(ge=1, le=2**31 - 1)]
+    type: Literal[LINK_TYPES]  # type: ignore[valid-type]
+    to_id: Annotated[int, Field(ge=1, le=2**31 - 1)] | None = None
+    to_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] | None = None
+
+    @model_validator(mode="after")
+    def _one_other(self):
+        if (self.to_id is None) == (self.to_name is None):
+            raise ValueError("Give either to_id or to_name.")
+        return self
 
 
 class CandidatesBulkIn(BaseModel):
@@ -479,6 +500,10 @@ def create_app(with_lifespan: bool = True) -> FastAPI:
     @app.delete("/graph/facts/{fact_id}")
     async def graph_fact_delete(request: Request, fact_id: int):
         return await graph(request, "graph_fact_delete", fact_id)
+
+    @app.post("/graph/links")
+    async def graph_link_create(request: Request, body: LinkIn):
+        return await graph(request, "graph_link_create", body.from_id, body.type, body.to_id, body.to_name)
 
     @app.get("/graph/candidates")
     async def graph_candidates(request: Request):

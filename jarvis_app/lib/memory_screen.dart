@@ -249,6 +249,114 @@ Widget _tile(Widget child) => Container(
   child: Material(type: MaterialType.transparency, child: child),
 );
 
+/// The relationship types a person can be given, as (what the API takes, what the user reads). "child of" and "reports to"
+/// are read from the person's side; the server stores each pair once.
+const _linkTypes = <(String, String)>[
+  ('spouse_of', 'spouse of'),
+  ('partner_of', 'partner of'),
+  ('sibling_of', 'sibling of'),
+  ('friend_of', 'friend of'),
+  ('colleague_of', 'colleague of'),
+  ('relative_of', 'relative of'),
+  ('parent_of', 'parent of'),
+  ('child_of', 'child of'),
+  ('manager_of', 'manager of'),
+  ('reports_to', 'reports to'),
+];
+
+/// "Add relationship": pick the kind, then a person from the graph (or type a new name). Pops {type, to_id | to_name}.
+class _AddLinkSheet extends StatefulWidget {
+  const _AddLinkSheet({required this.api, required this.fromId, required this.fromName});
+  final ApiClient api;
+  final int fromId;
+  final String fromName;
+
+  @override
+  State<_AddLinkSheet> createState() => _AddLinkSheetState();
+}
+
+class _AddLinkSheetState extends State<_AddLinkSheet> {
+  final _name = TextEditingController();
+  String _type = _linkTypes.first.$1;
+  List<Map<String, dynamic>> _people = [];
+  int? _picked; // a person chosen from the list; otherwise the typed name goes to the server
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPeople();
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadPeople() async {
+    try {
+      final j = await widget.api.get('/graph/entities');
+      if (mounted) setState(() => _people = [for (final e in _maps(j['entities'])) if (e['id'] != widget.fromId) e]);
+    } catch (_) {} // typing a name still works
+  }
+
+  List<Map<String, dynamic>> get _matches {
+    final q = _name.text.trim().toLowerCase();
+    if (q.isEmpty || _picked != null) return const [];
+    return [for (final e in _people) if ('${e['name']}'.toLowerCase().contains(q)) e].take(5).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: EdgeInsets.fromLTRB(20, 20, 20, 20 + MediaQuery.viewInsetsOf(context).bottom),
+    child: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('${widget.fromName} is…', style: const TextStyle(color: ink, fontSize: 18, fontWeight: FontWeight.w600)),
+          DropdownButton<String>(
+            key: const Key('link-type'),
+            isExpanded: true,
+            value: _type,
+            items: [for (final t in _linkTypes) DropdownMenuItem(value: t.$1, child: Text(t.$2))],
+            onChanged: (v) => setState(() => _type = v ?? _type),
+          ),
+          TextField(
+            key: const Key('link-name'),
+            controller: _name,
+            style: const TextStyle(color: ink),
+            decoration: const InputDecoration(labelText: 'Person (pick one, or type a new name)'),
+            onChanged: (_) => setState(() => _picked = null),
+          ),
+          for (final e in _matches)
+            ListTile(
+              key: ValueKey('pick-person-${e['id']}'),
+              dense: true,
+              title: Text('${e['name']}', style: const TextStyle(color: ink)),
+              subtitle: Text('${e['kind']}', style: TextStyle(color: ink.withValues(alpha: 0.6))),
+              onTap: () => setState(() {
+                _picked = e['id'] as int;
+                _name.text = '${e['name']}';
+              }),
+            ),
+          const SizedBox(height: 8),
+          FilledButton(
+            key: const Key('link-save'),
+            onPressed: _name.text.trim().isEmpty
+                ? null
+                : () => Navigator.pop(context, {
+                      'type': _type,
+                      if (_picked != null) 'to_id': _picked else 'to_name': _name.text.trim(),
+                    }),
+            child: const Text('Add'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _PersonDetail extends StatefulWidget {
   const _PersonDetail({required this.api, required this.id, required this.name, this.self = false});
   final ApiClient api;
@@ -261,7 +369,7 @@ class _PersonDetail extends StatefulWidget {
 }
 
 class _PersonDetailState extends State<_PersonDetail> {
-  List<Map<String, dynamic>> _facts = [], _history = [], _pending = [];
+  List<Map<String, dynamic>> _facts = [], _history = [], _pending = [], _links = [];
   bool _loading = true, _error = false;
 
   @override
@@ -280,6 +388,7 @@ class _PersonDetailState extends State<_PersonDetail> {
       if (mounted) {
         setState(() {
           _facts = _maps(j['facts']);
+          _links = _maps(j['links']); // older servers omit it
           _history = _maps(j['history']);
           _pending = _maps(j['pending']);
           _loading = false;
@@ -330,6 +439,81 @@ class _PersonDetailState extends State<_PersonDetail> {
       if (mounted) _toast(context, "Couldn't delete that");
     }
   }
+
+  Future<void> _deleteLink(Map<String, dynamic> l) async {
+    try {
+      await widget.api.delete('/graph/facts/${l['fact_id']}');
+      if (mounted) setState(() => _links = [for (final x in _links) if (x != l) x]);
+    } catch (_) {
+      if (mounted) _toast(context, "Couldn't remove that");
+    }
+  }
+
+  void _openOther(Map<String, dynamic> l) => Navigator.of(context).push(MaterialPageRoute<void>(
+    builder: (_) => _PersonDetail(
+      api: widget.api,
+      id: l['other_id'] as int,
+      name: '${l['other_name']}',
+      self: l['other_kind'] == 'self',
+    ),
+  ));
+
+  Future<void> _addLink() async {
+    final pick = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: blush,
+      builder: (_) => _AddLinkSheet(api: widget.api, fromId: widget.id, fromName: widget.name),
+    );
+    if (pick != null && mounted) await _saveLink(pick);
+  }
+
+  Future<void> _saveLink(Map<String, dynamic> pick) async {
+    try {
+      await widget.api.post('/graph/links', {'from_id': widget.id, ...pick});
+      await _load();
+    } on ApiError catch (e) {
+      if (!mounted) return;
+      if (e.status == 409 && e.body?['error'] == 'ambiguous_other') {
+        final id = await _which('${pick['to_name']}', _maps(e.body?['choice']));
+        if (id != null && mounted) await _saveLink({'type': pick['type'], 'to_id': id});
+        return;
+      }
+      _toast(context, e.status == 400 ? "Those two can't be linked" : "Couldn't add that");
+    } catch (_) {
+      if (mounted) _toast(context, "Couldn't add that");
+    }
+  }
+
+  /// Several people share the name: ask which one. Never guesses.
+  Future<int?> _which(String name, List<Map<String, dynamic>> options) => showDialog<int>(
+    context: context,
+    builder: (ctx) => SimpleDialog(
+      title: Text('Which $name?'),
+      children: [
+        for (final o in options)
+          SimpleDialogOption(
+            key: ValueKey('which-${o['id']}'),
+            onPressed: () => Navigator.pop(ctx, o['id'] as int),
+            child: Text('${o['name']} (${o['kind']}, #${o['id']})'),
+          ),
+      ],
+    ),
+  );
+
+  Widget _link(Map<String, dynamic> l) => _tile(
+    ListTile(
+      key: ValueKey('link-${l['fact_id']}'),
+      title: Text('${l['label']} ${l['other_name']}', style: const TextStyle(color: ink, fontSize: 15)),
+      onTap: () => _openOther(l),
+      trailing: IconButton(
+        key: ValueKey('delete-link-${l['fact_id']}'),
+        tooltip: 'Remove',
+        icon: const Icon(Icons.delete_outline),
+        onPressed: () => _deleteLink(l),
+      ),
+    ),
+  );
 
   Future<Map<String, dynamic>?> _preview(bool mentions) async {
     try {
@@ -427,6 +611,16 @@ class _PersonDetailState extends State<_PersonDetail> {
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 110),
             children: [
               for (final f in _facts) _fact(f, editable: true),
+              if (_links.isNotEmpty) ...[_head('Relationships'), for (final l in _links) _link(l)],
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: OutlinedButton.icon(
+                  key: const Key('add-link'),
+                  onPressed: _addLink,
+                  icon: const Icon(Icons.add_link),
+                  label: const Text('Add relationship'),
+                ),
+              ),
               if (_history.isNotEmpty) ...[_head('History'), for (final f in _history) _fact(f, deletable: true)],
               if (_pending.isNotEmpty) ...[_head('Pending'), for (final f in _pending) _fact(f)],
               if (!widget.self) ...[

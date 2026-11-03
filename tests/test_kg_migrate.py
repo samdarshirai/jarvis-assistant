@@ -148,3 +148,34 @@ def test_bad_legacy_rows_are_skipped_and_logged_by_id_only(pool, uids, caplog):
     bad = _legacy_ids(pool, uids[0])[:2]
     assert all(f"memory {i}" in caplog.text for i in bad)
     assert "secret" not in caplog.text and "yyyy" not in caplog.text
+
+
+# ---- friend_of text -> links ----
+
+def test_friend_text_becomes_a_link_only_when_the_name_is_one_person(pool, uids):
+    from jarvis.kg.migrate import link_existing
+    kg = GraphStore(pool, uids[0])
+    anna, bob, carl = kg.create_entity("Anna"), kg.create_entity("Bob Stone"), kg.create_entity("Carl")
+    kg.create_entity("Dan Roy"), kg.create_entity("Dan Poe")
+    f_bob = kg.add_fact(anna.id, "friend_of", "Bob Stone", source_kind="user_stated")
+    kg.add_fact(anna.id, "friend_of", "Dan", source_kind="user_stated")  # two Dans: ambiguous, left as text
+    kg.add_fact(anna.id, "friend_of", "Someone New", source_kind="user_stated")  # unknown, left as text
+    kg.add_fact(anna.id, "friend_of", "Anna", source_kind="user_stated")  # herself, left as text
+    assert link_existing(pool) == 1
+    assert [(l.other_name, l.label) for l in kg.links_for(anna.id)] == [("Bob Stone", "friend of")]
+    assert [(l.other_name, l.label) for l in kg.links_for(bob.id)] == [("Anna", "friend of")]
+    assert next(f for f in kg.facts_for(anna.id) if f.id == f_bob.id).object_id == bob.id
+    assert link_existing(pool) == 0  # idempotent
+    assert kg.links_for(carl.id) == []
+
+
+def test_an_existing_link_from_either_side_is_not_duplicated_and_users_are_separate(pool, uids):
+    from jarvis.kg.migrate import link_existing
+    kg, other = GraphStore(pool, uids[0]), GraphStore(pool, uids[1])
+    anna, bob = kg.create_entity("Anna"), kg.create_entity("Bob")
+    kg.add_link(bob.id, "friend_of", anna.id, source_kind="user_stated")
+    kg.add_fact(anna.id, "friend_of", "Bob", source_kind="user_stated")  # the same friendship, as text
+    stranger = other.create_entity("Bob")
+    other.add_fact(other.create_entity("Eve").id, "friend_of", "Bob", source_kind="user_stated")
+    assert link_existing(pool) == 1  # only the other user's Eve -> Bob
+    assert len(kg.links_for(anna.id)) == 1 and other.links_for(stranger.id)[0].other_name == "Eve"

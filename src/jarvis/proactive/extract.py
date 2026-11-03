@@ -21,7 +21,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from jarvis.kg.candidates import CandidateStore
 from jarvis.kg.facts import norm
-from jarvis.kg.predicates import KINDS, PREDICATES, SINGLE
+from jarvis.kg.predicates import ALIASES, KINDS, LINK_TYPES, PREDICATES, SINGLE, SYMMETRIC
 from jarvis.memory import store as memstore
 
 MAX_TEXT = 1000  # a longer message is most likely pasted text
@@ -46,7 +46,8 @@ SYSTEM = (
     '"predicate": string, "value": string, "quote": string}. '
     "subject is who or what the fact is about: a name, or 'me' for the user (then subject_kind is 'self'). "
     "relation is how the subject relates to the user (e.g. 'sister'), only when the user says so. "
-    "predicate is exactly one of: " + ", ".join(sorted(PREDICATES)) + ". "
+    "predicate is exactly one of: " + ", ".join(sorted(PREDICATES)) + "; or, when two people are related to each other, "
+    "one of " + ", ".join(LINK_TYPES) + " (then value is the other person's name, and subject is a name, never 'me'). "
     "value is the fact itself, short, with dates written out (resolve 'next month' from today's date). "
     "quote is copied exactly, word for word, from ONE message and shows where the fact came from. "
     "Include only facts the user states about themselves or about people, places and organisations in their life. "
@@ -73,7 +74,8 @@ DIGEST_SYSTEM = (
     'facts: at most 10 lasting facts, of this shape: {"subject": string, "subject_kind": "self" | "person" | "place" | '
     '"org" | "thing", "relation": string or null, "predicate": string, "value": string, "quote": string}. subject is a '
     "name, or 'me' for the user (then subject_kind is 'self'); relation is how the subject relates to the user, only "
-    "when the user says so; predicate is exactly one of: " + ", ".join(sorted(PREDICATES)) + "; value is short, with "
+    "when the user says so; predicate is exactly one of: " + ", ".join(sorted(PREDICATES)) + "; or, when two people are "
+    "related to each other, one of " + ", ".join(LINK_TYPES) + " (then value is the other person's name); value is short, with "
     "dates written out. Something true only for a while is short_term, never a fact. "
     "Every quote is copied exactly, word for word, from ONE line starting 'User:' (never a 'Jarvis:' line). Only the "
     "user's own statements count: never take a fact or note from what Jarvis said or from email or web text it quoted. "
@@ -217,13 +219,15 @@ def validate(items: list, user_texts: list[str]) -> tuple[list[dict], int]:
             continue
         subject, value = _text(it.get("subject"), MAX_SUBJECT), _text(it.get("value"), MAX_VALUE)
         quote, predicate, kind = _text(it.get("quote"), MAX_QUOTE, MIN_QUOTE), it.get("predicate"), it.get("subject_kind")
-        if not (subject and value and quote) or predicate not in PREDICATES or kind not in KINDS:
+        if not (subject and value and quote) or predicate not in PREDICATES | set(LINK_TYPES) or kind not in KINDS:
             continue
         if not any(norm(quote) in h for h in haystack):
             continue
         me = norm(subject) in SELF_WORDS
         if kind == "self" and not me:
             continue
+        if predicate in LINK_TYPES and norm(value) == norm(subject):
+            continue  # nobody is linked to themselves
         relation = None if me else _text(it.get("relation"), MAX_RELATION)
         subject, kind = ("me", "self") if me else (subject, kind)
         rows.append({"subject_name": subject, "subject_kind": kind, "relation": relation, "predicate": predicate,
@@ -247,6 +251,8 @@ def filter_candidates(kg, cands, rows: list[dict]) -> tuple[list[dict], int]:
                 continue
             if r["predicate"] in SINGLE and active:
                 replaces = active[0].id
+            if r["predicate"] in LINK_TYPES and _already_linked(kg, entity, r["predicate"], r["value"]):
+                continue
         kept.append({**r, "replaces_fact_id": replaces})
     keys = [(r["subject_norm"], r["predicate"], r["value_norm"]) for r in kept]
     seen = cands.known(keys)
@@ -257,6 +263,17 @@ def filter_candidates(kg, cands, rows: list[dict]) -> tuple[list[dict], int]:
         seen.add(key)
         out.append(r)
     return out, len(rows) - len(out)
+
+
+def _already_linked(kg, entity, predicate: str, other_name: str) -> bool:
+    """The graph already links `entity` to the one person called `other_name` in this sense (either side of a symmetric
+    link; "child of" and "reports to" read from the stored direction). An ambiguous or unknown name is not linked."""
+    other = _known_entity(kg, other_name)
+    if other is None:
+        return False
+    stored = ALIASES.get(predicate, predicate)
+    return any(ln.other_id == other.id and ln.predicate == stored
+               and (stored in SYMMETRIC or ln.outgoing == (predicate not in ALIASES)) for ln in kg.links_for(entity.id))
 
 
 def _known_entity(kg, subject: str):
