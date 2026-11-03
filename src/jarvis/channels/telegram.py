@@ -75,7 +75,8 @@ class TelegramChannel:
 
     async def _cfg(self, rt, *, new_text: bool, text: str | None = None) -> dict:
         """The Telegram conversation's graph config. A new message follows the idle rule and counts as activity;
-        a button tap or re-offer uses the open conversation so a card raised before the idle gap stays answerable."""
+        a button tap or re-offer uses the open conversation so a card raised before the idle gap stays answerable.
+        (A new text after the gap closes the old conversation, so a later tap on its old card is 'already handled'.)"""
         convs = rt.conversations
         if new_text:
             conv = await asyncio.to_thread(convs.current, "telegram")

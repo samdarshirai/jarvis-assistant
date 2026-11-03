@@ -12,7 +12,10 @@ from telegram import Update
 from telegram.error import TelegramError
 
 from jarvis.agent.graph import build_graph
-from jarvis.channels.telegram import FAIL_TEXT, NEEDS_LLM_TEXT, TelegramChannel, format_confirmation
+from jarvis.channels.telegram import FAIL_TEXT, NEEDS_LLM_TEXT, NEW_TEXT, TelegramChannel, format_confirmation
+from datetime import datetime, timedelta, timezone
+
+from jarvis.conversations import IDLE
 from jarvis.tenant import thread_config
 from jarvis.tools.registry import Registry, Tool
 from tests.fakes import FakeProvider, FakeTenants, MemoryAudit
@@ -621,3 +624,83 @@ async def test_telegram_call_contact_never_reaches_the_phone():
     await ch.on_text(text_update(c, "call Mom"), None)
     assert got == []
     assert sent(c) == [("Calls can't be made from Telegram.", {})]
+
+
+def clocked(ch):
+    now = [datetime(2026, 1, 1, tzinfo=timezone.utc)]
+    rt(ch).conversations.clock = lambda: now[0]
+    return now
+
+
+async def thread_msgs(ch, conv):
+    return [m.content for m in (await rt(ch).graph.aget_state(thread_config(conv.thread_id))).values.get("messages", [])]
+
+
+async def test_telegram_idle_gap_starts_new_conversation():
+    ch = make_channel({"fast": [AIMessage("chat"), AIMessage("one"), AIMessage("chat"), AIMessage("two")]}, [])
+    now = clocked(ch)
+    await ch.on_text(text_update(chat(), "first"), None)
+    first = rt(ch).conversations.open_for("telegram")
+    now[0] += IDLE + timedelta(minutes=1)
+    await ch.on_text(text_update(chat(), "second"), None)
+    second = rt(ch).conversations.open_for("telegram")
+    assert second.thread_id != first.thread_id
+    assert await thread_msgs(ch, second) == ["second", "two"]  # the model never saw the first exchange
+    assert await thread_msgs(ch, first) == ["first", "one"]
+
+
+async def test_new_command_starts_conversation_and_confirms():
+    ch = make_channel({"fast": [AIMessage("chat"), AIMessage("one"), AIMessage("chat"), AIMessage("two")]}, [])
+    await ch.on_text(text_update(chat(), "first"), None)
+    first = rt(ch).conversations.open_for("telegram")
+    c = chat()
+    await ch.on_new(text_update(c, "/new"), None)
+    assert sent(c) == [(NEW_TEXT, {})]
+    await ch.on_text(text_update(chat(), "second"), None)
+    second = rt(ch).conversations.open_for("telegram")
+    assert second.thread_id != first.thread_id and await thread_msgs(ch, second) == ["second", "two"]
+
+
+def test_new_command_is_registered_for_the_owner_only():
+    h = next(h for h in TelegramChannel(FakeTenants(), 1, OWNER, users=FakeTenants().users).build("123:abc").handlers[0]
+             if getattr(h, "commands", None))
+    assert h.commands == {"new"} and h.filters is not None
+
+
+async def test_button_tap_after_idle_still_answers_pending_card():
+    calls = []
+    tool_call = AIMessage("", tool_calls=[{"name": "create_event", "args": {"summary": "Gym"}, "id": "1", "type": "tool_call"}])
+    ch = make_channel({"fast": [AIMessage("calendar"), tool_call, AIMessage("Created.")]}, calls)
+    now = clocked(ch)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
+    before = rt(ch).conversations.open_for("telegram")
+    now[0] += IDLE + timedelta(hours=1)
+    c = chat()
+    await ch.on_button(button_update(c, ids(c0)[0]), None)
+    assert calls == [{"summary": "Gym"}] and sent(c) == [("Created.", {})]
+    assert rt(ch).conversations.open_for("telegram").id == before.id  # the tap did not roll the conversation
+
+
+async def test_new_text_after_idle_with_pending_card_leaves_old_card_already_handled():
+    # intended: a new message after the idle gap closes the old conversation, so a later tap on the old card is stale
+    calls = []
+    tool_call = AIMessage("", tool_calls=[{"name": "create_event", "args": {}, "id": "1", "type": "tool_call"}])
+    ch = make_channel({"fast": [AIMessage("calendar"), tool_call, AIMessage("chat"), AIMessage("ok")]}, calls)
+    now = clocked(ch)
+    c0 = chat()
+    await ch.on_text(text_update(c0), None)
+    now[0] += IDLE + timedelta(minutes=1)
+    await ch.on_text(text_update(chat(), "hello"), None)
+    c = chat()
+    await ch.on_button(button_update(c, ids(c0)[0]), None)
+    assert calls == [] and sent(c) == [("Already handled.", {})]
+
+
+async def test_telegram_and_chat_conversations_are_separate():
+    ch = make_channel({"fast": [AIMessage("chat"), AIMessage("Hello!")]}, [])
+    convs = rt(ch).conversations
+    app_conv = convs.current("chat")
+    await ch.on_text(text_update(chat(), "hi"), None)
+    assert convs.open_for("telegram").thread_id != app_conv.thread_id
+    assert await thread_msgs(ch, app_conv) == []
