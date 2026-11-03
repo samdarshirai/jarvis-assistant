@@ -71,6 +71,11 @@ Spec `docs/superpowers/specs/2026-10-28-knowledge-graph-design.md`, plan `docs/s
 - Future ingestion paths MUST pass `origin="extracted"` to `create_entity` / `add_key`; the default `"user"` is fail-open (it lifts suppression).
 - The first ingestion plan should make `origin` a required keyword (no default) on `create_entity` / `add_key`, and must wrap or flag `graph_lookup` output as untrusted once non-`user_stated` facts exist (today it returns facts unwrapped because every fact is user-stated).
 
+## Conversations (merged on `feat/conversations`; spec `docs/superpowers/specs/2026-11-03-conversations-design.md`)
+Table `conversation`; `ConversationStore` (per user, every query scoped by `user_id`) in `src/jarvis/conversations.py`. Surfaces: voice, chat, telegram; one open conversation per user and surface. A new message after `IDLE` (30 minutes) starts a new conversation. Endpoints `/conversations*` (list, resume, new); `/chat` returns `conversation`, `/chat/confirm` takes `conversation_id`. Thread id is `user:{uid}:c:{uuid4().hex}`; the legacy `user:{uid}` thread is kept for the imported conversation. Voice starts a conversation per connection and closes it in the `/voice` handler's `finally`. Telegram `/new` starts a fresh thread. `thread_config` takes only a str thread id (an int raises `TypeError`). Voice and Telegram have separate threads but share the per-user lock.
+- Tests: the Postgres-backed conversation tests need `TEST_DATABASE_URL` and have not been run yet; neither has the Task 7 rework of the isolation, telegram and voice-concurrency tests.
+- Three temporary `DEBUG` log blocks remain in `agent/graph.py` and `voice/ws.py` (alarm investigation); remove them once the alarm is confirmed on a device. Manual rows 119-124 in `ACCEPTANCE.md`.
+
 ## Safety invariants (do not break)
 All invariants below hold per user: each user has their own runtime, lock, thread (`user:<id>`), audit rows, tokens and keys; read "owner" as "the user". Telegram serves the owner only. Nobody falls back to the operator's env keys.
 - Every side effect goes through the graph's `interrupt()` confirmation gate (in the graph, not the prompt) (one bounded exception: see the next bullet). A mixed step (confirm-gated + non-gated call) never interrupts: the gated call is refused "propose it again by itself".

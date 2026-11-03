@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from jarvis.conversations import IDLE
 from jarvis.tenant import thread_config
+from jarvis.users import thread_id
 from jarvis.tools.registry import Registry, Tool
 from tests.fakes import FakeProvider, FakeTenants, MemoryAudit
 
@@ -142,7 +143,7 @@ async def test_telegram_uses_owner_thread_and_lock():
     assert sent(c) == [("Hello!", {})]
     conv = rt(ch).conversations.open_for("telegram")
     assert [m.content for m in (await g.aget_state(thread_config(conv.thread_id))).values["messages"]] == ["hi", "Hello!"]
-    assert (await g.aget_state(thread_config(7))).values == {}
+    assert (await g.aget_state(thread_config(thread_id(7)))).values == {}  # the legacy thread is untouched
 
 
 async def test_telegram_without_llm_key_asks_for_one():
@@ -504,13 +505,14 @@ async def test_disabled_owner_cannot_use_telegram_even_with_cached_runtime(pool,
     calls = []
     graph = rt(pending_channel(calls)).graph
     iid = None
-    if action == "confirm":
-        result = await graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(owner.id))
-        iid = result["__interrupt__"][0].id
     if when == "disabled":
         users.set_disabled(owner.id, True)
     tenants = real_tenants(pool)
     runtime = await tenants.get(owner.id)  # deliberately keep this cached across the DB disable
+    if action == "confirm":  # the card is pending on the owner's Telegram conversation
+        conv = runtime.conversations.current("telegram")
+        result = await graph.ainvoke({"messages": [HumanMessage("book gym")]}, thread_config(conv.thread_id))
+        iid = result["__interrupt__"][0].id
     runtime.graph = SimpleNamespace(aget_state=AsyncMock(wraps=graph.aget_state),
                                     ainvoke=AsyncMock(wraps=graph.ainvoke))
     undo = AsyncMock(return_value=True)

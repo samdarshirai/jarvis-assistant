@@ -1,4 +1,4 @@
-"""Voice and Telegram share one graph thread: graph steps are never cut mid-flight and never interleave."""
+"""Voice and Telegram have separate threads but share one per-user lock: graph steps are never cut mid-flight and never interleave."""
 import asyncio
 import threading
 
@@ -14,7 +14,7 @@ from jarvis.voice.ws import HANDLED_TEXT
 
 from tests.test_graph import call, tool
 from tests.test_telegram import OWNER, button_update, chat, ids, sent, text_update
-from tests.voice_helpers import AUTH, FINAL, build, ping, pin_voice, read, texts, until, until_state, voice_cfg
+from tests.voice_helpers import AUTH, FINAL, build, ping, read, texts, until, until_state, voice_cfg
 
 OK = '{"ok": true}'
 
@@ -55,16 +55,16 @@ def settle(c, h):
     c.portal.call(wait)
 
 
-def model_view(c, h):
-    """What the next agent call is fed (minus its system prompt)."""
-    return repair_tool_gaps(window(c.portal.call(h.graph.aget_state, voice_cfg(h)).values["messages"]))
+def model_view(c, h, cfg=None):
+    """What the next agent call is fed (minus its system prompt); by default on the newest voice conversation."""
+    return repair_tool_gaps(window(c.portal.call(h.graph.aget_state, cfg or voice_cfg(h)).values["messages"]))
 
 
-def assert_ran_once_and_audited(c, h, calls):
+def assert_ran_once_and_audited(c, h, calls, cfg=None):
     assert calls == [("create_event", {"summary": "Gym"})]
     rec = [r for r in h.audit.records if r["name"] == "create_event"]
     assert [r["confirmation"] for r in rec] == ["approved"]
-    assert [m.content for m in model_view(c, h) if isinstance(m, ToolMessage)] == [OK]  # not "Not executed"
+    assert [m.content for m in model_view(c, h, cfg) if isinstance(m, ToolMessage)] == [OK]  # not "Not executed"
 
 
 # --- C1: a running graph step always completes ---
@@ -116,13 +116,13 @@ def test_replacement_mid_tool_does_not_cut_the_step():
     calls = []
     t, entered, release = blocking_tool(calls)
     h = build(gym_scripts(), [t], [FINAL("put gym at seven")])
-    pin_voice(h)  # both connections share one thread: the step belongs to it
     with TestClient(h.app) as c:
         first = c.websocket_connect("/voice", headers=AUTH)
         try:
             w1 = first.__enter__()
             tap(w1, present_card(w1))
             assert entered.wait(5)
+            cfg1 = voice_cfg(h)  # the step belongs to the first connection's conversation, not the replacement's
             with c.websocket_connect("/voice", headers=AUTH) as w2:
                 read(w2)
                 with pytest.raises(WebSocketDisconnect) as e:
@@ -136,7 +136,7 @@ def test_replacement_mid_tool_does_not_cut_the_step():
                 settle(c, h)
         finally:
             release.set()
-        assert_ran_once_and_audited(c, h, calls)
+        assert_ran_once_and_audited(c, h, calls, cfg1)
 
 
 # --- I1: one lock for both channels ---
@@ -155,22 +155,20 @@ class SlowReads:
         return await self.g.ainvoke(inp, cfg)
 
 
-def test_concurrent_voice_tap_and_telegram_button_run_the_tool_once():
+def test_telegram_button_cannot_answer_a_voice_card_and_the_tap_runs_the_tool_once():
     calls = []
     h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("put gym at seven")])
     slow = SlowReads(h.graph)
     h.rt.graph = slow
     ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
-    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
     with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
         card = present_card(ws)
         tc = chat()
         tap(ws, card)
         c.portal.call(ch.on_button, button_update(tc, f"yes:{card['interrupt_id']}"), None)
         until_state(ws, "listening")
-        assert calls == [("create_event", {"summary": "Gym"})]
-        losers = [sent(tc) == [(HANDLED_TEXT, {})], h.tts.spoken[-1] == HANDLED_TEXT]
-        assert sorted(losers) == [False, True]
+        assert calls == [("create_event", {"summary": "Gym"})]  # only the voice tap ran it
+        assert sent(tc) == [(HANDLED_TEXT, {})]  # Telegram has no such card on its own conversation
 
 
 def test_telegram_text_waits_for_a_running_voice_step():
@@ -178,7 +176,6 @@ def test_telegram_text_waits_for_a_running_voice_step():
     t, entered, release = blocking_tool(calls)
     h = build(gym_scripts(AIMessage("chat"), AIMessage("Hi from Telegram.")), [t], [FINAL("put gym at seven")])
     ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
-    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
     with TestClient(h.app) as c:
         try:
             with c.websocket_connect("/voice", headers=AUTH) as ws:
@@ -195,68 +192,28 @@ def test_telegram_text_waits_for_a_running_voice_step():
             release.set()
         assert sent(tc) == [("Hi from Telegram.", {})]
         view = model_view(c, h)
-        assert [type(m).__name__ for m in view] == ["HumanMessage", "AIMessage", "ToolMessage", "AIMessage",
-                                                    "HumanMessage", "AIMessage"]
-        assert view[2].content == OK and view[4].content == "hello"
+        assert [type(m).__name__ for m in view] == ["HumanMessage", "AIMessage", "ToolMessage", "AIMessage"]
+        assert view[2].content == OK  # the Telegram text went to its own thread, not the voice one
         assert_ran_once_and_audited(c, h, calls)
 
 
-def test_telegram_shared_thread_with_owner_voice():
+def test_spoken_yes_does_not_approve_a_card_raised_on_telegram():
     calls = []
-    h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("hello")])
+    h = build({"fast": [AIMessage("calendar"), call("create_event", {"summary": "Gym"}), AIMessage("chat"), AIMessage("Hi there.")],
+               "strong": [AIMessage("Created.")]},
+              [tool("create_event", "calendar", calls)], [FINAL("yes")])
     ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
-    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
     with TestClient(h.app) as c:
         tc = chat()
         c.portal.call(ch.on_text, text_update(tc, "put gym at seven"), None)  # proposed on Telegram
-        iid = ids(tc)[0].partition(":")[2]
+        assert ids(tc)
         with c.websocket_connect("/voice", headers=AUTH) as ws:
             read(ws)
             ping(ws)
             seen = until_state(ws, "listening")
-            assert texts(seen, "confirm_card")[0]["interrupt_id"] == iid  # voice sees the same pending card
-            assert calls == []
+            assert texts(seen, "confirm_card") == []  # voice has its own conversation: it never sees that card
+            assert calls == []  # and a spoken yes approved nothing
     assert h.tenants.lock(1) is h.rt.lock  # both channels take the same per-user lock
-
-
-# --- I2: a spoken yes/no only answers a card this session presented ---
-def test_spoken_yes_does_not_approve_a_card_this_session_never_presented():
-    calls = []
-    h = build(gym_scripts(), [tool("create_event", "calendar", calls)], [FINAL("yes"), FINAL("yes")])
-    pin_voice(h)
-    with TestClient(h.app) as c:
-        out = c.portal.call(h.graph.ainvoke, {"messages": [HumanMessage("put gym at seven")]}, voice_cfg(h))
-        iid = out["__interrupt__"][0].id
-        with c.websocket_connect("/voice", headers=AUTH) as ws:
-            read(ws)
-            ping(ws)
-            seen = until_state(ws, "listening")
-            assert calls == []
-            assert texts(seen, "confirm_card")[0]["interrupt_id"] == iid
-            assert h.tts.spoken[-1].endswith("Just say yes or no.")
-            ping(ws)  # now it was presented: a yes resumes it
-            until_state(ws, "listening")
-            assert calls == [("create_event", {"summary": "Gym"})] and "Created." in h.tts.spoken
-
-
-def test_spoken_yes_meant_for_a_card_resolved_elsewhere_does_not_approve_the_next_one():
-    calls = []
-    h = build({"fast": [AIMessage("calendar, tasks"), call("create_event", {"summary": "Gym"}, id="c1"), AIMessage("cal done")],
-               "strong": [call("create_task", {"summary": "Mum"}, id="c2")]},
-              [tool("create_event", "calendar", calls), tool("create_task", "tasks", calls)],
-              [FINAL("gym and remind me about mum"), FINAL("yes")])
-    ch = TelegramChannel(h.tenants, 1, OWNER, users=h.tenants.users)
-    pin_voice(h, "user:1")  # Telegram still talks on the legacy thread
-    with TestClient(h.app) as c, c.websocket_connect("/voice", headers=AUTH) as ws:
-        card_a = present_card(ws)
-        tc = chat()
-        c.portal.call(ch.on_button, button_update(tc, f"yes:{card_a['interrupt_id']}"), None)
-        assert calls == [("create_event", {"summary": "Gym"})] and "create_task" in sent(tc)[-1][0]
-        card_b_id = ids(tc)[0].partition(":")[2]
-        ping(ws)  # "yes", meant for card A
-        seen = until_state(ws, "listening")
-        assert calls == [("create_event", {"summary": "Gym"})]
-        assert texts(seen, "confirm_card")[0]["interrupt_id"] == card_b_id
 
 
 @pytest.mark.parametrize("kind", ["utterance", "confirm"])

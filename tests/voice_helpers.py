@@ -108,14 +108,3 @@ def voice_cfg(h, uid=1):
     from jarvis.tenant import thread_config
     rows = [c for c in h.tenants.runtimes[uid].conversations.rows.values() if c.surface == "voice"]
     return thread_config(max(rows, key=lambda c: c.id).thread_id, voice=True)
-
-
-def pin_voice(h, thread_id=None):
-    """Make every voice connection reuse one thread (e.g. the legacy "user:1" that Telegram still shares)."""
-    from dataclasses import replace
-    convs = h.rt.conversations
-    conv = convs.start("voice")
-    if thread_id:
-        conv = convs.rows[conv.id] = replace(conv, thread_id=thread_id)
-    convs.start = lambda surface: conv
-    return conv

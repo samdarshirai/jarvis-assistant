@@ -431,14 +431,18 @@ def test_memories_notes_audit_mail_state_isolated_end_to_end(env):
 def test_checkpoint_threads_distinct(env):
     chat(env, "a", "hello from alpha")
     chat(env, "b", "hello from bravo")
+    own = {}
+    for who in ("a", "b"):
+        rt = env.portal.call(env.tenants.get, uid(env, who))
+        own[who] = rt.conversations.open_for("chat").thread_id
     threads = {r[0] for r in rows(env, "SELECT DISTINCT thread_id FROM checkpoints")}
-    assert threads == {f"user:{env.a}", f"user:{env.b}"}
+    assert threads == set(own.values()) and len(threads) == 2
     for who, mine, theirs in (("a", "alpha", "bravo"), ("b", "bravo", "alpha")):
         rt = env.portal.call(env.tenants.get, uid(env, who))
-        state = env.portal.call(rt.graph.aget_state, thread_config(uid(env, who)))
+        state = env.portal.call(rt.graph.aget_state, thread_config(own[who]))
         texts = " ".join(str(m.content) for m in state.values["messages"])
         assert f"hello from {mine}" in texts and theirs not in texts
-    assert thread_config(env.a)["configurable"]["thread_id"] != thread_config(env.b)["configurable"]["thread_id"]
+    assert own["a"].startswith(f"user:{env.a}:c:") and own["b"].startswith(f"user:{env.b}:c:")
 
 
 def test_interrupt_ids_do_not_cross_users(env):
@@ -476,7 +480,9 @@ def test_voice_uses_the_operators_deepgram_key_and_the_callers_thread(env):
         assert env.voice_keys == [("stt", OP["deepgram"]), ("tts", OP["deepgram"])]
         assert CALLS and {k for k, _ in CALLS} == {KEYS[who]["llm"]}
         rt = env.portal.call(env.tenants.get, uid(env, who))
-        state = env.portal.call(rt.graph.aget_state, thread_config(uid(env, who)))
+        voice_thread = rows(env, "SELECT thread_id FROM conversation WHERE user_id = %s AND surface = 'voice'"
+                            " ORDER BY id DESC LIMIT 1", uid(env, who))[0][0]
+        state = env.portal.call(rt.graph.aget_state, thread_config(voice_thread))
         assert f"hello from {who} voice" in str(state.values["messages"])
         assert f"hello from {other(who)} voice" not in str(state.values["messages"])
 

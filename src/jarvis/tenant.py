@@ -28,16 +28,17 @@ from jarvis.tools.phone_tools import register_phone_tools
 from jarvis.tools.registry import Registry
 from jarvis.tools.research_tools import register_research_tools
 from jarvis.tools.task_tools import register_task_tools
-from jarvis.users import MAX_USERS, SecretStore, User, UserStore, thread_id
+from jarvis.users import MAX_USERS, SecretStore, User, UserStore
 from jarvis.web import DdgSearch, FallbackSearch, WebSearch
 
 log = logging.getLogger(__name__)
 
 
-def thread_config(thread: str | int, *, voice: bool = False) -> dict:
-    """A str is the conversation's thread id; an int is the legacy per-user thread (transitional, removed with the old callers). "voice" only selects the fast tier in the graph."""
-    tid = thread if isinstance(thread, str) else thread_id(thread)
-    return {"configurable": {"thread_id": tid, **({"voice": True} if voice else {})}, "recursion_limit": 40}
+def thread_config(thread: str, *, voice: bool = False) -> dict:
+    """The conversation's thread id. "voice" only selects the fast tier in the graph."""
+    if not isinstance(thread, str):
+        raise TypeError("thread_config takes the conversation's thread id (str)")
+    return {"configurable": {"thread_id": thread, **({"voice": True} if voice else {})}, "recursion_limit": 40}
 
 
 def cached_service(build, ttl: float = 1800.0, clock=time.monotonic, epoch=lambda: 0):

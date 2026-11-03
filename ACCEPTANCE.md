@@ -214,3 +214,16 @@ Not run on a real device yet. The graph is always on (Postgres 15 or newer). Mem
 | 115 | Forget the person from People | The dialog lists counts (facts, merged entities, other facts that mention them) and the line "Chat history, notes and the activity log are not erased." |
 | 116 | After forgetting, chat about someone else for a while | The forgotten person is not recreated and does not appear in People |
 | 118 | Have Jarvis read an email, then in the same conversation say "remember my sister lives in Pune" | Jarvis refuses ("Not saved: untrusted ...") and nothing is stored |
+
+# Manual acceptance (conversations)
+
+Not run on a real device yet.
+
+| # | Do | Expect |
+|---|----|--------|
+| 119 | Voice: say "set an alarm for 6am" | The alarm appears in the Clock app |
+| 120 | Voice: ask something, end the session, start a new one and ask what you asked before | The second session does not know the first question |
+| 121 | Chat: send a message, tap New chat, open Past chats, resume it | New chat clears the screen; Past chats lists the conversation; resuming restores its messages |
+| 122 | Chat: send a message, wait more than 30 minutes, send another | The second message starts a new conversation on its own |
+| 123 | Chat: raise a confirm card, tap New chat, resume that conversation | The card is still pending and answerable after resuming |
+| 124 | Telegram: send a message, send /new, send another | /new starts a fresh thread: Jarvis does not recall the earlier messages |
