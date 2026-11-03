@@ -10,6 +10,12 @@ class FakeApi extends ApiClient {
   FakeApi(this.handler) : super(Config('https://x.test', 't'));
   final Future<Map<String, dynamic>> Function(String, Map<String, dynamic>?) handler;
   final calls = <(String, Map<String, dynamic>?)>[];
+  Future<Map<String, dynamic>> Function(String)? getHandler;
+  @override
+  Future<Map<String, dynamic>> get(String path, [Map<String, String>? query]) {
+    calls.add((path, null));
+    return getHandler!(path);
+  }
   @override
   Future<Map<String, dynamic>> post(String path, [Map<String, dynamic>? body]) {
     calls.add((path, body));
@@ -109,5 +115,65 @@ void main() {
     await t.pumpWidget(app(api));
     await send(t, 'x' * 50);
     expect(t.takeException(), isNull);
+  });
+
+  Map<String, dynamic> conv(int id) => {'id': id, 'title': 't$id', 'channel': 'chat', 'last_at': '2026-11-03T10:00:00Z', 'open': true};
+
+  testWidgets('new conversation id clears bubbles; confirm carries conversation_id', (t) async {
+    var n = 0;
+    final api = FakeApi((p, b) async {
+      n++;
+      if (p == '/chat/confirm') return {'reply': 'ok', 'card': null, 'client_actions': []};
+      return {
+        'reply': 'r$n',
+        'conversation': conv(n == 1 ? 1 : 2),
+        'card': n == 2 ? {'interrupt_id': 'i1', 'summary': 'S', 'after_untrusted': false} : null,
+        'client_actions': []
+      };
+    });
+    await t.pumpWidget(app(api));
+    await send(t, 'first');
+    expect(find.text('first'), findsOneWidget);
+    await send(t, 'second');
+    expect(find.text('first'), findsNothing);
+    expect(find.text('second'), findsOneWidget);
+    await t.tap(find.text('Confirm'));
+    await t.pump();
+    await t.pump();
+    expect(api.calls.last.$2, {'interrupt_id': 'i1', 'decision': 'yes', 'conversation_id': 2});
+  });
+
+  testWidgets('New chat posts /conversations and clears the list', (t) async {
+    final api = FakeApi((p, b) async =>
+        p == '/conversations' ? {'conversation': conv(5)} : {'reply': 'hi', 'conversation': conv(1), 'card': null, 'client_actions': []});
+    await t.pumpWidget(app(api));
+    await send(t, 'yo');
+    expect(find.text('hi'), findsOneWidget);
+    await t.tap(find.byIcon(Icons.add_comment_outlined));
+    await t.pump();
+    await t.pump();
+    expect(api.calls.last.$1, '/conversations');
+    expect(find.text('hi'), findsNothing);
+    expect(find.text('Type a request, or tap the mic.'), findsOneWidget);
+  });
+
+  testWidgets('resume from history shows messages and pending card', (t) async {
+    final api = FakeApi((p, b) async => {
+          'conversation': conv(7),
+          'messages': [
+            {'role': 'user', 'text': 'old q'},
+            {'role': 'assistant', 'text': 'old a'}
+          ],
+          'card': {'interrupt_id': 'i9', 'summary': 'Pending thing', 'after_untrusted': false}
+        });
+    api.getHandler = (p) async => {'conversations': [conv(7)]};
+    await t.pumpWidget(app(api));
+    await t.tap(find.byIcon(Icons.history));
+    await t.pumpAndSettle();
+    await t.tap(find.text('t7'));
+    await t.pumpAndSettle();
+    expect(find.text('old q'), findsOneWidget);
+    expect(find.text('old a'), findsOneWidget);
+    expect(find.text('Pending thing'), findsOneWidget);
   });
 }
