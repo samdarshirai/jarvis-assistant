@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'api.dart';
 import 'calendar_screen.dart' show RoundButton;
 import 'confirm_card.dart';
+import 'conversations_screen.dart';
 import 'theme.dart';
 
 const _sheet = Color(0xFFFFF8F4), _userBubble = Color(0xFFFCE0D5), _jarvisBubble = Color(0xFFF2E8E3);
@@ -40,6 +41,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scroll = ScrollController();
   final _msgs = <_Msg>[];
   bool _busy = false, _locked = false;
+  int? _conversationId;
 
   @override
   void initState() {
@@ -69,7 +71,11 @@ class _ChatScreenState extends State<ChatScreen> {
   void _decide(_Card c, bool yes) {
     if (_busy || _locked || c.decision != null) return;
     setState(() => c.decision = yes);
-    _call('/chat/confirm', {'interrupt_id': c.id, 'decision': yes ? 'yes' : 'no'});
+    _call('/chat/confirm', {
+      'interrupt_id': c.id,
+      'decision': yes ? 'yes' : 'no',
+      if (_conversationId != null) 'conversation_id': _conversationId,
+    });
   }
 
   Future<void> _call(String path, Map<String, dynamic> body) async {
@@ -104,13 +110,55 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _apply(Map<String, dynamic> r) {
-    final reply = r['reply'], card = r['card'];
+    final reply = r['reply'], card = r['card'], conv = r['conversation'];
     setState(() {
+      if (conv is Map && conv['id'] is int) {
+        // the idle rule started a new conversation: drop the old thread (keep the message just sent)
+        if (_conversationId != null && conv['id'] != _conversationId) {
+          final last = _msgs.isNotEmpty && _msgs.last.mine ? _msgs.last : null;
+          _msgs..clear()..addAll([?last]);
+        }
+        _conversationId = conv['id'] as int;
+      }
       if (reply is String && reply.trim().isNotEmpty) _msgs.add(_Msg(reply));
       if (card is Map) {
         _msgs.add(_Msg('', card: _Card('${card['interrupt_id']}', '${card['summary']}', card['after_untrusted'] == true)));
       }
     });
+  }
+
+  Future<void> _newChat() async {
+    if (_busy) return;
+    try {
+      final r = await widget.api.post('/conversations');
+      if (!mounted) return;
+      final id = (r['conversation'] as Map?)?['id'];
+      setState(() {
+        _msgs.clear();
+        _conversationId = id is int ? id : null;
+      });
+    } catch (_) {
+      if (mounted) setState(() => _msgs.add(_Msg("Couldn't start a new chat.")));
+    }
+  }
+
+  Future<void> _history() async {
+    if (_busy) return;
+    final r = await Navigator.of(context).push<Map<String, dynamic>>(
+        MaterialPageRoute(builder: (_) => ConversationsScreen(api: widget.api)));
+    if (r == null || !mounted) return;
+    final id = (r['conversation'] as Map?)?['id'], card = r['card'];
+    setState(() {
+      _conversationId = id is int ? id : null;
+      _msgs.clear();
+      for (final m in (r['messages'] as List? ?? const [])) {
+        if (m is Map) _msgs.add(_Msg('${m['text']}', mine: m['role'] == 'user'));
+      }
+      if (card is Map) {
+        _msgs.add(_Msg('', card: _Card('${card['interrupt_id']}', '${card['summary']}', card['after_untrusted'] == true)));
+      }
+    });
+    _toBottom();
   }
 
   void _toBottom() => WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -130,7 +178,9 @@ class _ChatScreenState extends State<ChatScreen> {
                     child: Text('Talk with Jarvis',
                         textAlign: TextAlign.center, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: 16, color: cream)),
                   ),
-                  const SizedBox(width: 46),
+                  RoundButton(icon: Icons.add_comment_outlined, tooltip: 'New chat', onTap: _newChat),
+                  const SizedBox(width: 6),
+                  RoundButton(icon: Icons.history, tooltip: 'Past chats', onTap: _history),
                 ]),
               ),
               Expanded(
