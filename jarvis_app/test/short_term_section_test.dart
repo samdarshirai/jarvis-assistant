@@ -54,7 +54,7 @@ void main() {
     await pump(t, ItemsApi([item(1, 'In Pune until Friday'), item(2, 'Waiting for the plumber')]));
     expect(find.text('Right now · 2'), findsOneWidget);
     expect(find.text('In Pune until Friday'), findsOneWidget);
-    expect(find.textContaining('until '), findsNWidgets(2));
+    expect(find.text(untilText('2026-11-06T22:59:00+00:00')), findsNWidgets(2)); // the dates, not the note saying "until"
     await t.tap(find.byKey(const Key('right-now-header')));
     await t.pumpAndSettle();
     expect(find.text('In Pune until Friday'), findsNothing);
