@@ -3,7 +3,7 @@ from jarvis.tenant import build_registry
 from jarvis.tools.registry import Registry, Tool
 
 CONFIRM = {"create_event", "update_event", "delete_event", "create_task", "complete_task",
-           "reschedule_task", "send_draft", "remember_fact", "forget_entity", "create_note", "append_note", "delete_note",
+           "reschedule_task", "send_draft", "remember_fact", "remember_facts", "forget_entity", "create_note", "append_note", "delete_note",
            "complete_shopping_item"}
 NO_CONFIRM = {"list_events", "find_free_slots", "list_tasks", "search_emails", "read_email",
               "create_draft", "update_draft", "set_alarm", "set_timer", "start_navigation", "compose_message", "call_contact",

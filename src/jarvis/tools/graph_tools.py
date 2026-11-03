@@ -19,6 +19,29 @@ class RememberFactArgs(BaseModel):
     kind: Literal["person", "place", "org", "thing"] = "person"
 
 
+MAX_STATEMENTS, MAX_FACTS = 8, 10
+
+
+class FactItem(BaseModel):
+    predicate: Literal[tuple(sorted(PREDICATES))]  # type: ignore[valid-type]
+    value: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+
+
+class StatementArgs(BaseModel):
+    subject: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] = Field(
+        description="Who the facts are about: a name, a kin word like 'sister', or 'me'")
+    kind: Literal["person", "place", "org", "thing"] = "person"
+    relation: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=50)] | None = Field(
+        default=None, description="How the subject relates to the user, e.g. 'wife'; pass when introducing someone")
+    facts: list[FactItem] = Field(min_length=1, max_length=MAX_FACTS)
+
+
+class RememberFactsArgs(BaseModel):
+    statements: list[StatementArgs] = Field(
+        min_length=1, max_length=MAX_STATEMENTS,
+        description="One entry per person, place or organisation mentioned in the user's message")
+
+
 class LookupArgs(BaseModel):
     name: str = Field(description="A name, a kin word like 'sister', or 'me'")
 
@@ -30,6 +53,36 @@ class ForgetEntityArgs(BaseModel):
 def register_graph_tools(registry: Registry, store: GraphStore) -> None:
     def _has_relation(entity_id):
         return any(f.predicate == "relation_to_user" for f in store.facts_for(entity_id))
+
+    def _resolve(subject):
+        """('self', ent) | ('one', ent) | ('none', None) | ('many', [ents])  (read-only)."""
+        if subject.strip().lower() in _SELF_WORDS:
+            return "self", store.self_entity()
+        found = store.find_by_name(subject)
+        return ("many", found) if len(found) > 1 else ("one", found[0]) if found else ("none", None)
+
+    def remember_facts(statements):
+        plan = []
+        for st in statements:
+            how, ent = _resolve(st["subject"])
+            if how == "many":
+                return {"error": "ambiguous", "subject": st["subject"],
+                        "candidates": [{"id": e.id, "name": e.display_name} for e in ent]}
+            plan.append({"entity_id": ent.id if ent else None, "name": ent.display_name if ent else st["subject"],
+                         "kind": ent.kind if ent else st.get("kind", "person"),
+                         "relation": None if how == "self" else st.get("relation"),
+                         "facts": [(f["predicate"], f["value"]) for f in st["facts"]]})
+        done = store.add_statements(plan)
+        return {"remembered": [{"subject": d["entity"].display_name, "created": d["created"],
+                                "facts": [{"predicate": f.predicate, "value": f.value, "fact_id": f.id}
+                                          for f in d["facts"]]} for d in done]}
+
+    def remember_facts_describe(a):
+        parts = []
+        for st in a["statements"]:
+            who = st["subject"] + (f" ({st['relation']})" if st.get("relation") else "")
+            parts.append(f"{who} — " + "; ".join(f"{f['predicate']}: {f['value']}" for f in st["facts"]))
+        return "Remember: " + " | ".join(parts)
 
     def _save(ent, predicate, value):
         f = store.add_fact(ent.id, predicate, value, source_kind="user_stated", excerpt=value)
@@ -98,6 +151,12 @@ def register_graph_tools(registry: Registry, store: GraphStore) -> None:
         describe=lambda a: f"Remember: {a['subject']} — {a['predicate']}: {a['value']}" + "".join(
             f" ({k}: {v})" for k, v in (("relation", a.get("relation")), ("kind", a.get("kind")))
             if v and not (k == "kind" and v == "person")),
+        done=lambda r: "Got it, I'll remember that."))
+    registry.add(Tool(
+        name="remember_facts", domain="memory", args_schema=RememberFactsArgs, fn=remember_facts,
+        description="Save everything the user said about one or more people, places or organisations in ONE call: "
+                    "one statement per subject, with its relation to the user (when introducing someone) and all its facts.",
+        needs_confirm=True, refuse_after_untrusted=True, describe=remember_facts_describe,
         done=lambda r: "Got it, I'll remember that."))
     registry.add(Tool(
         name="graph_lookup", domain="memory", args_schema=LookupArgs, fn=graph_lookup,

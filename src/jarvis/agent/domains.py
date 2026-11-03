@@ -78,9 +78,11 @@ DOMAINS = {
                     "the user to allow it in the app and do not ask for a respelling. If the phone app is not "
                     "connected the user is told separately."),
     "memory": Domain("memory", "fast", _BASE + " You manage what the user asked you to remember, as facts about them "
-                     "and the people and places in their life. Call remember_fact with a predicate from: "
+                     "and the people and places in their life. Put everything the user said in one message into ONE "
+                     "remember_facts call, one statement per person, place or organisation; use remember_fact only for a "
+                     "single simple fact. Predicates: "
                      + ", ".join(sorted(PREDICATES)) + "; use `note` when nothing else fits. The subject can be 'me', a "
-                     "name, or a kin word like sister; pass relation='sister' when introducing someone. If the tool "
+                     "name, or a kin word like sister; pass relation='wife' when introducing someone. If the tool "
                      "says ambiguous, ask the user which one. graph_lookup shows what is known about someone, with "
                      "sources. To forget a person, ask the user to name them, call graph_lookup for the id, then "
                      "forget_entity ('forget everything about X'); it removes only the graph, not chat history or notes. "

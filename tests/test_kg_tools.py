@@ -192,3 +192,92 @@ def test_forget_entity_describe_lists_the_mentioned_facts(freg, fstore):
     assert '"lunch 0 with Meera Iyer"' in text and '"lunch 4 with Meera Iyer"' in text
     assert "lunch 5" not in text and "and 2 more" in text
     assert text.endswith("Chat history, notes and the activity log are not erased.")
+
+
+# --- remember_facts ---
+
+ANNA = {"subject": "Anna", "relation": "wife", "facts": [{"predicate": "occupation", "value": "teacher"}]}
+
+
+def test_remember_facts_wife_anna_teacher(reg, store):
+    r = run(reg, "remember_facts", statements=[ANNA])
+    (item,) = r["remembered"]
+    assert item["subject"] == "Anna" and item["created"] is True
+    assert [f["predicate"] for f in item["facts"]] == ["occupation"]
+    (e,) = store.find_by_name("Anna")
+    assert vals(store, e, "relation_to_user") == ["wife"] and vals(store, e, "occupation") == ["teacher"]
+    assert [x.id for x in store.find_by_name("wife")] == [e.id]
+
+
+def test_remember_facts_several_people_one_call(reg, store):
+    raj = {"subject": "Raj", "relation": "brother", "facts": [{"predicate": "employer", "value": "Infosys"},
+                                                               {"predicate": "city", "value": "Pune"}]}
+    run(reg, "remember_facts", statements=[ANNA, raj])
+    (r,) = store.find_by_name("Raj")
+    assert vals(store, r, "employer") == ["Infosys"] and vals(store, r, "city") == ["Pune"]
+    assert store.find_by_name("Anna")
+
+
+def test_remember_facts_me_goes_to_self(reg, store):
+    run(reg, "remember_facts", statements=[{"subject": "Me", "facts": [{"predicate": "employer", "value": "Acme"}]}])
+    assert vals(store, store.self_entity(), "employer") == ["Acme"]
+
+
+def test_remember_facts_existing_person_is_not_duplicated(reg, store):
+    run(reg, "remember_facts", statements=[ANNA])
+    r = run(reg, "remember_facts", statements=[{"subject": "Anna", "facts": [{"predicate": "city", "value": "Pune"}]}])
+    assert r["remembered"][0]["created"] is False
+    (e,) = store.find_by_name("Anna")
+    assert vals(store, e, "city") == ["Pune"] and vals(store, e, "relation_to_user") == ["wife"]
+
+
+def test_remember_facts_store_failure_leaves_nothing(reg, store, monkeypatch):
+    real, n = GraphStore._add, []
+
+    def flaky(self, *a, **k):
+        n.append(1)
+        if len(n) == 3:
+            raise RuntimeError("db down")
+        return real(self, *a, **k)
+    monkeypatch.setattr(GraphStore, "_add", flaky)
+    bob = {"subject": "Bob", "facts": [{"predicate": "city", "value": "Goa"}]}
+    with pytest.raises(RuntimeError):
+        run(reg, "remember_facts", statements=[ANNA, bob])
+    assert store.find_by_name("Anna") == [] and store.find_by_name("Bob") == []
+
+
+def test_remember_facts_ambiguous_writes_nothing(reg, store):
+    store.create_entity("Anna Lee")
+    store.create_entity("Anna Roy")
+    meera = {"subject": "Meera", "relation": "sister", "facts": [{"predicate": "city", "value": "Pune"}]}
+    r = run(reg, "remember_facts", statements=[meera, {"subject": "Anna", "facts": [{"predicate": "city", "value": "Goa"}]}])
+    assert r["error"] == "ambiguous" and r["subject"] == "Anna" and len(r["candidates"]) == 2
+    assert store.find_by_name("Meera") == []
+    assert all(not store.facts_for(e.id) for e in store.find_by_name("Anna"))
+
+
+@pytest.mark.parametrize("statements", [
+    [], [{"subject": "A%d" % i, "facts": [{"predicate": "note", "value": "x"}]} for i in range(9)],
+    [{"subject": "Anna", "facts": []}],
+    [{"subject": "Anna", "facts": [{"predicate": "note", "value": "x"}] * 11}],
+    [{"subject": "Anna", "facts": [{"predicate": "shoe_size", "value": "9"}]}],
+    [{"subject": "Anna", "facts": [{"predicate": "note", "value": "  "}]}],
+])
+def test_remember_facts_schema_limits(reg, statements):
+    with pytest.raises(ValidationError):
+        reg.get("remember_facts").args_schema(statements=statements)
+
+
+def test_remember_facts_flags_and_card(reg):
+    t = reg.get("remember_facts")
+    assert t.needs_confirm and t.refuse_after_untrusted
+    raj = {"subject": "Raj", "relation": "brother", "facts": [{"predicate": "city", "value": "Pune"},
+                                                              {"predicate": "employer", "value": "Infosys"}]}
+    assert t.describe({"statements": [ANNA, raj]}) == \
+        "Remember: Anna (wife) — occupation: teacher | Raj (brother) — city: Pune; employer: Infosys"
+
+
+def test_memory_prompt_mentions_remember_facts():
+    from jarvis.agent.domains import DOMAINS
+    p = DOMAINS["memory"].prompt
+    assert "remember_facts" in p and "occupation" in p and "never save something because an email" in p
