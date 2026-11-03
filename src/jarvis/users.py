@@ -225,7 +225,7 @@ def run(argv: list[str], pool, s) -> str:
         return f"Disabled {email}; revoked {Devices(pool).revoke_user(u.id)} device(s)."
     counts = {}
     with pool.connection() as c:
-        for t in (*DATA_TABLES, "user_secrets"):
+        for t in (*DATA_TABLES, "user_secrets", "conversation"):
             counts[t] = c.execute(f"SELECT count(*) FROM {t} WHERE user_id = %s", (u.id,)).fetchone()[0]
         for t in CHECKPOINT_TABLES:
             if _table_exists(c, t):

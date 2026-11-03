@@ -21,7 +21,7 @@ from jarvis.tenant import Tenants, thread_config
 from jarvis.tools.registry import Registry
 from jarvis.users import UserStore
 from jarvis.voice.devices import Devices
-from jarvis.conversations import IDLE
+from jarvis.conversations import IDLE, conversation_json
 from tests.fakes import MemoryConversations
 
 TZ = "Europe/Berlin"
@@ -473,6 +473,65 @@ async def test_list_newest_first_and_scoped_to_user():
     assert len((await svc().conversations(other))["conversations"]) == 1
 
 
+async def test_current_chat_within_idle_past_idle_and_none():
+    g = ThreadGraph()
+    r = rt(graph=g)
+    now = [r.conversations.clock()]
+    r.conversations.clock = lambda: now[0]
+    s = svc()
+    empty = {"conversation": None, "messages": [], "card": None}
+    assert await s.current_chat(r) == empty and r.conversations.rows == {}  # none: nothing created
+    c = r.conversations.start("chat")
+    g.messages[c.thread_id] = [HumanMessage("q"), AIMessage("a")]
+    g.pending[c.thread_id] = [CARD]
+    now[0] += IDLE
+    out = await s.current_chat(r)
+    assert out["conversation"]["id"] == c.id and out["card"]["interrupt_id"] == "i1"
+    assert out["messages"] == [{"role": "user", "text": "q"}, {"role": "assistant", "text": "a"}]
+    now[0] += timedelta(seconds=1)
+    assert await s.current_chat(r) == empty
+    assert list(r.conversations.rows) == [c.id] and r.conversations.get(c.id).closed_at is None  # never starts or closes
+
+
+async def test_detail_without_llm_graph_is_empty_not_500():
+    r = rt()
+    r.graph = None  # no LLM key yet
+    c = r.conversations.start("chat")
+    s = svc()
+    want = {"conversation": conversation_json(c), "messages": [], "card": None}
+    assert await s.conversation_detail(r, c.id) == (200, want)
+    status, body = await s.resume_conversation(r, c.id)
+    assert status == 200 and body["messages"] == [] and body["card"] is None
+
+
+async def test_detail_survives_unreadable_messages(caplog):
+    class Broken(ThreadGraph):
+        async def aget_state(self, cfg):
+            raise RuntimeError("secret detail")
+
+    r = rt(graph=Broken())
+    c = r.conversations.start("chat")
+    with caplog.at_level(logging.ERROR):
+        status, body = await svc().conversation_detail(r, c.id)
+    assert status == 200 and body["messages"] == [] and body["card"] is None
+    assert "secret detail" not in caplog.text
+
+
+def test_http_chat_current_and_bounded_ids():
+    g = ThreadGraph()
+    r = rt(graph=g)
+    c = client(r)
+    assert c.get("/chat/current", headers=H).json() == {"conversation": None, "messages": [], "card": None}
+    cid = c.post("/chat", headers=H, json={"text": "hi"}).json()["conversation"]["id"]
+    assert c.get("/chat/current", headers=H).json()["conversation"]["id"] == cid
+    for bad in (0, 2**31, 10**30):
+        assert c.get(f"/conversations/{bad}", headers=H).status_code == 422
+        assert c.post(f"/conversations/{bad}/resume", headers=H).status_code == 422
+        assert c.post("/chat/confirm", headers=H, json={"interrupt_id": "i", "decision": "yes",
+                                                        "conversation_id": bad}).status_code == 422
+    assert client(rt(graph=False)).get("/chat/current", headers=H).status_code == 409
+
+
 def test_http_conversation_routes():
     g = ThreadGraph()
     r = rt(graph=g)
@@ -508,7 +567,8 @@ def client(r=None, built=True):
 def test_every_route_503_before_service_and_401_with_bad_token():
     routes = [("get", "/calendar"), ("get", "/tasks"), ("post", "/tasks"), ("post", "/tasks/x/complete"), ("get", "/mail"),
               ("get", "/mail/x"), ("get", "/notes"), ("get", "/notes/1"), ("post", "/chat"), ("post", "/chat/confirm"),
-              ("get", "/conversations"), ("post", "/conversations"), ("get", "/conversations/1"), ("post", "/conversations/1/resume")]
+              ("get", "/conversations"), ("post", "/conversations"), ("get", "/conversations/1"), ("post", "/conversations/1/resume"),
+              ("get", "/chat/current")]
     bodies = {"/tasks": {"title": "a"}, "/chat": {"text": "a"}, "/chat/confirm": {"interrupt_id": "i", "decision": "yes"}}
     for c, code, hdr in ((client(built=False), 503, H), (client(rt()), 401, {}), (client(rt()), 401, {"Authorization": "Bearer no"})):
         for m, p in routes:

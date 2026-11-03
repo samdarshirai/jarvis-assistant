@@ -184,7 +184,7 @@ class TelegramChannel:
             result = None if pending else await self._invoke(graph, {"messages": [HumanMessage(update.message.text)]}, cfg)
         if pending:
             await chat.send_message(PENDING_TEXT)
-            await self._offer(chat, pending[0])  # its buttons may only exist elsewhere (voice): show them here
+            await self._offer(chat, pending[0])  # this conversation's card; its earlier message may be far up: re-show the buttons
             return
         await self._reply(chat, graph, result, cfg)
 

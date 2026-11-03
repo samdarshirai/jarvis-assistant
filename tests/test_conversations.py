@@ -104,6 +104,18 @@ def test_close_idempotent_and_resume(store, clock):
     assert store.resume(99999, "chat") is None
 
 
+def test_resume_stale_open_voice(store, clock):
+    v = store.start("voice")
+    chat = store.current("chat")
+    clock.now += IDLE
+    assert store.resume(v.id, "chat") is None  # within IDLE: a live voice session
+    clock.now += timedelta(seconds=1)
+    r = store.resume(v.id, "chat")  # past IDLE: left open by a redeploy, resumable
+    assert r.id == v.id and r.surface == "chat" and r.closed_at is None and r.last_at == clock.now
+    assert store.get(chat.id).closed_at is not None
+    assert store.open_for("voice") is None and store.open_for("chat").id == v.id
+
+
 def test_other_user_cannot_get_or_resume(pool, uids, clock):
     a, b = ConversationStore(pool, uids[0], clock), ConversationStore(pool, uids[1], clock)  # pg only: the twin is single-user
     conv = a.current("chat")
@@ -157,3 +169,12 @@ def test_messages_json():
     assert asyncio.run(messages_json(G({"messages": msgs}), "t")) == [
         {"role": "user", "text": "hi"}, {"role": "assistant", "text": "done"}]
     assert asyncio.run(messages_json(G({}), "t")) == []
+
+
+def test_messages_json_keeps_last_200():
+    class G:
+        async def aget_state(self, cfg):
+            return SimpleNamespace(values={"messages": [HumanMessage(f"m{i}") for i in range(250)]})
+
+    out = asyncio.run(messages_json(G(), "t"))
+    assert len(out) == 200 and out[0]["text"] == "m50" and out[-1]["text"] == "m249"

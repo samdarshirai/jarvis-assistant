@@ -149,9 +149,9 @@ class MemoryConversations:
 
     def resume(self, conv_id, surface):
         t = self.get(conv_id)
-        if t is None or (t.closed_at is None and t.surface == "voice"):
-            return None
         now = self.clock()
+        if t is None or (t.closed_at is None and t.surface == "voice" and now - t.last_at <= IDLE):
+            return None
         for c in [c for c in self.rows.values() if c.surface == surface and c.closed_at is None and c.id != conv_id]:
             self.rows[c.id] = replace(c, closed_at=now)
         self.rows[conv_id] = replace(t, surface=surface, closed_at=None, last_at=now)

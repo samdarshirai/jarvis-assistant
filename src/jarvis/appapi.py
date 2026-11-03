@@ -7,7 +7,7 @@ from langchain_core.messages import HumanMessage
 from langgraph.types import Command
 
 from jarvis.agent.graph import turn_replies
-from jarvis.conversations import conversation_json, messages_json
+from jarvis.conversations import IDLE, conversation_json, messages_json
 from jarvis.channels.telegram import EMPTY_TEXT, FAIL_TEXT, HANDLED_TEXT, PENDING_TEXT
 from jarvis.google.auth import ReauthRequired
 from jarvis.kg import views
@@ -292,13 +292,26 @@ class AppService:
         return {"conversation": conversation_json(await asyncio.to_thread(rt.conversations.start, "chat"))}
 
     async def _detail(self, rt, conv) -> dict:
+        out = {"conversation": conversation_json(conv), "messages": [], "card": None}
+        if rt.graph is None:  # no LLM key yet: the row is still listed, its thread is unreadable
+            return out
         try:
             interrupts = (await rt.graph.aget_state(thread_config(conv.thread_id))).interrupts
+            out["card"] = self._card(interrupts[0]) if interrupts else None
         except Exception:
             log.error("could not read pending confirmation")
-            interrupts = []
-        return {"conversation": conversation_json(conv), "messages": await messages_json(rt.graph, conv.thread_id),
-                "card": self._card(interrupts[0]) if interrupts else None}
+        try:
+            out["messages"] = await messages_json(rt.graph, conv.thread_id)
+        except Exception:
+            log.error("could not read conversation messages")
+        return out
+
+    async def current_chat(self, rt) -> dict:
+        """The open chat conversation if it is still within IDLE (the rule current() uses); never starts one."""
+        conv = await asyncio.to_thread(rt.conversations.open_for, "chat")
+        if conv is None or rt.conversations.clock() - conv.last_at > IDLE:
+            return {"conversation": None, "messages": [], "card": None}
+        return await self._detail(rt, conv)
 
     async def resume_conversation(self, rt, conv_id: int) -> tuple[int, dict]:
         async def decide():

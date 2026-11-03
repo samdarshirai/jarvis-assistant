@@ -173,8 +173,12 @@ def test_delete_removes_conversation_threads(scratch):
     with scratch.connection() as c:
         for t in (f"user:{uid}", f"user:{uid}:c:aaa", f"user:{other}:c:bbb"):
             c.execute("INSERT INTO checkpoints VALUES (%s, 'c1')", (t,))
+    from jarvis.conversations import ConversationStore
+    ConversationStore(scratch, uid).start("chat")
+    ConversationStore(scratch, other).start("chat")
     from jarvis.users import run
-    assert "checkpoints: 2" in run(["delete", "gone@example.com"], scratch, settings())  # dry run counts both threads
+    dry = run(["delete", "gone@example.com"], scratch, settings())
+    assert "checkpoints: 2" in dry and "conversation: 1" in dry  # dry run counts both threads and the user's rows
     users.delete(uid)
     with scratch.connection() as c:
         assert c.execute("SELECT thread_id FROM checkpoints").fetchall() == [(f"user:{other}:c:bbb",)]

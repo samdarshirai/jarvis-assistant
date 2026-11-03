@@ -8,6 +8,7 @@ import psycopg
 
 IDLE = timedelta(minutes=30)
 LEGACY_TITLE = "Earlier conversation"
+MAX_MESSAGES = 200  # shown per conversation
 COLS = "id, channel, surface, title, thread_id, created_at, last_at, closed_at"
 
 
@@ -83,9 +84,10 @@ class ConversationStore:
 
     def resume(self, conv_id: int, surface: str) -> Conversation | None:
         target = self.get(conv_id)
-        if target is None or (target.closed_at is None and target.surface == "voice"):
-            return None
         now = self.clock()
+        # an open voice row is a live session, unless it is past IDLE (a redeploy mid-session leaves it open)
+        if target is None or (target.closed_at is None and target.surface == "voice" and now - target.last_at <= IDLE):
+            return None
         with self.pool.connection() as conn:
             conn.execute("UPDATE conversation SET closed_at = %s WHERE user_id = %s AND surface = %s"
                          " AND closed_at IS NULL AND id <> %s", (now, self.user_id, surface, conv_id))
@@ -117,4 +119,4 @@ async def messages_json(graph, thread_id: str) -> list[dict]:
     for m in state.values.get("messages", []):
         if m.type in ("human", "ai") and isinstance(m.content, str) and m.content:
             out.append({"role": "user" if m.type == "human" else "assistant", "text": m.content})
-    return out
+    return out[-MAX_MESSAGES:]  # the legacy thread is untrimmed
